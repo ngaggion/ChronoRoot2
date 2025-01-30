@@ -45,19 +45,19 @@ def createSaveFolder(conf):
         os.makedirs(id_path)
 
     # Create the folder for the rpi
-    rpi = conf['rpi']
+    rpi = str(conf['rpi'])
     rpi_path = os.path.join(id_path, rpi)
     if not os.path.exists(rpi_path):
         os.makedirs(rpi_path)
     
     # Create the folder for the cam
-    cam = "cam_" + str(conf['cam'])
+    cam = "cam_" + str(str(conf['cam']))
     cam_path = os.path.join(rpi_path, cam)
     if not os.path.exists(cam_path):
         os.makedirs(cam_path)
     
     # Create the folder for the plant
-    plant = "plant_" + str(conf['plant'])
+    plant = "plant_" + str(str(conf['plant']))
     plant_path = os.path.join(cam_path, plant)
     if not os.path.exists(plant_path):
         os.makedirs(plant_path)
@@ -102,22 +102,12 @@ def createSaveFolder(conf):
 
 def getImages(conf):
     # Get the list of images    
-    videoFolder = loadPath(conf['Images'], ext = conf['rpi'] + "*")
-    videoFolder = [x for x in videoFolder if os.path.isdir(x)]
-    
-    if len(videoFolder) == 0 or len(videoFolder) > 1:
-        raise Exception("Error in the path to the images")
-
-    cameraFolder = loadPath(videoFolder[0], ext = str(conf['cam']) + "*")
-    if len(cameraFolder) == 0 or len(cameraFolder) > 1:
-        raise Exception("Error in the path to the images")
-
-    images = loadPath(cameraFolder[0], ext = "*.png") 
+    images = loadPath(conf['Images'], ext = "*.png") 
 
     # Get the list of segmentation images
-    SegPath = os.path.join(cameraFolder[0], 'Segmentation', 'Ensemble')
+    SegPath = os.path.join(conf['Images'], 'Segmentation', 'Ensemble')
     if not os.path.exists(SegPath):
-        SegPath = os.path.join(cameraFolder[0], 'Seg')
+        SegPath = os.path.join(conf['Images'], 'Seg')
     
     segFiles = loadPath(SegPath, ext = "*.png") 
 
@@ -128,7 +118,7 @@ def getImages(conf):
         segFiles = segFiles[:lim]
 
     # Save configuration
-    conf['ImagePath'] = cameraFolder[0]
+    conf['ImagePath'] = conf['Images']
     conf['SegPath'] = SegPath
         
     return images, segFiles

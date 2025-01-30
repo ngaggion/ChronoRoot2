@@ -19,7 +19,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 from analysis.plantAnalysis import plantAnalysis
 import argparse
 import json 
-import os
 import cv2
 import numpy as np
 
@@ -68,8 +67,28 @@ def preview(conf):
         img = cv2.imread(images[i])
 
         if useSeg:
-            seg = cv2.imread(segFiles[i])
-            img[seg>0] = 255
+            seg = cv2.imread(segFiles[i], 0)
+            
+            # Convert grayscale image to color if it's not already
+            if len(img.shape) == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            
+            # Define colors for each segment (B,G,R format)
+            colors = {
+                1: (0, 0, 255),     # Red
+                2: (0, 255, 0),     # Green
+                3: (255, 0, 0),     # Blue
+                4: (0, 255, 255),   # Yellow
+            }
+            
+            # Apply colors for values 1-4
+            for val, color in colors.items():
+                mask = (seg == val)
+                img[mask] = color
+            
+            # Handle values 5 and above with purple
+            high_vals_mask = (seg >= 5)
+            img[high_vals_mask] = (255, 0, 255)  # Purple for values 5+
 
         #Draw the day, hour and minute at the top left corner
         cv2.putText(img, "Day: %2d" % days[i], (5, 100), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 255, 0), 5)
@@ -101,22 +120,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
         
     conf = json.load(open(args.config))
-
-    if not args.rerun:
-        if "rpi" not in str(conf['rpi']):
-            rpi = "rpi" + str(conf['rpi'])
-        else:
-            rpi = str(conf['rpi'])
-        conf['rpi'] = rpi
     
     if not args.preview:
         conf['fileKey'] = conf['identifier']
-        conf['sequenceLabel'] = conf['identifier'] + '/' + conf['rpi'] + '/' + str(conf['cam']) + '/' + str(conf['plant'])
+        conf['sequenceLabel'] = conf['identifier'] + "_" + conf['Images'] + "_" + str(conf['plant'])
         conf['Plant'] = 'Arabidopsis thaliana'
 
         if args.get_bbox:
             plantAnalysis(conf, False, True)
-        # elif exists key 'bounding box'
         elif 'bounding_box' in conf and not args.rerun:
             plantAnalysis(conf, True, False)
         else:

@@ -68,8 +68,28 @@ def selectSeed(images, segFiles, bbox, conf):
         img = cv2.imread(images[i])[bbox[0]:bbox[1],bbox[2]:bbox[3]]
 
         if useSeg:
-            seg = cv2.imread(segFiles[i])[bbox[0]:bbox[1],bbox[2]:bbox[3]]
-            img[seg>0] = 255
+            seg = cv2.imread(segFiles[i], 0)[bbox[0]:bbox[1],bbox[2]:bbox[3]]
+
+            # Convert grayscale image to color if it's not already
+            if len(img.shape) == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            
+            # Define colors for each segment (B,G,R format)
+            colors = {
+                1: (0, 0, 255),     # Red
+                2: (0, 255, 0),     # Green
+                3: (255, 0, 0),     # Blue
+                4: (0, 255, 255),   # Yellow
+            }
+            
+            # Apply colors for values 1-4
+            for val, color in colors.items():
+                mask = (seg == val)
+                img[mask] = color
+            
+            # Handle values 5 and above with purple
+            high_vals_mask = (seg >= 5)
+            img[high_vals_mask] = (255, 0, 255)  # Purple for values 5+
 
         if pos is not None:
             cv2.circle(img, tuple(pos), 8, [255,0,0], -1)
