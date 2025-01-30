@@ -43,7 +43,7 @@ RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* 
     
 # Clone the repository
-RUN git clone https://github.com/ngaggion/ChronoRootTool.git /app
+RUN git clone https://github.com/ngaggion/ChronoRoot2.git /app
 
 WORKDIR /app/Segmentation
 
