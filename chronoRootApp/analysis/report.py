@@ -471,35 +471,36 @@ def get_atlases(psave, days = [6,7,8,9,10], rotateRoot = True):
 
     return set_of_atlases, frames
 
-def plot_atlases(atlas, atlas2, atlasroot, savepath, name, day = None):
+def plot_atlases(atlas, atlas2, atlasroot, savepath, name, day=None):
     plt.ioff()
 
     plt.figure(figsize=(9, 4))
 
     plt.subplot(1,3,1)
-    plt.imshow(atlasroot, cmap='jet', vmin = 0, vmax = 25)
+    plt.imshow(atlasroot, cmap='jet', vmin=0, vmax=25)
     plt.title("Accumulated roots")
     plt.axis('off')
 
     plt.subplot(1,3,2)
-    plt.imshow(atlas2, cmap='jet', vmin = 0, vmax = 25)
+    plt.imshow(atlas2, cmap='jet', vmin=0, vmax=25)
     plt.title("Convex hull contours")
     plt.axis('off')
 
     plt.subplot(1,3,3)
-    plt.imshow(atlas, alpha = 0.6)
+    plt.imshow(atlas, alpha=0.6)
     plt.title("Accumulated convex hulls")
     plt.axis('off')
 
     if day is not None:
-        name = name + ' - Day: ' + str(day)
+        name = f"{name} - Day: {day}"
     else:
-        name = name + ' - Last Day'
+        name = f"{name} - Last Day"
 
     plt.suptitle(name)
     
-    os.makedirs(os.path.join(savepath, "Per Experiment"), exist_ok = True)
-    plt.savefig(os.path.join(savepath, "Per Experiment", name), dpi = 300, bbox_inches = 'tight')
+    save_dir = os.path.join(savepath, "Per Experiment")
+    os.makedirs(save_dir, exist_ok=True)
+    plt.savefig(os.path.join(save_dir, name), dpi=300, bbox_inches='tight')
 
     plt.cla()
     plt.clf()
@@ -513,18 +514,37 @@ def plot_combined_atlases(folder):
 
     for filename in os.listdir(separated):
         name = filename.split('.')[0]
-        day = int(name.split(' ')[-1])
+        
+        # Handle both "Last Day" and numbered day cases
+        if "Last Day" in name:
+            day = "Last"
+        else:
+            try:
+                if "Day:" in name:
+                    day = int(name.split('Day:')[1].strip())
+                else:
+                    day = int(name.split('-')[-1].strip())
+            except ValueError:
+                print(f"Warning: Could not parse day from filename: {filename}")
+                continue
 
         if day not in images_per_day:
             images_per_day[day] = [filename]
         else:
             images_per_day[day].append(filename)
     
-    for day in images_per_day:
+    # Sort days with "Last" at the end
+    days = sorted([d for d in images_per_day.keys() if d != "Last"]) + (["Last"] if "Last" in images_per_day else [])
+    
+    for day in days:
         images = images_per_day[day]
         images.sort(key=natural_key)
 
         fig, axs = plt.subplots(len(images), 1, figsize=(9, 4*len(images)))
+        
+        # Handle case where there's only one image
+        if len(images) == 1:
+            axs = [axs]
 
         for i, image in enumerate(images):
             image_path = os.path.join(separated, image)
@@ -534,10 +554,12 @@ def plot_combined_atlases(folder):
             axs[i].axis('off')
             axs[i].set_title('')
 
-        # remove all padding
+        # Remove all padding
         plt.subplots_adjust(wspace=0, hspace=0)
 
-        plt.savefig(os.path.join(folder, 'Qualitative - Day ' + str(day)), dpi = 300, bbox_inches = 'tight')
+        # Save with appropriate name
+        save_name = f'Qualitative - Day {day}'
+        plt.savefig(os.path.join(folder, save_name), dpi=300, bbox_inches='tight')
         plt.cla()
         plt.clf()
         plt.close('all')

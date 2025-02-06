@@ -156,9 +156,13 @@ def lenRoot(points, pixel_size = 0.04):
 
 def getAngles(conf, path):
     # Only process the RSML for images that have been postprocessed
-    images = pd.read_csv(os.path.join(path, "FilesAfterPostprocessing.csv"))["FileName"].tolist()
+    images = pd.read_csv(os.path.join(path, "FilesAfterPostprocessing.csv"))
+    # drop the rows with NaN values
+    images.dropna(inplace=True)
+    images = images['FileName'].tolist()
+
     RSML = os.listdir(os.path.join(path, "RSML"))
-    
+        
     paths = [image for image in images if image.split('/')[-1].replace('.png','.rsml') in RSML]
     paths = [os.path.join(path, 'RSML', image.split('/')[-1].replace('.png','.rsml')) for image in paths]
 
@@ -328,7 +332,6 @@ def getFirstLateralRoots(conf, df):
                 aux = p.iloc[-1, :]
                 aux = aux.to_frame().T
                 if aux.shape[0] != 1 or aux.shape[1] != 10:
-                    print(p.shape, aux.shape)
                     raise ValueError('Extending 1st LR Error')
                 aux['Real'] = np.nan
                 p = pd.concat([p, aux], ignore_index=True)
@@ -711,11 +714,19 @@ def plotLateralAnglesOnTop(conf):
                         
                         i = -1
 
-                        images = pd.read_csv(os.path.join(results_path, "FilesAfterPostprocessing.csv"))["FileName"].tolist()
+                        images = pd.read_csv(os.path.join(results_path, "FilesAfterPostprocessing.csv"))
+                        images.dropna(inplace=True)
+                        images = images["FileName"].tolist()
+
                         RSML = os.listdir(os.path.join(results_path, "RSML"))
 
                         images = [image for image in images if image.split('/')[-1].replace('.png','.rsml') in RSML]
-                        images = [os.path.join(metadata["ImagePath"], image) for image in images]
+                        
+                        try:
+                            images = [os.path.join(metadata["ImagePath"], image) for image in images]
+                        except:
+                            # for retrocompatibility
+                            images = [os.path.join(metadata["folder"], image) for image in images]
 
                         bbox = metadata["bounding box"]
                         crop = cv2.imread(images[i])[bbox[0]:bbox[1], bbox[2]:bbox[3]]

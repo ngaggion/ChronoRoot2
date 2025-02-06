@@ -96,7 +96,12 @@ if __name__ == "__main__":
                         all_data = pd.concat([all_data, data], ignore_index=True)
                         
                         iplot = os.path.join(results, exp_name + "_" + name + ".png")
-                        shutil.copy(iplot, os.path.join(iplots, exp_name + "_" + name+".png"))
+
+                        if not os.path.exists(iplot):
+                            plot_individual_plant(iplots, data, exp_name + "_" + name+".png")
+                            shutil.copy(os.path.join(iplots, exp_name + "_" + name+".png"), iplot)
+                        else:
+                            shutil.copy(iplot, os.path.join(iplots, exp_name + "_" + name+".png"))
 
             if conf['doConvex']:
                 print("Performing convex hull analysis for experiment:", exp_name)

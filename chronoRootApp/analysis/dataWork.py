@@ -90,7 +90,6 @@ def dataWork(conf, pfile, folder, N_exp = None):
     
     # Beggining of the data processing
 
-    index = data['Frame'].to_numpy()
     mainRoot = data['MainRootLength'].to_numpy().astype('float')
     lateralRoots = data['LateralRootsLength'].to_numpy().astype('float')
     numlateralRoots = data['NumberOfLateralRoots'].to_numpy().astype('float')
@@ -133,7 +132,12 @@ def dataWork(conf, pfile, folder, N_exp = None):
     data['FileName'].to_csv(os.path.join(folder, 'FilesAfterPostprocessing.csv'), index = False)
 
     # Removes original columns
-    data = data.drop(columns=['FileName', 'Frame', 'MainRootLength', 'LateralRootsLength', 'TotalLength'])
+    try:
+        data = data.drop(columns=['FileName', 'Frame', 'MainRootLength', 'LateralRootsLength', 'TotalLength'])
+    except:
+        # For retrocompatibility
+        data = data.drop(columns=['FileName', 'MainRootLength', 'LateralRootsLength', 'TotalLength'])
+        
     # Reorders columns
     data = data[['Date', 'MainRootLength (mm)', 'LateralRootsLength (mm)', 'TotalLength (mm)', 'NumberOfLateralRoots']]
     # creates an elapsed time column, in hours
