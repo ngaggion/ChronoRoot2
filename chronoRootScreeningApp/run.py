@@ -49,7 +49,20 @@ class AnalysisTab(QWidget):
         self.main_window = main_window
         self.group_entries = []
         self.initUI()
-        
+    
+    def setup_project_fields(self):
+        # Project directory
+        proj_dir_layout = QHBoxLayout()
+        self.proj_dir_edit = QLineEdit()
+        self.proj_dir_edit.textChanged.connect(self.on_project_dir_changed)  # Add this connection
+        proj_dir_btn = QPushButton('Browse')
+        proj_dir_btn.clicked.connect(self.browse_project_dir)
+        proj_dir_layout.addWidget(QLabel('Project Directory:'))
+        proj_dir_layout.addWidget(self.proj_dir_edit)
+        proj_dir_layout.addWidget(proj_dir_btn)
+        return proj_dir_layout
+
+
     def initUI(self):
         layout = QVBoxLayout()
         
@@ -57,15 +70,8 @@ class AnalysisTab(QWidget):
         proj_group = QGroupBox('Project Settings')
         proj_layout = QVBoxLayout()
         
-        # Project directory
-        proj_dir_layout = QHBoxLayout()
-        self.proj_dir_edit = QLineEdit()
-        proj_dir_btn = QPushButton('Browse')
-        proj_dir_btn.clicked.connect(self.browse_project_dir)
-        proj_dir_layout.addWidget(QLabel('Project Directory:'))
-        proj_dir_layout.addWidget(self.proj_dir_edit)
-        proj_dir_layout.addWidget(proj_dir_btn)
-        proj_layout.addLayout(proj_dir_layout)
+        # Add project directory fields using the new setup method
+        proj_layout.addLayout(self.setup_project_fields())
         
         # Video path
         video_layout = QHBoxLayout()
@@ -195,6 +201,12 @@ class AnalysisTab(QWidget):
 
         # Initialize calibration mode
         self.toggle_calibration_mode()
+
+    def on_project_dir_changed(self):
+        """Handle project directory changes and update all tabs"""
+        project_dir = self.proj_dir_edit.text()
+        if os.path.exists(project_dir):
+            self.main_window.set_project_dir(project_dir)
 
     def toggle_calibration_mode(self):
         """Toggle between QR and manual calibration modes"""
@@ -932,8 +944,9 @@ class ReportsTab(QWidget):
 class ScreeningGUI(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.project_dir = None
         self.initUI()
-        
+    
     def initUI(self):
         self.setWindowTitle('ChronoRoot Screening Interface')
         self.setGeometry(100, 100, 1200, 800)
@@ -955,10 +968,14 @@ class ScreeningGUI(QMainWindow):
     def set_project_dir(self, dir_path):
         """Update project directory for all tabs"""
         self.project_dir = dir_path
+        # Update Results tab
         if hasattr(self, 'results_tab'):
             self.results_tab.set_project_dir(dir_path)
+            self.results_tab.refresh_results()  # Explicitly refresh the results
+        # Update Reports tab
         if hasattr(self, 'reports_tab'):
             self.reports_tab.set_project_dir(dir_path)
+            self.reports_tab.refresh_images()  # Explicitly refresh the reports
 
 def main():
     app = QApplication(sys.argv)

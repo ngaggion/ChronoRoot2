@@ -227,7 +227,9 @@ class PlantGrowthAnalyzer:
         
     def _plot_basic_growth(self, data, parameter):
         """Create basic growth plots for a specific parameter."""
-
+        data = data.copy()
+        data['Group'] = data['Group'].astype(str).str.strip()
+        
         plt.figure(figsize=(12, 6))
         
         plt.subplot(121)
@@ -272,6 +274,9 @@ class PlantGrowthAnalyzer:
         self._save_plot(plot_path)
     
     def _plot_individual_groups(self, data, parameter):
+        data = data.copy()
+        data['Group'] = data['Group'].astype(str).str.strip()
+        
         """Create individual plots for each group."""
         for group in data['Group'].unique():
             plt.figure(figsize=(15, 10))
