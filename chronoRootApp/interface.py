@@ -243,6 +243,63 @@ class Ui_ChronoRootAnalysis:
         
         return
 
+    def set_default_parameters(self):
+        """Set default values for important fields"""
+        self.emergenceDistanceField.setText("2")
+        self.processingLimitField.setText("0")
+        self.processingLimitField_3.setText("0")
+        self.captureIntervalField.setText("15")
+        self.captureIntervalField_3.setText("15")
+        self.emergenceDistanceField_2.setText("2")  # New field in tab1
+
+    def validate_numeric_input(self, field):
+        """Validate numeric input fields"""
+        try:
+            text = field.text()
+            # Don't allow empty fields
+            if text.strip() == "":
+                if field in [self.emergenceDistanceField, self.emergenceDistanceField_2]:
+                    field.setText("2")
+                elif field in [self.processingLimitField, self.processingLimitField_3]:
+                    field.setText("0")
+                elif field in [self.captureIntervalField, self.captureIntervalField_3]:
+                    field.setText("15")
+                return
+                
+            value = float(text)
+            if field == self.emergenceDistanceField or field == self.emergenceDistanceField_2:
+                if value <= 0:
+                    field.setText("2")
+            elif field in [self.processingLimitField, self.processingLimitField_3]:
+                if value < 0:
+                    field.setText("0")
+            elif field in [self.captureIntervalField, self.captureIntervalField_3]:
+                if value <= 0:
+                    field.setText("15")
+        except ValueError:
+            if field in [self.emergenceDistanceField, self.emergenceDistanceField_2]:
+                field.setText("2")
+            elif field in [self.processingLimitField, self.processingLimitField_3]:
+                field.setText("0")
+            elif field in [self.captureIntervalField, self.captureIntervalField_3]:
+                field.setText("15")
+
+    def setup_field_validation(self):
+        """Set up validation for numeric fields"""
+        # Connect validation to editingFinished signal
+        self.emergenceDistanceField.editingFinished.connect(
+            lambda: self.validate_numeric_input(self.emergenceDistanceField))
+        self.emergenceDistanceField_2.editingFinished.connect(
+            lambda: self.validate_numeric_input(self.emergenceDistanceField_2))
+        self.processingLimitField.editingFinished.connect(
+            lambda: self.validate_numeric_input(self.processingLimitField))
+        self.processingLimitField_3.editingFinished.connect(
+            lambda: self.validate_numeric_input(self.processingLimitField_3))
+        self.captureIntervalField.editingFinished.connect(
+            lambda: self.validate_numeric_input(self.captureIntervalField))
+        self.captureIntervalField_3.editingFinished.connect(
+            lambda: self.validate_numeric_input(self.captureIntervalField_3))
+
     def get_image_paths(self):
         if not os.path.exists(os.path.join(self.selected_plant, "log.txt")):
             return None, None, None, None
@@ -454,6 +511,9 @@ class Ui_ChronoRootAnalysis:
         self.setup_tab4_elements()
         self.setup_tab5_elements()
 
+        self.setup_field_validation()
+        self.set_default_parameters()
+
         chrono_root_analysis.setCentralWidget(self.central_widget)
         self.statusbar = QtWidgets.QStatusBar(chrono_root_analysis)
         self.statusbar.setObjectName("statusbar")
@@ -562,6 +622,19 @@ class Ui_ChronoRootAnalysis:
         self.processingLimitField.setGeometry(QtCore.QRect(190, 450, 51, 31))
         self.processingLimitField.setObjectName("processingLimitField")
         self.processingLimitField.textChanged.connect(self.syncProcessingLimitField)
+
+        # Add emergence distance field to tab1
+        self.emergenceDistanceField_2 = QtWidgets.QLineEdit(self.tab1)
+        self.emergenceDistanceField_2.setGeometry(QtCore.QRect(190, 550, 51, 31))
+        self.emergenceDistanceField_2.setObjectName("emergenceDistanceField_2")
+        
+        self.emergenceDistanceLabel = QtWidgets.QLabel(self.tab1)
+        self.emergenceDistanceLabel.setGeometry(QtCore.QRect(10, 550, 161, 31))
+        self.emergenceDistanceLabel.setObjectName("emergenceDistanceLabel")
+        
+        self.emergenceDistanceExp = QtWidgets.QLabel(self.tab1)
+        self.emergenceDistanceExp.setGeometry(QtCore.QRect(260, 550, 261, 31))
+        self.emergenceDistanceExp.setObjectName("emergenceDistanceExp")
 
         self.saveButton = QtWidgets.QPushButton(self.tab1)
         self.saveButton.setGeometry(QtCore.QRect(660, 0, 141, 81))
@@ -1067,9 +1140,9 @@ class Ui_ChronoRootAnalysis:
             set_translation(self.label_2, "<html><head/><body><p align=\"center\">Camera</p></body></html>")
             set_translation(self.label_3, "<html><head/><body><p align=\"center\">Plant Number</p></body></html>")
             set_translation(self.label_4, "<html><head/><body><p align=\"center\">Identifier</p></body></html>")
-            set_translation(self.label_5, "(should be a number between 1-24)")
-            set_translation(self.label_6, "(should be a number between 1-4)")
-            set_translation(self.label_7, "(should be a number between 1-4)")
+            set_translation(self.label_5, "(should be the raspberry number)")
+            set_translation(self.label_6, "(should be the camera number)")
+            set_translation(self.label_7, "(should be a number, to identify plant)")
             set_translation(self.label_8, "(variety identifier, e.g. WT, Col0)")
             set_translation(self.label_9, "<html><head/><body><p><span style=\" font-size:10pt; font-weight:600;\">Analysis and postprocessing parameters</span></p></body></html>")
             set_translation(self.label_11, "<html><head/><body><p>Capture interval</p></body></html>")
@@ -1082,9 +1155,11 @@ class Ui_ChronoRootAnalysis:
             set_translation(self.daysConvexText, "(Numbers separated by commas)")
             set_translation(self.daysAnglesText, "Days to report")
             set_translation(self.emergenceDistanceText, "Emergence distance")
-            set_translation(self.emergenceDistanceTextExp, "(in millimeters, recommended: 2 mm)")
+            set_translation(self.emergenceDistanceTextExp, "(in millimeters, default: 2 mm)")
             set_translation(self.captureIntervalLabel, "<html><head/><body><p>Capture interval</p></body></html>")
             set_translation(self.processingLimitLabel, "<html><head/><body><p>Processing limit</p></body></html>")
+            set_translation(self.emergenceDistanceLabel, "<html><head/><body><p>Emergence distance</p></body></html>")
+            set_translation(self.emergenceDistanceExp, "(in millimeters, default: 2 mm)")
             
         def translate_buttons():
             set_translation(self.loadVideo, "Select Video Folder")
