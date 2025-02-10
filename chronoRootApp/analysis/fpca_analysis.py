@@ -43,6 +43,8 @@ if __name__ == "__main__":
     temporal_data_df['Experiment'] = temporal_data_df['Experiment'].astype('str')
     temporal_data_df = temporal_data_df.sort_values(by="Experiment")
 
+    temporal_data_df['Plant_id'] = temporal_data_df['Plant_id'].astype('str') + " (" + temporal_data_df['Experiment'] + ")"
+
     experiments = temporal_data_df.Experiment.unique()
 
     magnitudes_dict = { magnitude: temporal_data_df.pivot(columns="Plant_id", values=magnitude, index="ElapsedTime (h)").dropna() for magnitude in COLUMNS}    
