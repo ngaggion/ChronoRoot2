@@ -35,18 +35,40 @@ class GroupROISelector:
         self.group_names = group_names
         
     def select_roi_for_group(self, group_name: str) -> bool:
-        window_name = f'Select Region for {group_name}'
+        instructions = (
+            f"Select ROI for {group_name}\n"
+            "1. Click and drag to select region\n"
+            "2. Press ENTER TWICE to confirm selection\n"
+            "3. Press 'r' to redo selection\n"
+            "4. Press 'q' to quit analysis"
+        )
+        window_name = f"Select ROI for {group_name}"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         
         while True:
             # Create fresh copy of image for display
             img_copy = self.display_image.copy()
             
+            # Add instructions to the image
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.7
+            thickness = 2
+            color = (255, 255, 255)
+            
+            y0 = 30
+            for i, line in enumerate(instructions.split('\n')):
+                y = y0 + i * 25
+                cv2.putText(img_copy, line, (10, y), font, font_scale, color, thickness)
+            
             # Draw ROI
             roi = cv2.selectROI(window_name, img_copy, fromCenter=False, showCrosshair=True)
             
             if roi[2] == 0 or roi[3] == 0:  # If ROI has no area
-                print("Invalid selection, please try again")
+                key = cv2.waitKey(1)
+                if key == ord('q'):  # Check if user pressed 'q' to quit
+                    cv2.destroyWindow(window_name)
+                    return False
+                print("Invalid selection, please try again or press 'q' to quit")
                 continue
                 
             # Scale ROI back to original image coordinates
@@ -57,13 +79,16 @@ class GroupROISelector:
                          (roi[0] + roi[2], roi[1] + roi[3]), (255, 255, 255), 2)
             cv2.imshow(window_name, img_copy)
             
-            print(f"\n{group_name} selection made.")
-            print("Press:")
-            print("'c' to confirm selection")
-            print("'r' to redo selection")
+            print(f"\nSelection made for {group_name}.")
+            print("Press 'r' to redo selection or 'q' to quit analysis")
             
             key = cv2.waitKey(0)
-            if key == ord('c'):
+            if key == ord('q'):
+                cv2.destroyWindow(window_name)
+                return False
+            elif key == ord('r'):
+                continue
+            else:
                 self.groups[group_name] = (
                     orig_roi[0], 
                     orig_roi[1],
@@ -72,15 +97,15 @@ class GroupROISelector:
                 )
                 cv2.destroyWindow(window_name)
                 return True
-            elif key == ord('r'):
-                continue
             
         return False
 
     def select_groups(self) -> Dict[str, Tuple[int, int, int, int]]:
         for group_name in self.group_names:
             print(f"\nSelecting region for {group_name}")
-            self.select_roi_for_group(group_name)
+            if not self.select_roi_for_group(group_name):
+                print("\nROI selection cancelled. Stopping analysis.")
+                return None  # Return None to indicate cancellation
         return self.groups
 
 def natural_sort_key(s):
@@ -222,6 +247,13 @@ def process_video(params: Dict[str, Any]):
     roi_selector = GroupROISelector(last_image_path, params['group_names'])
     groups = roi_selector.select_groups()
     
+    # Check if ROI selection was cancelled
+    if groups is None:
+        # Clean up the created directory since we're cancelling
+        import shutil
+        shutil.rmtree(analysis_dir)
+        return None
+
     # Initialize tracking parameters
     mot_tracker = Sort(max_age=8, min_hits=2, iou_threshold=0.5)
     known_track_ids = set()
