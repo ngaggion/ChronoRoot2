@@ -5,657 +5,552 @@ import pandas as pd
 import os
 import numpy as np
 from scipy import signal
-
 import scipy.stats as stats
+from typing import Dict, List, Tuple, Optional
+import logging
 
-def performStatisticalAnalysis(conf, all_frames, signal = "MR"):
-    UniqueExperiments = all_frames['Type'].unique()
-    N_exp = int(len(UniqueExperiments))
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class MetricConfig:
+    """Configuration class for different metrics"""
+    METRICS = {
+        'MR': {
+            'column': 'MainRootLengthGrad (mm/h)',
+            'title': 'Main Root Growth Speed',
+            'ylabel': 'Speed (mm/h)',
+            'norm_ylabel': 'Normalized Speed'
+        },
+        'TR': {
+            'column': 'TotalLengthGrad (mm/h)',
+            'title': 'Total Root Growth Speed',
+            'ylabel': 'Speed (mm/h)',
+            'norm_ylabel': 'Normalized Speed'
+        }
+    }
+
+    @classmethod
+    def get_config(cls, metric_type: str) -> dict:
+        """Get configuration for a specific metric"""
+        if metric_type not in cls.METRICS:
+            raise ValueError(f"Unsupported metric type: {metric_type}")
+        return cls.METRICS[metric_type]
+
+class DataProcessor:
+    """Class for processing and analyzing growth data"""
     
-    dt = int(conf['everyXhourFieldFourier'])
-    N_steps = int(round((all_frames['Time'].max()+1) / dt, 0))
+    def __init__(self, conf: dict):
+        self.conf = conf
+        self.report_path = os.path.join(conf['MainFolder'], 'Report')
+        self.fourier_path = os.path.join(self.report_path, 'GrowthSpeeds and Fourier')
+        os.makedirs(self.fourier_path, exist_ok=True)
+
+    def process_single_file(self, filepath: str, N0: Optional[int] = None, 
+                          N: Optional[int] = None, root: str = 'MainRootLengthGrad (mm/h)',
+                          normalize: bool = False, detrend: bool = False, 
+                          medfilt: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Process a single data file"""
+        try:
+            data = pd.read_csv(filepath)
+            time = data['ElapsedTime (h)'].to_numpy().astype('int')
+            newDay = data['NewDay'].to_numpy()
+
+            # Handle time range selection
+            N0 = 0 if N0 is None else N0
+            N = len(time) if N is None else N
+            
+            # Adjust for new day
+            if not np.isscalar(newDay[N0]) or newDay[N0] != 0:  # Handle both scalar and array cases
+                begin_indices = np.where(newDay == 0)[0]
+                if len(begin_indices) > 0:
+                    begin = begin_indices[0]
+                    if begin > N0:
+                        N0 = begin
+                        N = N + begin
+                    else:
+                        N0 = N0 + (24 - time[N0])
+                        N = N + (24 - time[N0])
+            
+            N = min(N, len(time))
+            N = N - N%24
+
+            # Extract and process speed data
+            mSpeed = data[root].to_numpy()
+            mSpeed = np.nan_to_num(mSpeed, 0.0)
+
+            if normalize:
+                mean = np.mean(mSpeed)
+                std = np.std(mSpeed)
+                mSpeed = (mSpeed - mean) / std if std != 0 else mSpeed - mean
+
+            if medfilt:
+                mSpeed = signal.medfilt(mSpeed, 5)
+                mSpeed = mSpeed - signal.medfilt(mSpeed, 25)
+
+            if detrend:
+                mSpeed = signal.detrend(mSpeed)
+
+            return mSpeed[N0:N], time[N0:N] - N0, newDay[N0:N]
         
-    # Create a text file to store the results
-    reportPath = os.path.join(conf['MainFolder'],'Report')
-    reportPath_fourier = os.path.join(reportPath, 'GrowthSpeeds and Fourier')
-    
-    reportPath_stats = os.path.join(reportPath_fourier, '%s_Stats.txt' % signal)
+        except Exception as e:
+            logger.error(f"Error processing file {filepath}: {str(e)}")
+            raise
 
-    # First row should say "Using Mann Whitney U test to compare the growth speed of different experiments"
-    with open(reportPath_stats, 'w') as f:
-        f.write('Using Mann Whitney U test to compare the growth speed of different experiments\n')
-            
-        for step in range(0, N_steps):            
-            end = dt * (step+1)
-            end = int(min(end, all_frames['Time'].max()))
-            hours = np.arange(dt * step, end)
-            subdata = all_frames[all_frames['Time'].isin(hours)]
-            
-            # Take average Signal per plant per experiment
-            if conf['averagePerPlantStats']:
-                subdata = subdata.groupby(['Type', 'i']).mean().reset_index()
-            
-            # Compare every pair of experiments with Mann-Whitney U test
-            f.write('Hours from ' + str(step*dt) + ' to ' + str(end) + '\n')
-            
-            for i in range(0, N_exp-1):
-                for j in range(i+1, N_exp):
-                    exp1 = subdata[subdata['Type'] == UniqueExperiments[i]]['Signal']
-                    exp2 = subdata[subdata['Type'] == UniqueExperiments[j]]['Signal']
-                    
-                    # Perform Mann-Whitney U test
+    def read_and_process_data(self, experiments: List[str], root: str = 'MainRootLengthGrad (mm/h)',
+                             normalize: bool = False, detrend: bool = False, 
+                             medfilt: bool = False) -> pd.DataFrame:
+        """Read and process data from multiple experiments"""
+        all_data = []
+        all_dataframes = []
+        all_Ns = []
+        time_series = None
+
+        # First, collect all dataframes and their lengths
+        for exp in experiments:
+            try:
+                # Get list of plant data files
+                plants = load_path(exp, '*/*/*')
+                speeds = []
+
+                # Collect PostProcess_Hour.csv files
+                for plant in plants:
+                    results = load_path(plant, '*')
+                    if results:
+                        results = results[-1]
+                        speeds.append(os.path.join(results, "PostProcess_Hour.csv"))
+
+                # Read all files for this experiment
+                for speed_file in speeds:
                     try:
-                        U, p = stats.mannwhitneyu(exp1, exp2)
-                        p = round(p, 6)
-                        
-                        # Write the number of samples in each experiment, both in the same line
-                        f.write('Number of samples ' + UniqueExperiments[i] + ': ' + str(len(exp1)) + ' - ')
-                        f.write('Number of samples ' + UniqueExperiments[j] + ': ' + str(len(exp2)) + '\n')
-                        
-                        # Write the mean value of each experiment
-                        f.write('Mean ' + UniqueExperiments[i] + ': ' + str(round(exp1.mean(), 2)) + ' - ')
-                        f.write('Mean ' + UniqueExperiments[j] + ': ' + str(round(exp2.mean(), 2)) + '\n')
-                        
-                        # Compare the p-value with the significance level
-                        if p < 0.05:
-                            f.write('Experiments ' + UniqueExperiments[i] + ' and ' + UniqueExperiments[j] + ' are significantly different. P-value: ' + str(p) + '\n')
-                        else:
-                            f.write('Experiments ' + UniqueExperiments[i] + ' and ' + UniqueExperiments[j] + ' are not significantly different. P-value: ' + str(p) + '\n')
-                    except:
-                        f.write('Experiments ' + UniqueExperiments[i] + ' and ' + UniqueExperiments[j] + ' could not be compared\n')
-                        
-            f.write('\n')            
-    return
+                        data = pd.read_csv(speed_file)
+                        time = data['ElapsedTime (h)'].to_numpy().astype('int')
+                        all_Ns.append(len(time))
+                        all_dataframes.append((exp, speed_file, data))
+                    except Exception as e:
+                        logger.warning(f"Skipping file {speed_file}: {str(e)}")
+                        continue
 
-def growthSpeedsSyncro(frame, N0 = None, N = None, normalize = False, detrend = False, root = 'MainRootLengthGrad (mm/h)', medfilt=False):
-    grads_post = []
-    dataframes = []
-    Ns = []
-
-    for i in range(0, len(frame)):
-        data = pd.read_csv(frame[i])
-        time = data['ElapsedTime (h)'].to_numpy().astype('int')
-        Ns.append(len(time))
-        dataframes.append(data)
-    
-    # Find the minimum N
-    N_min = min(Ns)
-
-    for i in range(0, len(frame)):
-        data = dataframes[i]
-
-        data['Plant'] = i
-        time = data['ElapsedTime (h)'].to_numpy().astype('int')
-        newDay = data['NewDay'].to_numpy()
-
-        if N0 is None:
-            N0 = 0
-        if N is None:
-            N = N_min
-                
-        # remove the first measurements before the new day
-        if newDay[N0] != 0:
-            begin = np.where(newDay == 0)[0][0]
-            if begin > N0:
-                N0 = begin
-                N = N + begin
-            else:
-                N0 = N0 + (24 - time[N0])
-                N = N + (24 - time[N0])
-        
-        N = min(N, len(time))
-        N = N - N%24
-
-        time = time[N0:N] - N0
-        newDay = newDay[N0:N]
-        
-        mSpeed = data[root].to_numpy()
-        
-        where_are_NaNs = np.isnan(mSpeed)
-        mSpeed[where_are_NaNs] = 0.0
-
-        if normalize:
-            mean = np.mean(mSpeed)
-            std = np.std(mSpeed)
-            if std != 0:
-                mSpeed = (mSpeed - mean) / std
-            else:
-                mSpeed -= mean
-            
-        where_are_NaNs = np.isnan(mSpeed)
-        mSpeed[where_are_NaNs] = 0.0
-
-        if medfilt:
-            mSpeed = signal.medfilt(mSpeed, 5)
-            mSpeed = mSpeed - signal.medfilt(mSpeed, 25)
-        
-        if detrend:
-            mSpeed = signal.detrend(mSpeed)
-
-        grads_post.append(mSpeed[N0:N])
-        
-    return grads_post, time, newDay
-
-
-def process(signal, time, N0, N):
-    n = len(signal)
-    
-    timeb = time - time[0]
-    deltat = 1
-    deltaf = 1 / (deltat * (N-N0))
-
-    i = 0
-    s = signal[i]
-    fft = np.abs(np.fft.fft(s))
-    fourier = fft
-    aux = timeb * deltaf
-    
-    dataframe = pd.DataFrame(data = {'Time': time, 'Freqs': timeb*deltaf, 'i' : i, 'Signal' : s, 'FFT' : fft})
-    
-    for i in range(1, n):
-        s = signal[i]
-        fft = np.abs(np.fft.fft(s))
-        fourier = fourier + fft
-        aux = pd.DataFrame(data = {'Time': time, 'Freqs': timeb*deltaf, 'i' : i, 'Signal' : s, 'FFT' : fft})
-        dataframe = pd.concat([dataframe, aux])
-        
-    fourier = fourier / n
-    
-    return dataframe, fourier
-
-
-def readData(experiments, normalize = False, detrend = False, root = 'MainRootLengthGrad (mm/h)', medfilt=False):
-    signals = {}
-    times = []
-
-    for exp in experiments:
-        plants = load_path(exp, '*/*/*')
-        speeds = []
-
-        for plant in plants:
-            results = load_path(plant, '*')
-            if results == []:
+            except Exception as e:
+                logger.error(f"Error processing experiment {exp}: {str(e)}")
                 continue
-            else:
-                results = results[-1]
-            speeds.append(os.path.join(results, "PostProcess_Hour.csv"))
 
-        signal1, time, v = growthSpeedsSyncro(speeds, normalize = normalize, detrend = detrend, root = root, medfilt=medfilt)
-        signals[exp] = signal1
-        times.append(time)
+        if not all_dataframes:
+            raise ValueError("No valid data processed from any experiment")
 
-    N0 = 0
-    N = min([len(t) for t in times])
-    
-    dfs = []
-    fouriers = []
+        # Find minimum length
+        N_min = min(all_Ns)
 
-    for exp in experiments:
-        signal1 = signals[exp]
-    
-        df, fourier = process(signal1, time, N0, N)
-        df['Type'] = exp.split('/')[-1]
+        # Now process all files with the same length
+        for exp, speed_file, data in all_dataframes:
+            try:
+                signal, time, _ = self.process_single_file(
+                    speed_file, 
+                    root=root,
+                    normalize=normalize,
+                    detrend=detrend,
+                    medfilt=medfilt,
+                    N=N_min
+                )
+                
+                if time_series is None:
+                    time_series = time
 
-        dfs.append(df)
-        fouriers.append(fourier)
+                # Create DataFrame for this experiment
+                df = pd.DataFrame({
+                    'Time': time_series[:len(signal)],
+                    'Signal': signal,
+                    'Type': os.path.basename(exp),
+                    'i': len(all_data)  # Use the count as index
+                })
+                all_data.append(df)
 
-    return pd.concat(dfs, ignore_index=True), fouriers, time 
+            except Exception as e:
+                logger.warning(f"Error processing data from {speed_file}: {str(e)}")
+                continue
 
-def makeFourierPlots(conf):
-    analysis = os.path.join(conf['MainFolder'],'Analysis')
-    experiments = load_path(analysis, '*')
-    
-    reportPath = os.path.join(conf['MainFolder'],'Report')
-    # Fourier analysis of the growth
-    reportPath_fourier = os.path.join(reportPath, 'GrowthSpeeds and Fourier')
-    
-    if not os.path.exists(reportPath_fourier):
-        os.makedirs(reportPath_fourier)
+        if not all_data:
+            raise ValueError("No valid processed data")
 
-    SMALL_SIZE = 10
-    MEDIUM_SIZE = 14
-    BIGGER_SIZE = 16
-
-    plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
-    plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
-    plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
-    plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
-    plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
-
-    fig3 = plt.figure(figsize=(12,8), constrained_layout=True, dpi = 300)
-    gs = fig3.add_gridspec(2, 2)
-    f_ax1 = fig3.add_subplot(gs[0, 0])
-    f_ax2 = fig3.add_subplot(gs[0, 1])
-    f_ax3 = fig3.add_subplot(gs[1, 0])
-    f_ax4 = fig3.add_subplot(gs[1, 1])
-
-    all_frames, fouriers, time = readData(experiments)
-    
-    performStatisticalAnalysis(conf, all_frames, signal = "MR")
-
-    sns.lineplot(x="Time", y = "Signal", data = all_frames, hue="Type", errorbar='se', ax=f_ax1, estimator=np.mean)
-    for j in range(0, len(time)):
-        if j % 24 == 0:
-            f_ax1.axvline(j, color = 'green')
-            
-    f_ax1.set_ylabel('Speed (mm/h)')
-    f_ax1.set_xlabel('Time (h)')
-    f_ax1.set_title('MR Growth Speed', fontsize = 16)
-    handles, labels = ax=f_ax1.get_legend_handles_labels()
-    f_ax1.legend(handles, labels, loc=2)
-
-    all_frames, _, _ = readData(experiments, root="TotalLengthGrad (mm/h)")
-
-    performStatisticalAnalysis(conf, all_frames, signal = "TR")
-
-    sns.lineplot(x="Time", y = "Signal", data = all_frames, hue="Type", errorbar='se', ax=f_ax2, estimator=np.mean)
-    for j in range(0, len(time)):
-        if j % 24 == 0:
-            f_ax2.axvline(j, color = 'green')
-            
-    f_ax2.set_ylabel('Speed (mm/h)')
-    f_ax2.set_xlabel('Time (h)')
-    f_ax2.set_title('TR Growth Speed', fontsize = 16)
-    handles, labels = ax=f_ax2.get_legend_handles_labels()
-    f_ax2.legend(handles, labels, loc=2)
-
-    all_frames, fouriers, _ = readData(experiments, normalize = True, medfilt = True)
-    
-    timeb = time - time[0]
-    
-    deltat = 1
-    deltaf = 1 / (deltat * len(time))
-
-    peak_12 = 0
-    peak_24 = 0
-
-    for i in range(0, len(timeb)):
-        freq = timeb[i]*deltaf
+        # Combine all data and calculate FFT
+        combined_df = pd.concat(all_data, ignore_index=True)
         
-        if np.abs(freq - 1/24) < 0.0001:
-            peak_24 = fouriers[0][i]
-            
-        if np.abs(freq - 1/12) < 0.0001:
-            peak_12 = fouriers[0][i]
-
-    sns.lineplot(x = 'Freqs', y = 'FFT', hue = 'Type', data = all_frames, errorbar = 'se', ax=f_ax3)
-
-    f_ax3.axvline(x = 1/24, ymin = 0, ymax = peak_24/25, color = 'red')
-    f_ax3.axvline(x = 1/12, ymin = 0, ymax = peak_12/25, color = 'black')
-
-    f_ax3.set_xlim(0, 0.5)
-    f_ax3.set_ylim(0, 25)
-
-    f_ax3.set_title('Fourier Transform', fontsize = 16)
-    f_ax3.set_xlabel('Frequency (1/hour)')
-    f_ax3.set_ylabel('Energy')
-
-    exp = 1.75 - 0.25 * np.cos(1/24 * (time-12) * 2 * np.pi + np.pi)
-    exp2 = 1.25 + 0.25 * np.cos(1/12 * (time-12) * 2 * np.pi + np.pi)
-
-    sns.lineplot(x="Time", y = "Signal", data = all_frames, hue="Type", errorbar='se', ax=f_ax4)
-    for j in range(0, len(time)):
-        if j % 24 == 0:
-            f_ax4.axvline(j, color = 'green')
-            
-    f_ax4.set_ylabel('Speed (normalized)')
-    f_ax4.set_xlabel('Time (h)')
-    f_ax4.set_title('MR Growth Speed', fontsize = 16)
-    handles, labels = ax=f_ax4.get_legend_handles_labels()
-    f_ax4.legend(handles, labels, loc=4)
-
-    f_ax4.plot(time, exp, color = 'red')
-    f_ax4.plot(time, exp2, color = 'black')
-
-    plt.savefig(os.path.join(reportPath_fourier, "JointPlot.png"), dpi=300, bbox_inches='tight')
-    plt.savefig(os.path.join(reportPath_fourier, "JointPlot.svg"), dpi=300, bbox_inches='tight')
-    
-    makeIndividualFourierPlotsMR(conf)
-    makeIndividualFourierPlotsTR(conf)
-    makeIndividualFourierPlotsMR_Norm(conf)
-    makeIndividualFourier(conf)
-           
-
-def makeIndividualFourierPlotsMR(conf):
-    analysis = os.path.join(conf['MainFolder'],'Analysis')
-    experiments = load_path(analysis, '*')
-    
-    reportPath = os.path.join(conf['MainFolder'],'Report')
-    # Fourier analysis of the growth
-    reportPath_fourier = os.path.join(reportPath, 'GrowthSpeeds and Fourier')
-    
-    if not os.path.exists(reportPath_fourier):
-        os.makedirs(reportPath_fourier)
-
-    SMALL_SIZE = 10
-    MEDIUM_SIZE = 14
-    BIGGER_SIZE = 16
-
-    plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
-    plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
-    plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
-    plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
-    plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
-
-    all_frames, _, time = readData(experiments)
-    
-    UniqueExperiments = all_frames['Type'].unique()
-    N_exp = int(len(UniqueExperiments))
-    
-    plt.subplots(1, N_exp, figsize=(6, 3 * N_exp))
-    
-    min_s, mean_s, sd_s = np.min(all_frames['Signal']), np.mean(all_frames['Signal']), np.std(all_frames['Signal'])
-    max_s = mean_s + 3 * sd_s
-    
-    # Make the plot colors follow the same color scheme as the global plot
-    colors = sns.color_palette("tab10", N_exp)
-    
-    for i in range(0, N_exp):
-        subdata = all_frames[all_frames['Type'] == UniqueExperiments[i]]
-        ax = plt.subplot(N_exp, 1, i+1)
+        # Calculate FFT for each signal
+        time_length = len(time_series)
+        freqs = np.fft.fftfreq(time_length, d=1)
         
-        sns.lineplot(x="Time", y = "Signal", data = subdata, errorbar='se', ax=ax, 
-                     estimator=np.mean, color=colors[i])
+        fft_data = []
+        for (exp_type, i), group in combined_df.groupby(['Type', 'i']):
+            if len(group) >= time_length:  # Only process if we have enough data points
+                signal_data = group['Signal'].values[:time_length]
+                fft_vals = np.abs(np.fft.fft(signal_data))
+                fft_df = pd.DataFrame({
+                    'Freqs': freqs,
+                    'FFT': fft_vals,
+                    'Type': exp_type,
+                    'i': i
+                })
+                fft_data.append(fft_df)
+        
+        if fft_data:
+            fft_combined = pd.concat(fft_data, ignore_index=True)
+            combined_df = pd.concat([combined_df, fft_combined], ignore_index=True)
+
+        return combined_df
+
+    def perform_statistical_analysis(self, data: pd.DataFrame, metric_type: str):
+        """Perform statistical analysis on the data"""
+        try:
+            stats_path = os.path.join(self.fourier_path, f'{metric_type}_Stats.txt')
+            
+            unique_experiments = data['Type'].unique()
+            N_exp = len(unique_experiments)
+            dt = int(self.conf['everyXhourFieldFourier'])
+            N_steps = int(round((data['Time'].max()+1) / dt, 0))
+
+            with open(stats_path, 'w') as f:
+                f.write('Using Mann Whitney U test to compare the growth speed of different experiments\n')
+                
+                for step in range(N_steps):
+                    end = min(dt * (step+1), data['Time'].max())
+                    hours = np.arange(dt * step, end)
+                    subdata = data[data['Time'].isin(hours)]
+
+                    if self.conf.get('averagePerPlantStats', False):
+                        subdata = subdata.groupby(['Type', 'i']).mean().reset_index()
+
+                    f.write(f'\nHours from {step*dt} to {end}\n')
+                    
+                    for i in range(N_exp-1):
+                        for j in range(i+1, N_exp):
+                            self._write_comparison_stats(f, subdata, 
+                                                       unique_experiments[i], 
+                                                       unique_experiments[j])
+
+        except Exception as e:
+            logger.error(f"Error in statistical analysis: {str(e)}")
+            raise
+
+    def _write_comparison_stats(self, f, subdata: pd.DataFrame, exp1_name: str, exp2_name: str):
+        """Write comparison statistics between two experiments"""
+        exp1 = subdata[subdata['Type'] == exp1_name]['Signal']
+        exp2 = subdata[subdata['Type'] == exp2_name]['Signal']
+
+        try:
+            U, p = stats.mannwhitneyu(exp1, exp2)
+            p = round(p, 6)
+
+            f.write(f'Number of samples {exp1_name}: {len(exp1)} - ')
+            f.write(f'Number of samples {exp2_name}: {len(exp2)}\n')
+            f.write(f'Mean {exp1_name}: {round(exp1.mean(), 2)} - ')
+            f.write(f'Mean {exp2_name}: {round(exp2.mean(), 2)}\n')
+
+            significance = "significantly different" if p < 0.05 else "not significantly different"
+            f.write(f'Experiments {exp1_name} and {exp2_name} are {significance}. P-value: {p}\n')
+
+        except Exception as e:
+            f.write(f'Experiments {exp1_name} and {exp2_name} could not be compared: {str(e)}\n')
+
+class Visualizer:
+    """Class for creating visualizations"""
+    
+    def __init__(self, fourier_path: str):
+        self.fourier_path = fourier_path
+        self._setup_plot_style()
+
+    def _setup_plot_style(self):
+        """Set up matplotlib plot style"""
+        SMALL_SIZE = 10
+        MEDIUM_SIZE = 14
+        BIGGER_SIZE = 16
+
+        plt.rc('font', size=SMALL_SIZE)
+        plt.rc('axes', titlesize=SMALL_SIZE)
+        plt.rc('axes', labelsize=MEDIUM_SIZE)
+        plt.rc('xtick', labelsize=SMALL_SIZE)
+        plt.rc('ytick', labelsize=SMALL_SIZE)
+        plt.rc('legend', fontsize=SMALL_SIZE)
+        plt.rc('figure', titlesize=BIGGER_SIZE)
+
+    def create_joint_plot(self, data: pd.DataFrame, data_detrended: pd.DataFrame, 
+                         time: np.ndarray, metric_config: dict, 
+                         output_prefix: str):
+        """Create joint plot with original and detrended data"""
+        fig = plt.figure(figsize=(12, 8), constrained_layout=True, dpi=300)
+        gs = fig.add_gridspec(2, 2)
+        
+        axes = {
+            'original': fig.add_subplot(gs[0, 0]),
+            'detrended': fig.add_subplot(gs[0, 1]),
+            'fft_original': fig.add_subplot(gs[1, 0]),
+            'fft_detrended': fig.add_subplot(gs[1, 1])
+        }
+
+        # Plot original data
+        self._plot_time_series(axes['original'], data, time, 
+                             metric_config['ylabel'], 
+                             f"Original {metric_config['title']}")
+        
+        # Plot detrended data with reference curves
+        self._plot_time_series(axes['detrended'], data_detrended, time,
+                             metric_config['norm_ylabel'],
+                             f"Normalized & Detrended {metric_config['title']}")
+        
+        # Add reference curves to detrended plot
+        exp1 = 1.75 - 0.25 * np.cos(1/24 * (time-12) * 2 * np.pi + np.pi)
+        exp2 = 1.25 + 0.25 * np.cos(1/12 * (time-12) * 2 * np.pi + np.pi)
+        axes['detrended'].plot(time, exp1, color='red', label='24h rhythm')
+        axes['detrended'].plot(time, exp2, color='black', label='12h rhythm')
+        
+        # Update legend for detrended plot
+        handles, labels = axes['detrended'].get_legend_handles_labels()
+        axes['detrended'].legend(handles, labels, loc='best')
+
+        # Plot FFTs
+        self._plot_fft(axes['fft_original'], data, "FFT of Original Signal")
+        self._plot_fft(axes['fft_detrended'], data_detrended, "FFT of Normalized & Detrended Signal")
+
+        plt.suptitle(f"Joint Plot - {metric_config['title']}", fontsize=16, y=1.02)
+
+        for ext in ['png', 'svg']:
+            plt.savefig(os.path.join(self.fourier_path, f"JointPlot_{metric_config['title']}.{ext}"),
+                       dpi=300, bbox_inches='tight')
+        plt.close()
+
+
+    def create_individual_plots(self, data: pd.DataFrame, data_detrended: pd.DataFrame,
+                                time: np.ndarray, metric_config: dict):
+        """Create individual plots for each experiment"""
+        unique_experiments = data['Type'].unique()
+        n_exp = len(unique_experiments)
+        
+        # Get color palette for consistent colors across both plots
+        colors = sns.color_palette("tab10", n_exp)
+        
+        # Calculate y-axis limits for original data
+        min_signal = data['Signal'].min()
+        max_signal = data['Signal'].mean() + 3 * data['Signal'].std()
+        
+        # First Figure: Original Signals
+        fig1 = plt.figure(figsize=(10, 3 * (n_exp + 1)), constrained_layout=True)
+        gs1 = fig1.add_gridspec(n_exp + 1, 1)
+        
+        # Plot original data for each experiment
+        for i, exp_name in enumerate(unique_experiments):
+            ax = fig1.add_subplot(gs1[i, 0])
+            exp_data = data[data['Type'] == exp_name]
+            
+            sns.lineplot(x="Time", y="Signal", data=exp_data,
+                        errorbar='se', ax=ax, color=colors[i],
+                        estimator=np.mean)
+            
+            for j in range(0, len(time)):
+                if j % 24 == 0:
+                    ax.axvline(j, color='green', alpha=1.0, linestyle='--')
+            
+            ax.set_ylabel(metric_config['ylabel'])
+            ax.set_xlabel('')
+            ax.set_ylim(min_signal, max_signal)
+            ax.legend([f"{exp_name}"], loc='upper left')
+            
+            # Add day labels on top for first subplot only
+            if i == 0:
+                ax2 = ax.twiny()
+                ax2.set_xlim(ax.get_xlim())
+                total_days = np.ceil(exp_data['Time'].max() / 24).astype(int)
+                day_ticks = np.arange(24, total_days * 24 + 1, 24)
+                ax2.set_xticks(day_ticks)
+                ax2.set_xticklabels([f'Day {i}' for i in range(1, total_days+1)])
+                ax2.tick_params(axis='x', rotation=45)
+        
+        # Add reference sinusoids for original scale
+        ax_sin = fig1.add_subplot(gs1[-1, 0])
+        exp1 = -0.25 - 0.25 * np.cos(1/24 * (time-12) * 2 * np.pi + np.pi)
+        exp2 = 0.25 + 0.25 * np.cos(1/12 * (time-12) * 2 * np.pi + np.pi)
+        ax_sin.plot(time, exp1, color='red', label='24h rhythm')
+        ax_sin.plot(time, exp2, color='black', label='12h rhythm')
         
         for j in range(0, len(time)):
             if j % 24 == 0:
-                ax.axvline(j, color = 'green')
-                
-        ax.set_ylabel('Speed (mm/h)')
-        ax.set_ylim(min_s, max_s)
+                ax_sin.axvline(j, color='green', alpha=1.0, linestyle='--')
         
-        if i == N_exp - 1:
-            ax.set_xlabel('Time (h)')
-        else:
-            ax.set_xlabel('')
+        ax_sin.set_ylabel('Reference Patterns')
+        ax_sin.set_xlabel('Time (h)')
+        ax_sin.legend(loc='upper right')
+        
+        plt.suptitle(f"{metric_config['title']} Analysis - Original", fontsize=16, y=1.02)
+        
+        # Save original plots
+        for ext in ['png', 'svg']:
+            plt.savefig(os.path.join(self.fourier_path,
+                                    f"{metric_config['title']}_individual_original.{ext}"),
+                    dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Second Figure: Normalized Signals
+        fig2 = plt.figure(figsize=(10, 3 * (n_exp + 1)), constrained_layout=True)
+        gs2 = fig2.add_gridspec(n_exp + 1, 1)
+        
+        # Plot normalized data for each experiment
+        for i, exp_name in enumerate(unique_experiments):
+            ax = fig2.add_subplot(gs2[i, 0])
+            exp_data_norm = data_detrended[data_detrended['Type'] == exp_name]
             
-        # Put legend with the same colors as the global plot
-        ax.legend([UniqueExperiments[i]], loc=2)
+            sns.lineplot(x="Time", y="Signal", data=exp_data_norm,
+                        errorbar='se', ax=ax, color=colors[i],
+                        estimator=np.mean)
+            
+            for j in range(0, len(time)):
+                if j % 24 == 0:
+                    ax.axvline(j, color='green', alpha=1.0, linestyle='--')
+            
+            ax.set_ylabel(metric_config['norm_ylabel'])
+            ax.set_xlabel('')
+            ax.set_ylim(-1, 1)
+            ax.legend([f"{exp_name}"], loc='upper left')
+            
+            # Add day labels on top for first subplot only
+            if i == 0:
+                ax2 = ax.twiny()
+                ax2.set_xlim(ax.get_xlim())
+                total_days = np.ceil(exp_data_norm['Time'].max() / 24).astype(int)
+                day_ticks = np.arange(24, total_days * 24 + 1, 24)
+                ax2.set_xticks(day_ticks)
+                ax2.set_xticklabels([f'Day {i}' for i in range(1, total_days+1)])
+                ax2.tick_params(axis='x', rotation=45)
         
-        if i == 0:
-            # Create a second x-axis for displaying the hours
-            ax2 = ax.twiny()
-            ax2.set_xlim(ax.get_xlim())
-
-            # Calculate the total number of days
-            total_days = np.ceil(subdata['Time'].max() / 24).astype(int)
-
-            # Create day ticks
-            day_ticks = np.arange(24, total_days * 24 + 1, 24)
-
-            # Set day ticks and labels
-            ax2.set_xticks(day_ticks)
-            ax2.set_xticklabels([f'Day {i}' for i in range(1, total_days+1)], rotation=45)
-            ax2.tick_params(axis='x', which='major', labelsize=12)
-            ax2.tick_params(axis='x', which='major', length=0)
-    
-    plt.suptitle('MR Growth Speed', fontsize = 16)
-
-    plt.savefig(os.path.join(reportPath_fourier, "MR_Speed.png"), dpi=300, bbox_inches='tight')
-    plt.savefig(os.path.join(reportPath_fourier, "MR_Speed.svg"), dpi=300, bbox_inches='tight')
-
-
-def makeIndividualFourierPlotsTR(conf):
-    analysis = os.path.join(conf['MainFolder'],'Analysis')
-    experiments = load_path(analysis, '*')
-    
-    reportPath = os.path.join(conf['MainFolder'],'Report')
-    # Fourier analysis of the growth
-    reportPath_fourier = os.path.join(reportPath, 'GrowthSpeeds and Fourier')
-    
-    if not os.path.exists(reportPath_fourier):
-        os.makedirs(reportPath_fourier)
-
-    SMALL_SIZE = 10
-    MEDIUM_SIZE = 14
-    BIGGER_SIZE = 16
-
-    plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
-    plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
-    plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
-    plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
-    plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
-
-    all_frames, _, time = readData(experiments, root="TotalLengthGrad (mm/h)")
-    
-    UniqueExperiments = all_frames['Type'].unique()
-    N_exp = int(len(UniqueExperiments))
-    
-    plt.subplots(1, N_exp, figsize=(6, 3 * N_exp))
-    
-    min_s, mean_s, sd_s = np.min(all_frames['Signal']), np.mean(all_frames['Signal']), np.std(all_frames['Signal'])
-    max_s = mean_s + 4 * sd_s
-    
-    # Make the plot colors follow the same color scheme as the global plot
-    colors = sns.color_palette("tab10", N_exp)
-    
-    for i in range(0, N_exp):
-        subdata = all_frames[all_frames['Type'] == UniqueExperiments[i]]
-        ax = plt.subplot(N_exp, 1, i+1)
-        
-        sns.lineplot(x="Time", y = "Signal", data = subdata, errorbar='se', ax=ax, 
-                     estimator=np.mean, color=colors[i])
+        # Add reference sinusoids for normalized scale
+        ax_sin = fig2.add_subplot(gs2[-1, 0])
+        exp1 = 0.25 - 0.25 * np.cos(1/24 * (time-12) * 2 * np.pi + np.pi)
+        exp2 = -0.25 + 0.25 * np.cos(1/12 * (time-12) * 2 * np.pi + np.pi)
+        ax_sin.plot(time, exp1, color='red', label='24h rhythm')
+        ax_sin.plot(time, exp2, color='black', label='12h rhythm')
         
         for j in range(0, len(time)):
             if j % 24 == 0:
-                ax.axvline(j, color = 'green')
-                
-        ax.set_ylabel('Speed (mm/h)')
-        ax.set_ylim(min_s, max_s)
-        ax.legend([UniqueExperiments[i]], loc=2)
+                ax_sin.axvline(j, color='green', alpha=1.0, linestyle='--')
         
-        if i == N_exp - 1:
-            ax.set_xlabel('Time (h)')
-        else:
-            ax.set_xlabel('')
+        ax_sin.set_ylabel('Reference Patterns')
+        ax_sin.set_xlabel('Time (h)')
+        ax_sin.legend(loc='upper right')
         
-        if i == 0:
-            # Create a second x-axis for displaying the hours
-            ax2 = ax.twiny()
-            ax2.set_xlim(ax.get_xlim())
-
-            # Calculate the total number of days
-            total_days = np.ceil(subdata['Time'].max() / 24).astype(int)
-
-            # Create day ticks
-            day_ticks = np.arange(24, total_days * 24 + 1, 24)
-
-            # Set day ticks and labels
-            ax2.set_xticks(day_ticks)
-            ax2.set_xticklabels([f'Day {i}' for i in range(1, total_days+1)], rotation=45)
-            ax2.tick_params(axis='x', which='major', labelsize=12)
-    
-    plt.suptitle('TR Growth Speed', fontsize = 16)
-
-    plt.savefig(os.path.join(reportPath_fourier, "TR_Speed.png"), dpi=300, bbox_inches='tight')
-    plt.savefig(os.path.join(reportPath_fourier, "TR_Speed.svg"), dpi=300, bbox_inches='tight')
-    
-
-def makeIndividualFourierPlotsMR_Norm(conf):
-    analysis = os.path.join(conf['MainFolder'],'Analysis')
-    experiments = load_path(analysis, '*')
-    
-    reportPath = os.path.join(conf['MainFolder'],'Report')
-    # Fourier analysis of the growth
-    reportPath_fourier = os.path.join(reportPath, 'GrowthSpeeds and Fourier')
-    
-    if not os.path.exists(reportPath_fourier):
-        os.makedirs(reportPath_fourier)
-
-    SMALL_SIZE = 10
-    MEDIUM_SIZE = 14
-    BIGGER_SIZE = 16
-
-    plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
-    plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
-    plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
-    plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
-    plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
-
-    all_frames, _, time = readData(experiments, normalize = True, medfilt=True)
-
-    # Export the data to a csv file
-    all_frames.to_csv(os.path.join(reportPath_fourier, "MR_Norm_Speed.csv"), index=False)
-    
-    UniqueExperiments = all_frames['Type'].unique()
-    N_exp = int(len(UniqueExperiments))
-    
-    plt.subplots(1, N_exp + 1, figsize=(6, 3 * N_exp))
+        plt.suptitle(f"{metric_config['title']} Analysis - Normalized", fontsize=16, y=1.02)
         
-    # Make the plot colors follow the same color scheme as the global plot
-    colors = sns.color_palette("tab10", N_exp)
-        
-    for i in range(0, N_exp):
-        subdata = all_frames[all_frames['Type'] == UniqueExperiments[i]]
-        ax = plt.subplot(N_exp + 1, 1, i+1)
-        
-        sns.lineplot(x="Time", y = "Signal", data = subdata, errorbar='se', ax=ax, 
-                     estimator=np.mean, color=colors[i])
+        # Save normalized plots
+        for ext in ['png', 'svg']:
+            plt.savefig(os.path.join(self.fourier_path,
+                                    f"{metric_config['title']}_individual_normalized.{ext}"),
+                    dpi=300, bbox_inches='tight')
+        plt.close()
+
+    def _plot_time_series(self, ax, data: pd.DataFrame, time: np.ndarray, 
+                         ylabel: str, title: str):
+        """Plot time series data"""
+        sns.lineplot(x="Time", y="Signal", data=data,
+                    hue="Type", errorbar='se', ax=ax, 
+                    estimator=np.mean)
         
         for j in range(0, len(time)):
             if j % 24 == 0:
-                ax.axvline(j, color = 'green')
-                
-        ax.set_ylabel('Speed (mm/h)')
-        ax.set_ylim(-1, 1)
-        ax.legend([UniqueExperiments[i]], loc=2)
+                ax.axvline(j, color='green', alpha=1.0, linestyle='--')
         
-        if i == N_exp - 1:
-            ax.set_xlabel('Time (h)')
-        else:
-            ax.set_xlabel('')
-            
-        if i == 0:
-            # Create a second x-axis for displaying the hours
-            ax2 = ax.twiny()
-            ax2.set_xlim(ax.get_xlim())
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel('Time (h)')
+        ax.set_title(title, fontsize=16)
 
-            # Calculate the total number of days
-            total_days = np.ceil(subdata['Time'].max() / 24).astype(int)
-
-            # Create day ticks
-            day_ticks = np.arange(24, total_days * 24 + 1, 24)
-
-            # Set day ticks and labels
-            ax2.set_xticks(day_ticks)
-            ax2.set_xticklabels([f'Day {i}' for i in range(1, total_days+1)], rotation=45)
-            ax2.tick_params(axis='x', which='major', labelsize=12)
-    
-    ax = plt.subplot(N_exp + 1, 1, i+2)
-    
-    exp = 0.5 - 0.45 * np.cos(1/24 * (time-12) * 2 * np.pi + np.pi)
-    exp2 = -0.5 + 0.45 * np.cos(1/12 * (time-12) * 2 * np.pi + np.pi)
-    
-    ax.plot(time, exp, color = 'red')
-    ax.plot(time, exp2, color = 'black')
-    ax.legend(['24h', '12h'], loc=4)
-    ax.set_ylabel('Reference sinusoids')
-    ax.set_ylim(-1, 1)
-    
-    plt.suptitle('MR Growth Speed (Normalized with Median Filter)', fontsize = 16)
-
-    plt.savefig(os.path.join(reportPath_fourier, "MR_Norm_Speed.png"), dpi=300, bbox_inches='tight')
-    plt.savefig(os.path.join(reportPath_fourier, "MR_Norm_Speed.svg"), dpi=300, bbox_inches='tight')
-    
-    
-def makeIndividualFourier(conf):
-    analysis = os.path.join(conf['MainFolder'],'Analysis')
-    experiments = load_path(analysis, '*')
-    
-    reportPath = os.path.join(conf['MainFolder'],'Report')
-    # Fourier analysis of the growth
-    reportPath_fourier = os.path.join(reportPath, 'GrowthSpeeds and Fourier')
-    
-    if not os.path.exists(reportPath_fourier):
-        os.makedirs(reportPath_fourier)
-
-    SMALL_SIZE = 10
-    MEDIUM_SIZE = 14
-    BIGGER_SIZE = 16
-
-    plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
-    plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
-    plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
-    plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
-    plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
-
-    all_frames, fouriers, time = readData(experiments, normalize = True, medfilt = True)
-
-    timeb = time - time[0]
-    
-    deltat = 1
-    deltaf = 1 / (deltat * len(time))
-            
-    UniqueExperiments = all_frames['Type'].unique()
-    N_exp = int(len(UniqueExperiments))
-    
-    plt.subplots(1, N_exp, figsize=(6, 3 * N_exp))
-    
-    min_s, max_s = np.min(all_frames['FFT']), np.max(all_frames['FFT']), 
-    
-    max_s = 30
-    
-    # Make the plot colors follow the same color scheme as the global plot
-    colors = sns.color_palette("tab10", N_exp)
-    
-    for j in range(0, N_exp):
-        subdata = all_frames[all_frames['Type'] == UniqueExperiments[j]]
-        ax = plt.subplot(N_exp, 1, j+1)
+    def _plot_fft(self, ax, data: pd.DataFrame, title: str):
+        """Plot FFT data with annotations"""
+        sns.lineplot(x='Freqs', y='FFT', hue='Type',
+                    data=data[data['Freqs'] >= 0], errorbar='se', ax=ax)
         
-        sns.lineplot(x="Freqs", y = "FFT", data = subdata, errorbar='se', ax=ax, 
-                     estimator=np.mean, color=colors[j])
+        # Add vertical lines for 24h and 12h periods
+        periods = {'24h': 1/24, '12h': 1/12}
+        colors = {'24h': 'red', '12h': 'black'}
         
-        peak_12_pos = 0
-        peak_24_pos = 0
+        for period, freq in periods.items():
+            # Find peak value at this frequency
+            freq_data = data[np.abs(data['Freqs'] - freq) < 0.001]
+            if not freq_data.empty:
+                ax.axvline(x=freq, ymin=0, ymax=ax.get_ylim()[1],
+                          color=colors[period], linestyle='--', alpha=0.5,
+                          label=f'{period} period')
         
-        for i in range(0, len(timeb)):
-            freq = timeb[i]*deltaf
-            
-            if np.abs(freq - 1/24) < 0.001:
-                peak_24_pos = i
-                
-            if np.abs(freq - 1/12) < 0.001:
-                peak_12_pos = i
-
-        peak_12 = subdata.groupby('Freqs').mean()['FFT'].iloc[peak_12_pos]
-        peak_24 = subdata.groupby('Freqs').mean()['FFT'].iloc[peak_24_pos]
-        
-        # Percentaje of total energy
-        peak_12_over_all = round(peak_12 / subdata.groupby('Freqs').mean()['FFT'].sum() * 100, 2)
-        peak_24_over_all = round(peak_24 / subdata.groupby('Freqs').mean()['FFT'].sum() * 100, 2)
-        peak_24_over_12 = round(peak_24 / peak_12, 2)
-        peak_12_over_24 = round(peak_12 / peak_24, 2)
-        
-        # how do i add a % sign to the text?
-        ax.text(0.35, 0.9, 'Percentage of 1/12h over sum: %.2f%%' % peak_12_over_all, fontsize=10, transform=ax.transAxes)
-        ax.text(0.35, 0.8, 'Percentage of 1/24h over sum: %.2f%%' % peak_24_over_all, fontsize=10, transform=ax.transAxes)
-        ax.text(0.35, 0.7, '1/24h over 1/12h: %.2f' % peak_24_over_12, fontsize=10, transform=ax.transAxes)
-        ax.text(0.35, 0.6, '1/12h over 1/24h: %.2f' % peak_12_over_24, fontsize=10, transform=ax.transAxes)
-        
-        ax.axvline(x = 1/24, ymin = 0, ymax = peak_24/max_s, color = 'red')
-        ax.axvline(x = 1/12, ymin = 0, ymax = peak_12/max_s, color = 'black')
-                
-        ax.set_ylabel('Energy')
-        ax.set_ylim(min_s, max_s)
         ax.set_xlim(0, 0.5)
-        ax.legend([UniqueExperiments[j]], loc=4)
+        ax.set_title(title, fontsize=16)
+        ax.set_xlabel('Frequency (1/hour)')
+        ax.set_ylabel('Energy')
         
-        if i == N_exp - 1:
-            ax.set_xlabel('Frequency (1/hour)')
-        else:
-            ax.set_xlabel('')
-    
-    plt.suptitle('MR Normalized Filtered - Fourier Transform', fontsize = 16)
+        # Ensure legend includes period markers
+        handles, labels = ax.get_legend_handles_labels()
+        ax.legend(handles, labels, loc='best')
 
-    plt.savefig(os.path.join(reportPath_fourier, "MR_Fourier.png"), dpi=300, bbox_inches='tight')
-    plt.savefig(os.path.join(reportPath_fourier, "MR_Fourier.svg"), dpi=300, bbox_inches='tight')
+def makeFourierPlots(conf: dict):
+    """Main function to create Fourier analysis plots"""
+    try:
+        processor = DataProcessor(conf)
+        visualizer = Visualizer(processor.fourier_path)
+        
+        # Process each metric
+        for metric_type in MetricConfig.METRICS.keys():
+            try:
+                logger.info(f"Processing {metric_type}")
+                metric_config = MetricConfig.get_config(metric_type)
+                
+                # Get data paths
+                analysis_path = os.path.join(conf['MainFolder'], 'Analysis')
+                experiments = load_path(analysis_path, '*')
+                
+                # Process data
+                all_frames_original = processor.read_and_process_data(
+                    experiments, 
+                    root=metric_config['column']
+                )
+                
+                all_frames_detrended = processor.read_and_process_data(
+                    experiments,
+                    root=metric_config['column'],
+                    normalize=True,
+                    detrend=True,
+                    medfilt=True
+                )
+                
+                # Perform statistical analysis
+                processor.perform_statistical_analysis(
+                    all_frames_original, 
+                    metric_type
+                )
+                
+                # Create visualizations
+                time_series = all_frames_original['Time'].unique()
+                visualizer.create_joint_plot(
+                    all_frames_original,
+                    all_frames_detrended,
+                    time_series,
+                    metric_config,
+                    f"JointPlot_{metric_type}"
+                )
+                
+                # Create individual plots - updated call to match function signature
+                visualizer.create_individual_plots(
+                    all_frames_original,
+                    all_frames_detrended,
+                    time_series,
+                    metric_config
+                )
+                
+            except Exception as e:
+                logger.error(f"Error processing {metric_type}: {str(e)}")
+                continue
+                
+    except Exception as e:
+        logger.error(f"Error in makeFourierPlots: {str(e)}")
+        raise
+
+if __name__ == "__main__":
+    # Example usage
+    conf = {
+        'MainFolder': '/path/to/main/folder',
+        'everyXhourFieldFourier': 24,
+        'averagePerPlantStats': True
+    }
+    makeFourierPlots(conf)

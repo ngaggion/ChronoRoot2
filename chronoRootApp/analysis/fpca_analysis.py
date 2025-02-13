@@ -113,7 +113,9 @@ if __name__ == "__main__":
 
                 N = 10
                 quantiles = np.arange(N+1) / N
-                z_quantiles = np.quantile(fpc_values, quantiles, axis=0)
+                z_quantiles = np.quantile(fpc_values, quantiles, axis=0)[1:-1]
+
+                N = 8
                 # Create a color palette
                 palette = sns.color_palette("coolwarm", N+1)
 
