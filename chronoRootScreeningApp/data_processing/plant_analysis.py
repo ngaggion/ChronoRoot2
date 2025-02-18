@@ -108,7 +108,7 @@ class PlantGrowthAnalyzer:
         """Validates a single time series for a specific parameter."""
 
         # Check if the length of the time series is at least 2/3 of the maximum length
-        if len(uid_data) < 2/3 * max(lengths):
+        if len(uid_data) < max(lengths):
             return False, None
         
         elapsed_hours = uid_data['ElapsedHours'].values
