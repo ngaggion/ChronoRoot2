@@ -132,6 +132,7 @@ if __name__ == "__main__":
                     ax.plot(curve, color=color, label=f'Q {quantiles[i]:.2f}')
 
                 ax.set_title(f"Interpretation of PC{fpc1}")
+                ax.set_ylabel(magnitude)
 
                 # Create a legend with the quantiles
                 handles = [plt.Line2D([0,1], [0,1], color=palette[i], lw=2) for i in range(N+1)]
