@@ -19,11 +19,17 @@ def merge_analysis_files(project_dir: str) -> pd.DataFrame:
         if os.path.exists(analysis_path):
             try:
                 df = pd.read_csv(analysis_path, sep='\t')
+                # make Group, UID string columns
+                df['Group'] = df['Group'].astype(str)
+                df['UID'] = df['UID'].astype(str)
                 metadata = pd.read_json(metadata_path)
                 metadata = metadata.rename(columns={
                     "group_names": "Group", 
                     "seed_counts": "SeedCount"
                 })
+                
+                # metadata group names should be string
+                metadata['Group'] = metadata['Group'].astype(str)
                 df = df.merge(metadata, on='Group')
                 df['Video'] = analysis_id
                 all_data.append(df)
