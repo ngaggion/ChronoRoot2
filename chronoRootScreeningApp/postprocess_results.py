@@ -2,7 +2,7 @@ import os
 import argparse
 import pandas as pd
 from data_processing.germination_analysis import GerminationAnalyzer
-from data_processing.plant_analysis import PlantGrowthAnalyzer
+from data_processing.plant_analysis_fpca import PlantGrowthAnalyzer
 
 def merge_analysis_files(project_dir: str) -> pd.DataFrame:
     """Merge all seeds.tsv files from different analyses into one dataframe."""
