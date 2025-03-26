@@ -111,7 +111,7 @@ def main():
         print("Merging analysis files...")
         combined_data = merge_analysis_files(args.project_dir, args.name_mapping)
         combined_data.to_csv(
-            os.path.join(results_dir, 'all_seeds.tsv'),
+            os.path.join(results_dir, 'Raw_Data.tsv'),
             sep='\t',
             index=False
         )

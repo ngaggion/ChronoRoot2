@@ -111,12 +111,6 @@ def getImages(conf):
     
     segFiles = loadPath(SegPath, ext = "*.png") 
 
-    # Get the limit of images to process
-    lim = conf['Limit'] 
-    if lim!=0:
-        images = images[:lim]
-        segFiles = segFiles[:lim]
-
     # Save configuration
     conf['ImagePath'] = conf['Images']
     conf['SegPath'] = SegPath
