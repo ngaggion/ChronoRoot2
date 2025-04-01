@@ -28,7 +28,7 @@ def getCleanSeg(segFile, bbox, seed, originalSeed):
     # Removes all the segmentations over the seed point
     seg[0:originalSeed[1],:] = 0
 
-    seg = (seg == 1) + (seg == 2)
+    seg = (seg == 1) + (seg == 2) + (seg == 4)
     seg = np.array(seg, dtype = 'uint8') * 255
 
     # Opening and closing morphological operations

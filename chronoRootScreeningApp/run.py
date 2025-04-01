@@ -6,7 +6,7 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QLabel, QLineEdit, QPushButton, QCheckBox,
                            QFileDialog, QGroupBox, QMessageBox, QScrollArea,
-                           QTabWidget, QTableWidget, QTableWidgetItem, QMenu, QComboBox)
+                           QTabWidget, QTableWidget, QTableWidgetItem, QMenu, QComboBox, QDialog)
 from PyQt5.QtCore import Qt, QTimer, Qt
 from PyQt5.QtGui import QColor, QPixmap, QIntValidator, QDoubleValidator
 
@@ -98,6 +98,14 @@ class AnalysisTab(QWidget):
         time_settings.addWidget(QLabel('Time between slices (minutes):'))
         time_settings.addWidget(self.time_delta_edit)
         proj_layout.addLayout(time_settings)
+
+        # Time before pictures
+        added_time = QHBoxLayout()
+        self.add_time_edit = QLineEdit()
+        self.add_time_edit.setPlaceholderText('0')
+        added_time.addWidget(QLabel('Extra time before first picture (hours):'))
+        added_time.addWidget(self.add_time_edit)
+        proj_layout.addLayout(added_time)
 
         # Calibration Group Box
         calib_group = QGroupBox('Calibration Settings')
@@ -191,6 +199,11 @@ class AnalysisTab(QWidget):
         self.postprocess_btn.clicked.connect(self.postprocess_results)
         buttons_layout.addWidget(self.postprocess_btn)
         
+        # Add name mapping button to the buttons_layout
+        self.name_mapping_btn = QPushButton('Edit Name Mapping')
+        self.name_mapping_btn.clicked.connect(self.edit_name_mapping)
+        buttons_layout.addWidget(self.name_mapping_btn)
+
         layout.addLayout(buttons_layout)
         
         self.setLayout(layout)
@@ -201,6 +214,15 @@ class AnalysisTab(QWidget):
 
         # Initialize calibration mode
         self.toggle_calibration_mode()
+
+    def edit_name_mapping(self):
+        """Open dialog to edit name mapping for visualization"""
+        if not self.proj_dir_edit.text() or not os.path.exists(self.proj_dir_edit.text()):
+            QMessageBox.warning(self, 'Error', 'Please select a valid project directory first!')
+            return
+            
+        dialog = NameMappingDialog(self.proj_dir_edit.text(), self)
+        dialog.exec_()
 
     def on_project_dir_changed(self):
         """Handle project directory changes and update all tabs"""
@@ -484,6 +506,12 @@ class AnalysisTab(QWidget):
         except ValueError:
             time_delta = 60
 
+        # Get add time, default 0 if empty or invalid
+        try:
+            add_time = int(self.add_time_edit.text() or '0')
+        except ValueError:
+            add_time = 0
+        
         # Verify there are completed analyses
         analysis_dir = os.path.join(project_dir, 'analysis')
         if not os.path.exists(analysis_dir):
@@ -497,13 +525,21 @@ class AnalysisTab(QWidget):
             QMessageBox.warning(self, 'Error', 'No analyses found to process!')
             return
         
+        # Check for name mapping file
+        mapping_file = os.path.join(project_dir, 'name_mapping.json')
+        
         # Create command line arguments
         args = [
             "python",
             "postprocess_results.py",
             "--project-dir", project_dir,
             "--dt", str(time_delta),
+            "--add-time-before-photo", str(add_time)
         ]
+        
+        # Add name mapping if it exists
+        if os.path.exists(mapping_file):
+            args.extend(["--name-mapping", mapping_file])
         
         try:
             # Launch the processing script as a separate process
@@ -514,10 +550,11 @@ class AnalysisTab(QWidget):
                 universal_newlines=True
             )
             
+            mapping_msg = " with name mapping" if os.path.exists(mapping_file) else ""
             QMessageBox.information(
                 self,
                 "Post-processing Started",
-                f"Post-processing has been started in a separate window.\n"
+                f"Post-processing has been started{mapping_msg}.\n"
                 f"Results will be saved in: {os.path.join(project_dir, 'results')}"
             )
             
@@ -940,6 +977,132 @@ class ReportsTab(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.display_current_image()
+
+
+class NameMappingDialog(QDialog):
+    def __init__(self, project_dir, parent=None):
+        super().__init__(parent)
+        self.project_dir = project_dir
+        self.mapping_file = os.path.join(project_dir, 'name_mapping.json')
+        self.mapping = {}
+        self.initUI()
+        self.load_existing_mapping()
+        self.load_group_names()
+        
+    def initUI(self):
+        self.setWindowTitle('Group Name Mapping')
+        self.setMinimumWidth(500)
+        layout = QVBoxLayout()
+        
+        # Instructions
+        instructions = QLabel(
+            "Map original group names to display names for visualization. "
+            "Leave blank to use original name."
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+        
+        # Scrollable area for mappings
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_content = QWidget()
+        self.mapping_layout = QVBoxLayout(scroll_content)
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll)
+        
+        # Buttons
+        buttons = QHBoxLayout()
+        self.save_btn = QPushButton('Save Mapping')
+        self.save_btn.clicked.connect(self.save_mapping)
+        self.cancel_btn = QPushButton('Cancel')
+        self.cancel_btn.clicked.connect(self.reject)
+        buttons.addWidget(self.save_btn)
+        buttons.addWidget(self.cancel_btn)
+        layout.addLayout(buttons)
+        
+        self.setLayout(layout)
+    
+    def load_existing_mapping(self):
+        # Load existing mapping if any
+        if os.path.exists(self.mapping_file):
+            try:
+                with open(self.mapping_file, 'r') as f:
+                    self.mapping = json.load(f)
+            except:
+                self.mapping = {}
+    
+    def load_group_names(self):
+        # Find all unique group names across analyses
+        group_names = set()
+        analysis_dir = os.path.join(self.project_dir, 'analysis')
+        
+        if os.path.exists(analysis_dir):
+            for analysis_id in os.listdir(analysis_dir):
+                group_info_path = os.path.join(analysis_dir, analysis_id, 'group_info.json')
+                if os.path.exists(group_info_path):
+                    try:
+                        with open(group_info_path, 'r') as f:
+                            group_info = json.load(f)
+                            if 'group_names' in group_info:
+                                for name in group_info['group_names']:
+                                    group_names.add(str(name).strip())
+                    except:
+                        pass
+        
+        # Clear existing layout
+        while self.mapping_layout.count():
+            item = self.mapping_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # Create mapping entries
+        for name in sorted(group_names):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f'Original: {name}'))
+            edit = QLineEdit()
+            edit.setPlaceholderText(f'Display name for {name}')
+            
+            # Set existing mapping if any
+            if name in self.mapping:
+                edit.setText(self.mapping[name])
+                
+            row.addWidget(edit)
+            row.addWidget(QLabel())  # Spacer
+            
+            # Store the widgets for later retrieval
+            setattr(self, f'edit_{name}', edit)
+            
+            self.mapping_layout.addLayout(row)
+            
+        # Add stretch to bottom
+        self.mapping_layout.addStretch()
+    
+    def save_mapping(self):
+        # Collect mappings from UI
+        new_mapping = {}
+        for name in self.mapping.keys():
+            edit = getattr(self, f'edit_{name}', None)
+            if edit and edit.text().strip():
+                new_mapping[name] = edit.text().strip()
+        
+        # Find any new mappings we added during this session
+        for child in self.findChildren(QLineEdit):
+            if child.text().strip():
+                # Extract the original name from placeholder text
+                placeholder = child.placeholderText()
+                if placeholder.startswith('Display name for '):
+                    orig_name = placeholder[17:]  # Length of 'Display name for '
+                    new_mapping[orig_name] = child.text().strip()
+        
+        # Save mapping to file
+        try:
+            with open(self.mapping_file, 'w') as f:
+                json.dump(new_mapping, f, indent=2)
+            self.mapping = new_mapping
+            QMessageBox.information(self, 'Success', 'Name mapping saved successfully!')
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Error saving mapping: {str(e)}')
 
 class ScreeningGUI(QMainWindow):
     def __init__(self):

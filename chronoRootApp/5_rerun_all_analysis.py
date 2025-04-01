@@ -1,4 +1,4 @@
-""" 
+"""
 ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture
 Copyright (C) 2020 Nicolás Gaggion
 
@@ -8,8 +8,7 @@ the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
@@ -18,38 +17,47 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from analysis.plantAnalysis import plantAnalysis
 import argparse
-import json 
+import json
 from analysis.utils.fileUtilities import loadPath
 import os
-    
+from multiprocessing import Pool
+
+
+def analyze_experiment(exp):
+    # Load the configuration for each experiment
+    conf = json.load(open(exp))
+
+    # New main folder for rerun analysis
+    conf['MainFolder'] = "/media/apoloml/DATOS_1/Datos/Arabidopsis/FlorR/AnalysisMar_2"
+
+    if "rpi" not in str(conf['rpi']):
+        rpi = "rpi" + str(conf['rpi'])
+    else:
+        rpi = str(conf['rpi'])
+
+    conf['fileKey'] = conf['identifier']
+    conf['sequenceLabel'] = str(conf['identifier']) + '/' + str(conf['rpi']) + '/' + str(conf['cam']) + '/' + str(conf['plant'])
+    conf['Plant'] = 'Arabidopsis thaliana'
+
+    conf["processingLimit"] = 8
+    conf['timeStep'] = 15
+    conf['Limit'] = int(conf['processingLimit'] * 24 * 60 / conf['timeStep'])
+
+    # Perform the analysis
+    plantAnalysis(conf, True, False)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture')
     parser.add_argument('--config', type=str, default='config.json', help='Path to the configuration file (default: config.json)')
 
     args = parser.parse_args()
-    
+
     # Old main folder
-    mainFolder = "/home/ngaggion/DATA/Raices/AndanaBamboo"
+    mainFolder = "/media/apoloml/DATOS_1/Datos/Arabidopsis/FlorR/AnalysisMar"
     analysis = os.path.join(mainFolder, 'Analysis')
     experiments = loadPath(analysis, '*/*/*/*/*/metadata.json')
 
-    for exp in experiments:
-        conf = json.load(open(exp))
-
-        # New main folder for rerun analysis
-        conf['MainFolder'] = "/home/ngaggion/DATA/Raices/Bamboo_3"
-
-        if "rpi" not in str(conf['rpi']):
-            rpi = "rpi" + str(conf['rpi'])
-        else:
-            rpi = str(conf['rpi'])
-
-        conf['fileKey'] = conf['identifier']
-        conf['sequenceLabel'] = conf['identifier'] + '/' + conf['rpi'] + '/' + str(conf['cam']) + '/' + str(conf['plant'])
-        conf['Plant'] = 'Arabidopsis thaliana'
-        
-        conf["processingLimit"] = 10
-        conf['timeStep'] = 15
-        conf['Limit'] = int(conf['processingLimit'] * 24 * 60 / conf['timeStep'])
-
-        plantAnalysis(conf, True, False)
+    # Create a Pool with 4 processes
+    with Pool(4) as pool:
+        pool.map(analyze_experiment, experiments)
