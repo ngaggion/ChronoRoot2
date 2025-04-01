@@ -418,7 +418,7 @@ def makeLateralAnglesPlots(conf):
     ax = plt.subplots()
 
     sns.violinplot(x = 'Day', y = 'Mean emergence angle', data=frame, hue = 'Experiment', inner=None, 
-                        showmeans=True, zorder=2, legend = False)
+                         zorder=2, legend = False)
     ax = sns.swarmplot(x = 'Day', y = 'Mean emergence angle', data=frame, hue = 'Experiment', dodge= True, 
                        size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2)
     ax.set_ylim(-20, 120)

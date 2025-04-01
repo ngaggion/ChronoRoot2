@@ -28,7 +28,6 @@ def dataWork(conf, pfile, folder, N_exp = None):
     data = pd.read_csv(pfile)
     shape = data.shape
     N = shape[0]
-
     # Read info from the filename
 
     dates = []
@@ -68,7 +67,7 @@ def dataWork(conf, pfile, folder, N_exp = None):
         else:
             # add rows with last data
             for i in range(N,N_exp):
-                data = pd.concat([data, data.iloc[N-1]], ignore_index=True)
+                data = pd.concat([data, pd.DataFrame(data.iloc[N-1]).T], ignore_index=True)
 
     # If there is a repeated date, it is updated by a time step
 
@@ -129,7 +128,7 @@ def dataWork(conf, pfile, folder, N_exp = None):
     data['NumberOfLateralRoots'] = numlateralRoots
     data['TotalLength (mm)'] = mainRoot_mm + lateralRoots_mm
 
-    data['FileName'].to_csv(os.path.join(folder, 'FilesAfterPostprocessing.csv'), index = False)
+    data['FileName'].to_csv(os.path.abspath(os.path.join(folder, 'FilesAfterPostprocessing.csv')), index = False)
 
     # Removes original columns
     try:
@@ -145,15 +144,58 @@ def dataWork(conf, pfile, folder, N_exp = None):
     # Creates a column that is True if the hour is 00:00, checking hours and minutes
     data['NewDay'] = (data['Date'].dt.hour == 0) & (data['Date'].dt.minute == 0)
 
-    data.to_csv(os.path.join(folder, 'PostProcess_Original.csv'), index = False)
+    data.to_csv(os.path.abspath(os.path.join(folder, 'PostProcess_Original.csv')), index = False)
 
     # Downsamples the data to a 60 minutes timestep
+    # Make a copy to prevent modifying the original
+    original_data = data.copy()
+    
+    # Set the index and ensure it's named correctly
     data = data.set_index('Date')
-    data = data.resample('60T').mean()
-    data = data.reset_index()
-
-    # Creates a column that is True if the hour is 00:00, checking hours and minutes
+    data.index.name = 'Date'  # Explicitly ensure index name is 'Date'
+    
+    # Fix: Ensure alignment with hour boundaries by using a reference timestamp
+    reference_timestamp = data.index[0].floor('H')  # Round down to nearest hour
+    
+    # Fix: Use explicit origin parameter to ensure proper alignment
+    hour_data = data.resample('60T', origin=reference_timestamp).mean()
+    
+    # Fix: Calculate expected number of rows after resampling
+    if N_exp is not None:
+        expected_hour_count = (N_exp + 3) // 4  # Ceiling division
+        
+        # If we got fewer rows than expected, add missing hours
+        if len(hour_data) < expected_hour_count:
+            # Calculate how many hours we're missing
+            missing_hours = expected_hour_count - len(hour_data)
+            
+            # Get the last hour in the data
+            last_hour = hour_data.index[-1]
+            
+            # Create new hours after the last one
+            new_hours = pd.date_range(start=last_hour + pd.Timedelta(hours=1), periods=missing_hours, freq='60T')
+            
+            # Create a DataFrame with the new hours, filled with the last values
+            new_data = pd.DataFrame(index=new_hours)
+            for column in hour_data.columns:
+                new_data[column] = hour_data[column].iloc[-1]
+            
+            # Append the new data
+            hour_data = pd.concat([hour_data, new_data])
+        
+        elif len(hour_data) > expected_hour_count:
+            # If we got more rows than expected, trim the extra hours
+            hour_data = hour_data.iloc[:expected_hour_count]
+    
+    # Reset index and ensure the column is named correctly
+    data = hour_data.reset_index()
+    
+    # Fix: Ensure 'Date' column exists - handle any naming issues
+    if 'Date' not in data.columns and 'index' in data.columns:
+        data = data.rename(columns={'index': 'Date'})
+    
     data['NewDay'] = (data['Date'].dt.hour == 0) & (data['Date'].dt.minute == 0)
+
     # Re estimates the elapsed time
     data['ElapsedTime (h)'] = ((data['Date'] - data['Date'][0]).dt.total_seconds() / 3600).round(0)
     # Rounds the number of lateral roots
@@ -189,8 +231,8 @@ def dataWork(conf, pfile, folder, N_exp = None):
     data['MainOverTotal (%)'] = mainOverTotal
     data['LateralDensity (mm/mm)'] = lateralDensity
     data['DiscreteLateralDensity (LR/cm)'] = discreteLateralDensity
+    
+    data.to_csv(os.path.abspath(os.path.join(folder, 'PostProcess_Hour.csv')), index = False)
 
-    data.to_csv(os.path.join(folder, 'PostProcess_Hour.csv'), index = False)
-
-    return       
+    return
  

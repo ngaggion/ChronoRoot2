@@ -8,7 +8,7 @@ from scipy.optimize import curve_fit
 class GerminationAnalyzer:
     """Analyzes seed germination data and generates plots."""
     
-    def __init__(self, data=None, output_dir='.', dt=1):
+    def __init__(self, data=None, output_dir='.', dt=1, add_time_before_photo=0):
         self.data = self._prepare_data(data)
         self.base_dir = output_dir
         self.plot_dirs = self._setup_directories()
@@ -17,6 +17,7 @@ class GerminationAnalyzer:
         self.TIME_WINDOW = dt
         self.ROLL_WINDOW = max(5, int(round(2.5 / self.TIME_WINDOW)))
         self.DETECTION_WINDOW = max(10, int(round(5 / self.TIME_WINDOW)))
+        self.add_time_before_photo = add_time_before_photo
         
         self.germination_data = None
         self.statistics = None
@@ -97,6 +98,7 @@ class GerminationAnalyzer:
         
         # Calculate germination metrics
         data = data.groupby('UID', group_keys=False).apply(self._detect_germination)
+        data['ElapsedHours'] = data['ElapsedHours'] + self.add_time_before_photo
         
         # Get unique combinations of Group and Video
         group_video_counts = (data[['Group', 'Video', 'SeedCount']]

@@ -117,6 +117,8 @@ def qr_detect(inputImage):
     index2 = np.argsort(contour_sizes)[::-1]
     index = contour_sizes[index2] > 4000
     
+    data = []
+    
     for k in index2[index]:
         x, y, w, h = cv2.boundingRect(contours[k])
         

@@ -28,6 +28,10 @@ import cv2
 import graph_tool.all as gt
 import json
 
+# remove FutureWarning
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 plt.switch_backend('agg')
 
 def natural_key(string_):
@@ -577,7 +581,7 @@ def plot_convex_hull(savepath, frame, name = ''):
     fig, ax = plt.subplots()
 
     sns.violinplot(x = 'Day', y = 'Convex Hull Area', data=frame, hue = 'Experiment', inner=None, 
-                    showmeans=True, zorder=2, legend = False)
+                     zorder=2, legend = False)
     ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Area', data=frame, hue = 'Experiment', dodge= True, 
                 size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2)
 
@@ -597,7 +601,7 @@ def plot_convex_hull(savepath, frame, name = ''):
     hue_order = frame['Experiment'].unique()
 
     sns.violinplot(x = 'Day', y = 'Lateral Root Area Density', data=frame2, hue = 'Experiment', inner=None, 
-                    showmeans=True, zorder=2, legend = False, hue_order = hue_order)
+                     zorder=2, legend = False, hue_order = hue_order)
     ax = sns.swarmplot(x = 'Day', y = 'Lateral Root Area Density', data=frame2, hue = 'Experiment', dodge= True, 
                 size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
                 hue_order = hue_order)
@@ -614,7 +618,7 @@ def plot_convex_hull(savepath, frame, name = ''):
     fig, ax = plt.subplots()
     
     sns.violinplot(x = 'Day', y = 'Convex Hull Aspect Ratio', data=frame, hue = 'Experiment', inner=None, 
-                    showmeans=True, zorder=2, legend = False)
+                     zorder=2, legend = False)
     ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Aspect Ratio', data=frame, hue = 'Experiment', dodge= True, 
                 size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2)
 
@@ -634,7 +638,7 @@ def plot_convex_hull(savepath, frame, name = ''):
     hue_order = frame['Experiment'].unique()
 
     sns.violinplot(x = 'Day', y = 'Total Root Area Density', data=frame2, hue = 'Experiment', inner=None, 
-                    showmeans=True, zorder=2, legend = False, hue_order = hue_order)
+                     zorder=2, legend = False, hue_order = hue_order)
     ax = sns.swarmplot(x = 'Day', y = 'Total Root Area Density', data=frame2, hue = 'Experiment', dodge= True, 
                 size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
                 hue_order = hue_order)
@@ -653,7 +657,7 @@ def plot_convex_hull(savepath, frame, name = ''):
     hue_order = frame['Experiment'].unique()
 
     sns.violinplot(x = 'Day', y = 'Convex Hull Width', data=frame2, hue = 'Experiment', inner=None, 
-                    showmeans=True, zorder=2, legend = False, hue_order = hue_order)
+                     zorder=2, legend = False, hue_order = hue_order)
     ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Width', data=frame2, hue = 'Experiment', dodge= True, 
                 size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
                 hue_order = hue_order)
@@ -672,7 +676,7 @@ def plot_convex_hull(savepath, frame, name = ''):
     hue_order = frame['Experiment'].unique()
 
     sns.violinplot(x = 'Day', y = 'Convex Hull Height', data=frame2, hue = 'Experiment', inner=None, 
-                    showmeans=True, zorder=2, legend = False, hue_order = hue_order)
+                     zorder=2, legend = False, hue_order = hue_order)
     ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Height', data=frame2, hue = 'Experiment', dodge= True, 
                 size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
                 hue_order = hue_order)
