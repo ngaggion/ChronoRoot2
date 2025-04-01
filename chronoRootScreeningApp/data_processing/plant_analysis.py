@@ -315,6 +315,8 @@ class PlantGrowthAnalyzer:
         
         # Calculate growth rate per hour
         result['GrowthRate'] = result.groupby('UID')[parameter].diff()
+        # Fill na values with 0, for the first hour
+        result['GrowthRate'] = result['GrowthRate'].fillna(0)
         
         return result
     
