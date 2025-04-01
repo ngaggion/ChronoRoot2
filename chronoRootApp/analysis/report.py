@@ -190,7 +190,7 @@ def plot_info_all(savepath, dataframe):
 
     # plt.rcParams.update({'font.size': 18})
 
-    fig3 = plt.figure(figsize=(18,12), constrained_layout=True)
+    fig3 = plt.figure(figsize=(12,8), constrained_layout=True)
     gs = fig3.add_gridspec(2, 3)
     f_ax1 = fig3.add_subplot(gs[0, 0])
     f_ax2 = fig3.add_subplot(gs[0, 1])
@@ -234,14 +234,16 @@ def plot_info_all(savepath, dataframe):
     f_ax6.set_ylabel('Percentage (%)', fontsize = 12)
     f_ax6.set_xlabel('Elapsed Time (h)', fontsize = 12)
     f_ax6.legend(loc='lower left')
-
+    
+    """
     f_ax1.annotate('(A)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
     f_ax2.annotate('(B)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
     f_ax3.annotate('(C)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
     f_ax4.annotate('(D)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
     f_ax5.annotate('(E)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
     f_ax6.annotate('(F)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
-
+    """
+    
     plt.savefig(os.path.join(savepath,'Temporal_Subplots_Mean_SE.svg'),dpi=300, bbox_inches='tight')
     plt.savefig(os.path.join(savepath,'Temporal_Subplots_Mean_SE.png'),dpi=300, bbox_inches='tight')
 
