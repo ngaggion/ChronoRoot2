@@ -55,12 +55,12 @@ if __name__ == "__main__":
     for magnitude in COLUMNS:
         name = magnitude.split(" ")[0]
         
-        plt.figure(figsize = (10, 20))
+        plt.figure(figsize = (8, 16))
 
         plt.subplot(5,2,1)
 
         sns.lineplot(x='ElapsedTime (h)', y=magnitude, hue='Experiment', data = temporal_data_df, errorbar='se', palette="tab10")
-        plt.title(magnitude)
+        plt.title(magnitude, fontsize=16)
 
         fpca = FPCA(n_components=number_of_components, components_basis=basis)
         fpc_values = fpca.fit_transform(FDataGrid(magnitudes_dict[magnitude].transpose()))
@@ -107,7 +107,7 @@ if __name__ == "__main__":
                 ax = plt.subplot(5,2, 1 + fpc1 * 2)
 
                 sns.boxplot(data=fpc_df, x = "Experiment", hue="Experiment", y=f"FPC{fpc1}{'_IRN' if inverse_rank_normalize else ''}", ax=ax, palette="tab10");
-                ax.set_title('Box plot for PC %s' %fpc1)
+                ax.set_title('Box plot for PC %s' %fpc1, fontsize=16)
                 
                 ax = plt.subplot(5,2, 1 + fpc1 * 2 + 1)
 
@@ -131,7 +131,7 @@ if __name__ == "__main__":
                     # Plot the curve with the corresponding color
                     ax.plot(curve, color=color, label=f'Q {quantiles[i]:.2f}')
 
-                ax.set_title(f"Interpretation of PC{fpc1}")
+                ax.set_title(f"Interpretation of PC{fpc1}", fontsize=16)
                 ax.set_ylabel(magnitude)
                 ax.set_xlabel("Time (h)")
 
