@@ -303,7 +303,7 @@ class GerminationAnalyzer:
             rog = [self.germination_rate(x, *popt) for x in x_smooth]
             
             # Create plot with two y-axes
-            fig, ax1 = plt.subplots(figsize=(12, 8))
+            fig, ax1 = plt.subplots(figsize=(10, 4))
             
             # Primary y-axis (percentage)
             ax1.set_xlabel('Time (hours)')
@@ -376,7 +376,7 @@ class GerminationAnalyzer:
         
         if not pairwise:
             # Plot all groups together
-            plt.figure(figsize=(12, 8))
+            plt.figure(figsize=(6, 4))
             
             for group in unique_groups:
                 group_data = data_surv[data_surv['Group'] == group]
@@ -400,7 +400,7 @@ class GerminationAnalyzer:
             # Create pairwise plots
             for i, group1 in enumerate(unique_groups):
                 for j, group2 in enumerate(unique_groups[i+1:], i+1):
-                    plt.figure(figsize=(12, 8))
+                    plt.figure(figsize=(10, 4))
                     
                     for group in [group1, group2]:
                         group_data = data_surv[data_surv['Group'] == group]
@@ -489,7 +489,7 @@ class GerminationAnalyzer:
             
 
             # Create plot with two y-axes
-            fig, ax1 = plt.subplots(figsize=(12, 8))
+            fig, ax1 = plt.subplots(figsize=(10, 4))
             
             # Add detailed information to the title
             plt.suptitle(f'Germination Curve - {group_name} - Video {video_name}', fontsize=14)

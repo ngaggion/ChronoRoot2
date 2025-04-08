@@ -349,7 +349,7 @@ class PlantGrowthAnalyzer:
         data = data.copy()
         data['Group'] = data['Group'].astype(str).str.strip()
         
-        plt.figure(figsize=(12, 6))
+        plt.figure(figsize=(8, 4))
         
         plt.subplot(121)
         sns.lineplot(
@@ -414,7 +414,7 @@ class PlantGrowthAnalyzer:
         group_paths = {}
         
         for group in data['Group'].unique():
-            plt.figure(figsize=(15, 10))
+            plt.figure(figsize=(8, 4))
             group_data = data[data['Group'] == group]
             
             # Plot parameter values

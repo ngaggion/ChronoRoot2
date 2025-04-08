@@ -35,7 +35,7 @@ def parse_arguments():
                         help='Column to group data by (default: "Experiment")')
     parser.add_argument('--id_col', type=str, default='Plant_id',
                         help='Column containing unique identifiers (default: "Plant_id")')
-    parser.add_argument('--figsize', type=float, nargs=2, default=[10, 20],
+    parser.add_argument('--figsize', type=float, nargs=2, default=[8, 16],
                         help='Figure size in inches (width, height) (default: 10 20)')
     parser.add_argument('--dpi', type=int, default=300,
                         help='DPI for saved figures (default: 300)')
