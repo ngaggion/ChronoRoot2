@@ -347,7 +347,7 @@ class GerminationAnalyzer:
             ax1.grid(True, alpha=0.3)
             
             # Add legend for primary axis only
-            ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            ax1.legend(bbox_to_anchor=(1.1, 1), loc='upper left')
             
             # Save plot
             plot_name = os.path.join(self.plot_dirs['germination'], 
@@ -531,7 +531,7 @@ class GerminationAnalyzer:
             ax1.grid(True, alpha=0.3)
             
             # Add legend for primary axis only
-            ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            ax1.legend(bbox_to_anchor=(1.1, 1), loc='upper left')
             
             # Save plot
             plot_name = os.path.join(self.plot_dirs['germination_video'], 
