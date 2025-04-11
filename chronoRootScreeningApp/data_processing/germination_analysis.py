@@ -303,7 +303,7 @@ class GerminationAnalyzer:
             rog = [self.germination_rate(x, *popt) for x in x_smooth]
             
             # Create plot with two y-axes
-            fig, ax1 = plt.subplots(figsize=(10, 4))
+            fig, ax1 = plt.subplots(figsize=(7, 4))
             
             # Primary y-axis (percentage)
             ax1.set_xlabel('Time (hours)')
@@ -347,7 +347,7 @@ class GerminationAnalyzer:
             ax1.grid(True, alpha=0.3)
             
             # Add legend for primary axis only
-            ax1.legend(bbox_to_anchor=(1.1, 1), loc='upper left')
+            ax1.legend(bbox_to_anchor=(1.20, 1), loc='upper left')
             
             # Save plot
             plot_name = os.path.join(self.plot_dirs['germination'], 
@@ -376,7 +376,7 @@ class GerminationAnalyzer:
         
         if not pairwise:
             # Plot all groups together
-            plt.figure(figsize=(6, 4))
+            plt.figure(figsize=(7, 4))
             
             for group in unique_groups:
                 group_data = data_surv[data_surv['Group'] == group]
@@ -400,7 +400,7 @@ class GerminationAnalyzer:
             # Create pairwise plots
             for i, group1 in enumerate(unique_groups):
                 for j, group2 in enumerate(unique_groups[i+1:], i+1):
-                    plt.figure(figsize=(10, 4))
+                    plt.figure(figsize=(7, 4))
                     
                     for group in [group1, group2]:
                         group_data = data_surv[data_surv['Group'] == group]
@@ -489,7 +489,7 @@ class GerminationAnalyzer:
             
 
             # Create plot with two y-axes
-            fig, ax1 = plt.subplots(figsize=(10, 4))
+            fig, ax1 = plt.subplots(figsize=(7, 4))
             
             # Add detailed information to the title
             plt.suptitle(f'Germination Curve - {group_name} - Video {video_name}', fontsize=14)
@@ -531,7 +531,7 @@ class GerminationAnalyzer:
             ax1.grid(True, alpha=0.3)
             
             # Add legend for primary axis only
-            ax1.legend(bbox_to_anchor=(1.1, 1), loc='upper left')
+            ax1.legend(bbox_to_anchor=(1.20, 1), loc='upper left')
             
             # Save plot
             plot_name = os.path.join(self.plot_dirs['germination_video'], 
