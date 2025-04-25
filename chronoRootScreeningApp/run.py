@@ -431,10 +431,9 @@ class AnalysisTab(QWidget):
         try:
             # Launch the processing script
             process = subprocess.Popen(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True
+                " ".join(args),
+                shell=True,
+                preexec_fn=os.setsid
             )
             
             QMessageBox.information(
@@ -472,10 +471,9 @@ class AnalysisTab(QWidget):
         try:
             # Launch the processing script
             process = subprocess.Popen(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True
+                " ".join(args),
+                shell=True,
+                preexec_fn=os.setsid
             )
             
             QMessageBox.information(
@@ -544,10 +542,9 @@ class AnalysisTab(QWidget):
         try:
             # Launch the processing script as a separate process
             process = subprocess.Popen(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True
+                " ".join(args),
+                shell=True,
+                preexec_fn=os.setsid
             )
             
             mapping_msg = " with name mapping" if os.path.exists(mapping_file) else ""

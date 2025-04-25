@@ -86,7 +86,7 @@ def main():
     parser.add_argument(
         '--dt',
         type=float,
-        default=1.0,
+        default=0.25,
         help='Delta time between measurements (hours)'
     )
     parser.add_argument(

@@ -121,6 +121,9 @@ class GerminationAnalyzer:
                 
         non_germ_entries = []
         non_germ_entries_for_data = []
+        
+        # Store UIDs that should be excluded (when we have too many seeds)
+        uids_to_exclude = set()
 
         # For each Group-Video combination
         for (group, video), count in group_video_counts.items():
@@ -143,15 +146,26 @@ class GerminationAnalyzer:
                 germinated_count = len(germinated)
                 needed_count = count - germinated_count
 
-                if needed_count <= 0:
-                    continue
+                if needed_count < 0:
+                    # We have MORE detected seeds than the expected count
+                    # Sort by earliest germination time and keep only the first 'count' seeds
+                    sorted_germinated = germinated.sort_values('GerminationTime')
+                    keep_uids = set(sorted_germinated.head(count)['UID'].values)
+                    
+                    # Find UIDs to exclude
+                    exclude_uids = set(germinated['UID']) - keep_uids
+                    uids_to_exclude.update(exclude_uids)
+                    continue  # Skip to next group-video combination
+                
+                if needed_count == 0:
+                    continue  # Perfect match between detected and expected count
 
+                # If we need more seeds than we have identified UIDs for
                 missing_uids = list(missing_uids)[:needed_count]
                 if len(missing_uids) < needed_count:
                     # Create additional entries with artificial UIDs
                     for i in range(needed_count - len(missing_uids)):
                         missing_uids.append(f"Group_{group}_video_{video}_NonGerm_{i}")
-
 
             # Add entries for missing UIDs
             for uid in missing_uids:
@@ -179,6 +193,12 @@ class GerminationAnalyzer:
                     'Germinated': False
                 })
 
+        # Filter out excess UIDs from germination data
+        germ_data = germ_data[~germ_data['UID'].isin(uids_to_exclude)]
+        
+        # Filter out excess UIDs from main data
+        data = data[~data['UID'].isin(uids_to_exclude)]
+
         # Add all non-germinated entries at once
         if non_germ_entries:
             germ_data = pd.concat([germ_data, pd.DataFrame(non_germ_entries)], 
@@ -186,7 +206,10 @@ class GerminationAnalyzer:
         
         if non_germ_entries_for_data:
             data = pd.concat([data, pd.DataFrame(non_germ_entries_for_data)], 
-                           ignore_index=True)
+                        ignore_index=True)
+        
+        # Store the seed counts for each group-video in the data
+        self.group_video_seed_counts = group_video_counts
         
         # Save processed data
         self.data = data
@@ -250,9 +273,16 @@ class GerminationAnalyzer:
         """
         Create comprehensive germination curve plot using manual seed counts.
         """
-        # Get total seeds
-        total_seeds = group_data['UID'].unique().shape[0]
+        videos = group_data['Video'].unique()
+    
+        # Sum up the seed counts for all videos in this group
+        total_seeds = sum(self.group_video_seed_counts.get((group_name, video), 0) 
+                        for video in videos)
         
+        # If there are no specified counts, fall back to counting UIDs
+        if total_seeds == 0:
+            total_seeds = len(group_data['UID'].unique())
+            
         time_points = sorted(group_data['ElapsedHours'].unique())
         germination_counts = []
         raw_counts = []  # Add list for raw counts
@@ -455,8 +485,12 @@ class GerminationAnalyzer:
             video_name: Name/ID of the video
             video_data: DataFrame containing data for this video
         """
-        # Get total seeds from SeedCount for this video
-        total_seeds = video_data['UID'].unique().shape[0]
+        # Get total seeds from stored seed counts
+        total_seeds = self.group_video_seed_counts.get((group_name, video_name), 0)
+        
+        # If there's no specified count, fall back to counting UIDs
+        if total_seeds == 0:
+            total_seeds = len(video_data['UID'].unique())
 
         time_points = sorted(video_data['ElapsedHours'].unique())
         germination_counts = []
