@@ -264,10 +264,11 @@ def process_video(params: Dict[str, Any]):
     excluded_tracks = set()  # Keep track of merged objects
     
     dataframe = pd.DataFrame(columns=["UID", "Group", "ElapsedHours", "Area",
-                                      "Perim.", "Slice", "SeedPos", "Date",
-                                      "HypocotylLength", "MainRootLength", "TotalRootLength", 
-                                      "DenseRootArea"])
-
+                                  "Perim.", "Slice", "SeedPos", "Date",
+                                  "HypocotylLength", "MainRootLength", "TotalRootLength", 
+                                  "DenseRootArea", 
+                                  "BoundingBox_X", "BoundingBox_Y", "BoundingBox_Width", "BoundingBox_Height",
+                                  "ImageFile"])
 
     # Calculate pixel size from calibration method
     pixel_size = 0.004  # Default value in case something fails
@@ -469,7 +470,9 @@ def process_video(params: Dict[str, Any]):
                         dense_area_covered, 
                         perimeter, t + 1, ID, date_hour, 
                         hypocotyl_length, mainroot_length, totalroot_length, 
-                        dense_root_area])
+                        dense_root_area,
+                        x, y, w, h,  
+                        img_file])   
         
         # Save visualization
         if params['show_tracking']:
