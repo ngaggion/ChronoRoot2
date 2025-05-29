@@ -271,12 +271,12 @@ def angle_between(v1, v2):
     return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
 
 def get_atlases(psave, days = [6,7,8,9,10], rotateRoot = True):
-    center = [500, 800]
+    center = [500, 900]
     
-    atlas = np.zeros([2500, 1600], dtype = 'uint8')
-    aux = np.zeros([2500, 1600], dtype = 'uint8')
-    atlas2 = np.zeros([2500, 1600, 3], dtype = 'uint8')
-    atlasroot = np.zeros([2500, 1600], dtype = 'float64')
+    atlas = np.zeros([3000, 1800], dtype = 'uint8')
+    aux = np.zeros([3000, 1800], dtype = 'uint8')
+    atlas2 = np.zeros([3000, 1800, 3], dtype = 'uint8')
+    atlasroot = np.zeros([3000, 1800], dtype = 'float64')
 
     paths = load_path(psave,'*/*/*/Results*')
 
@@ -580,10 +580,10 @@ def plot_convex_hull(savepath, frame, name = ''):
 
     fig, ax = plt.subplots()
 
-    sns.violinplot(x = 'Day', y = 'Convex Hull Area', data=frame, hue = 'Experiment', inner=None, 
+    ax = sns.violinplot(x = 'Day', y = 'Convex Hull Area', data=frame, hue = 'Experiment', inner=None, 
                      zorder=2, legend = False)
-    ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Area', data=frame, hue = 'Experiment', dodge= True, 
-                size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2)
+    #ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Area', data=frame, hue = 'Experiment', dodge= True, 
+    #            size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2)
 
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[0:n_types], labels[0:n_types], loc=2)
@@ -600,11 +600,11 @@ def plot_convex_hull(savepath, frame, name = ''):
     frame2 = frame[frame['Lateral Root Area Density'] > 0].reset_index(drop = True)
     hue_order = frame['Experiment'].unique()
 
-    sns.violinplot(x = 'Day', y = 'Lateral Root Area Density', data=frame2, hue = 'Experiment', inner=None, 
+    ax = sns.violinplot(x = 'Day', y = 'Lateral Root Area Density', data=frame2, hue = 'Experiment', inner=None, 
                      zorder=2, legend = False, hue_order = hue_order)
-    ax = sns.swarmplot(x = 'Day', y = 'Lateral Root Area Density', data=frame2, hue = 'Experiment', dodge= True, 
-                size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
-                hue_order = hue_order)
+    #ax = sns.swarmplot(x = 'Day', y = 'Lateral Root Area Density', data=frame2, hue = 'Experiment', dodge= True, 
+    #            size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
+    #            hue_order = hue_order)
 
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[0:n_types], labels[0:n_types], loc=2)
@@ -617,10 +617,10 @@ def plot_convex_hull(savepath, frame, name = ''):
 
     fig, ax = plt.subplots()
     
-    sns.violinplot(x = 'Day', y = 'Convex Hull Aspect Ratio', data=frame, hue = 'Experiment', inner=None, 
+    ax = sns.violinplot(x = 'Day', y = 'Convex Hull Aspect Ratio', data=frame, hue = 'Experiment', inner=None, 
                      zorder=2, legend = False)
-    ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Aspect Ratio', data=frame, hue = 'Experiment', dodge= True, 
-                size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2)
+    #ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Aspect Ratio', data=frame, hue = 'Experiment', dodge= True, 
+    #            size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2)
 
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[0:n_types], labels[0:n_types], loc=2)
@@ -637,11 +637,11 @@ def plot_convex_hull(savepath, frame, name = ''):
     frame2 = frame[frame['Total Root Area Density'] > 0].reset_index(drop = True)
     hue_order = frame['Experiment'].unique()
 
-    sns.violinplot(x = 'Day', y = 'Total Root Area Density', data=frame2, hue = 'Experiment', inner=None, 
+    ax = sns.violinplot(x = 'Day', y = 'Total Root Area Density', data=frame2, hue = 'Experiment', inner=None, 
                      zorder=2, legend = False, hue_order = hue_order)
-    ax = sns.swarmplot(x = 'Day', y = 'Total Root Area Density', data=frame2, hue = 'Experiment', dodge= True, 
-                size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
-                hue_order = hue_order)
+    #ax = sns.swarmplot(x = 'Day', y = 'Total Root Area Density', data=frame2, hue = 'Experiment', dodge= True, 
+    #            size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
+    #            hue_order = hue_order)
 
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[0:n_types], labels[0:n_types], loc=2)
@@ -656,11 +656,11 @@ def plot_convex_hull(savepath, frame, name = ''):
     
     hue_order = frame['Experiment'].unique()
 
-    sns.violinplot(x = 'Day', y = 'Convex Hull Width', data=frame2, hue = 'Experiment', inner=None, 
+    ax = sns.violinplot(x = 'Day', y = 'Convex Hull Width', data=frame2, hue = 'Experiment', inner=None, 
                      zorder=2, legend = False, hue_order = hue_order)
-    ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Width', data=frame2, hue = 'Experiment', dodge= True, 
-                size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
-                hue_order = hue_order)
+    #ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Width', data=frame2, hue = 'Experiment', dodge= True, 
+    #            size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
+    #            hue_order = hue_order)
 
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[0:n_types], labels[0:n_types], loc=2)
@@ -675,11 +675,11 @@ def plot_convex_hull(savepath, frame, name = ''):
     
     hue_order = frame['Experiment'].unique()
 
-    sns.violinplot(x = 'Day', y = 'Convex Hull Height', data=frame2, hue = 'Experiment', inner=None, 
+    ax = sns.violinplot(x = 'Day', y = 'Convex Hull Height', data=frame2, hue = 'Experiment', inner=None, 
                      zorder=2, legend = False, hue_order = hue_order)
-    ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Height', data=frame2, hue = 'Experiment', dodge= True, 
-                size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
-                hue_order = hue_order)
+    #ax = sns.swarmplot(x = 'Day', y = 'Convex Hull Height', data=frame2, hue = 'Experiment', dodge= True, 
+    #            size = 4, palette = 'muted', edgecolor='black', linewidth = 0.5, zorder=1, s = 2, 
+    #            hue_order = hue_order)
 
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[0:n_types], labels[0:n_types], loc=2)
