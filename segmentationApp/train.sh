@@ -1,6 +1,6 @@
-export nnUNet_raw="nnUNet_raw"
-export nnUNet_preprocessed="nnUNet_preprocessed"
-export nnUNet_results="nnUNet_results"
+export nnUNet_raw="/app/Segmentation/ChronoRoot_nnUNet/nnUNet_raw"
+export nnUNet_preprocessed="/app/Segmentation/ChronoRoot_nnUNet/nnUNet_preprocessed"
+export nnUNet_results="/app/Segmentation/ChronoRoot_nnUNet/nnUNet_results"
 
 nnUNetv2_plan_and_preprocess -d 789 --verify_dataset_integrity
 

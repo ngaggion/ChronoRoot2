@@ -26,8 +26,8 @@ process_input_path() {
 }
 
 # Add the paths to the nnUNet files
-export nnUNet_raw="nnUNet_raw"
-export nnUNet_preprocessed="nnUNet_preprocessed"
-export nnUNet_results="nnUNet_results"
+export nnUNet_raw="/app/Segmentation/ChronoRoot_nnUNet/nnUNet_raw"
+export nnUNet_preprocessed="/app/Segmentation/ChronoRoot_nnUNet/nnUNet_preprocessed"
+export nnUNet_results="/app/Segmentation/ChronoRoot_nnUNet/nnUNet_results"
 
 process_input_path /path/to/data
