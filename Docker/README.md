@@ -98,6 +98,15 @@ Pull the latest version of the ChronoRoot 2.0 Docker image:
 docker pull ngaggion/chronoroot:latest
 ```
 
+## Updating the ChronoRoot 2.0 Image
+
+If you want to update the nnUNet models and github repo locally, you can build the image from the `Update` directory:
+
+```bash
+cd Docker/Update
+docker build -t ngaggion/chronoroot:latest .
+```
+
 ## Running ChronoRoot 2.0
 
 ### Basic Usage
