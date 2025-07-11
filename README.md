@@ -66,6 +66,7 @@ docker run -it --gpus all \
     -v $MOUNT:/DATA/ \
     -e DISPLAY=$DISPLAY \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
+    --shm-size=8gb \
     ngaggion/chronoroot:latest
 ```
 
@@ -76,6 +77,18 @@ xhost -local:docker
 ```
 
 > **Note**: For GPU support, you need to install nvidia-docker2. See the [Docker documentation](Docker/README.md) for detailed instructions.
+
+#### Convenient Aliases (Docker)
+
+To simplify usage, these aliases were added to the Docker container's bashrc:
+
+``` bash
+alias segmentation='source activate ChronoRootInterface; cd /app/segmentationApp; python run.py'
+alias chronoroot='source activate ChronoRootInterface; cd /app/chronoRootApp; python run.py'
+alias screening='source activate ChronoRootInterface; cd /app/chronoRootScreeningApp; python run.py'
+```
+
+With these aliases, you can simply use `segmentation`, `chronoroot`, or `screening` commands instead of the full activation and navigation commands.
 
 ### Local Installation
 
@@ -129,6 +142,12 @@ For the controller of the Raspberry Pi 3B, see the [ChronoRoot Module Controller
 
 For detailed architectural analysis of individual plants:
 
+**With aliases (Docker):**
+```bash
+chronoroot
+```
+
+**Manual activation:**
 ```bash
 conda activate ChronoRootInterface
 cd chronoRootApp
@@ -143,6 +162,12 @@ For more details on using this interface, see the [Standard Interface documentat
 
 For high-throughput analysis of multiple plants:
 
+**With aliases (Docker):**
+```bash
+screening
+```
+
+**Manual activation:**
 ```bash
 conda activate ChronoRootInterface
 cd chronoRootScreeningApp
@@ -157,11 +182,19 @@ For more details on using this interface, see the [Screening Interface documenta
 
 To run the segmentation pipeline:
 
+**With aliases (Docker):**
 ```bash
-cd segmentationApp
-conda activate nnUNet
-./test.sh
+segmentation
 ```
+
+**Manual activation:**
+```bash
+conda activate ChronoRootInterface
+cd segmentationApp
+python run.py
+```
+
+![Segmentation Interface](segmentationApp/screenshots/MainScreen.png)
 
 For detailed instructions on the segmentation process, see the [Segmentation documentation](segmentationApp/README.md).
 
@@ -170,8 +203,8 @@ For detailed instructions on the segmentation process, see the [Segmentation doc
 A typical ChronoRoot 2.0 workflow involves:
 
 1. **Data Acquisition**: Collect temporal sequences of plant images using the hardware setup
-2. **Segmentation**: Process raw images to identify plant structures using the nnUNet models
-3. **Analysis**: Analyze the segmented data with either the Standard or Screening interface
+2. **Segmentation**: Process raw images to identify plant structures using the nnUNet models (`segmentation` command)
+3. **Analysis**: Analyze the segmented data with either the Standard (`chronoroot` command) or Screening (`screening` command) interface
 4. **Report Generation**: Generate comprehensive reports with statistical analysis and visualizations
 
 ## Citation

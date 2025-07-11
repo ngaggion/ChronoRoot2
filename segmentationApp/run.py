@@ -116,7 +116,7 @@ class nnUNetMonitorUI(QMainWindow):
         self.setup_timer()
         
     def init_ui(self):
-        self.setWindowTitle("nnUNet Segmentation Monitor - Multi Robot")
+        self.setWindowTitle("nnUNet Segmentation Monitor")
         self.setGeometry(100, 100, 1200, 600)
         
         # Main widget and layout
