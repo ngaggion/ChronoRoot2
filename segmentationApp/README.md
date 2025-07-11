@@ -19,8 +19,11 @@ The segmentation module identifies six distinct plant structures from infrared i
 segmentationApp/
 ├── ensemble_multiclass.py    # Implementation of nnUNet ensemble prediction with temporal consistency
 ├── name_handling.py          # Utilities for managing file paths and naming convention
+├── run.py                    # GUI interface for managing segmentation tasks
 ├── test.sh                   # Script for running inference on new data
-└── train.sh                  # Script for training new models (optional)
+├── train.sh                  # Script for training new models (optional)
+└── screenshots/
+    └── MainScreen.png        # Screenshot of the GUI interface
 ```
 
 ## Getting Started
@@ -41,7 +44,30 @@ This will provide the necessary nnUNet folder structure containing pre-trained m
 
 ## Usage
 
-### Running Inference
+### GUI Interface (Recommended)
+
+For most users, we recommend using the graphical interface which provides an intuitive way to manage multiple robots and segmentation tasks:
+
+```bash
+# Run the GUI interface using Docker
+segmentation
+
+# Or run directly with Python
+python run.py
+```
+
+The GUI interface offers:
+- **Multi-robot support**: Load and monitor multiple robot datasets simultaneously
+- **Real-time progress tracking**: Live progress bars showing segmentation and ensemble completion
+- **Queue management**: Add folders to a processing queue for sequential segmentation
+- **Parameter control**: Easily adjust alpha values for temporal consistency
+- **Status monitoring**: Visual status indicators and error handling
+
+![Main Interface](screenshots/MainScreen.png)
+
+### Manual Usage (Advanced Users)
+
+#### Running Inference
 
 1. Edit the `test.sh` script to specify the path to your data:
 
@@ -87,7 +113,7 @@ chmod +x test.sh
 ./test.sh
 ```
 
-### What the Segmentation Pipeline Does
+#### What the Segmentation Pipeline Does
 
 The pipeline performs these steps:
 
