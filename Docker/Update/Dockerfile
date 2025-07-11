@@ -1,5 +1,9 @@
 FROM ngaggion/chronoroot:latest
 
+RUN echo "alias segmentation='source activate ChronoRootInterface; cd /app/segmentationApp; python run.py'" >> ~/.bashrc && \
+    echo "alias chronoroot='source activate ChronoRootInterface; cd /app/chronoRootApp; python run.py'" >> ~/.bashrc && \
+    echo "alias screening='source activate ChronoRootInterface; cd /app/chronoRootScreeningApp; python run.py'" >> ~/.bashrc
+    
 # Set working directory
 WORKDIR /app/Segmentation
 
