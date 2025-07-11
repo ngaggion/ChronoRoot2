@@ -122,14 +122,7 @@ def revert_seg_file_names(path, name_mapping):
                 continue
                 
             if original_path.exists():
-                # Delete the new file if the original file already exists
-                try:
-                    os.remove(new_path)
-                    print(f"Removed existing file: {new_path}")
-                except OSError as e:
-                    print(f"Warning: Could not remove {new_path}: {e}")
-                
-                os.rename(new_path, original_path)
+                print(f"Warning: Cannot revert to {original_path}, file already exists")
                 continue
                 
             try:
