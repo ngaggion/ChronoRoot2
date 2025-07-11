@@ -44,16 +44,21 @@ def generate_colormap(num_classes):
     
     return colormap
 
-def ensemble(path, alpha, num_classes):
+def ensemble(path, alpha, num_classes, seg_path=None):
     images = loadPath(path, ext="*.png")
     img = io.imread(images[0], as_gray=True)
     accum = np.zeros((num_classes, *img.shape[:2]), dtype=np.float32)
-    seg_path = os.path.join(path, "Segmentation")
-    folds = [fold.split("/")[-1] for fold in loadPath(seg_path, ext="*/") if not fold.endswith(".png")]
-    folds = [fold for fold in folds if not fold.startswith("Ensemble")]
+    if seg_path is None:
+        seg_path = os.path.join(path, "Segmentation")
+    else:
+        seg_path = os.path.join(path, seg_path)
+    
+    # Minimal fix: explicitly check for directories
+    all_paths = loadPath(seg_path, ext="*")
+    folds = [os.path.basename(fold) for fold in all_paths if os.path.isdir(fold) and not os.path.basename(fold).startswith("Ensemble")]
+    
     print(f"Ensembling {len(folds)} folds.")
     print(f"Postprocessing with alpha = {alpha}.")
-
 
     output_path = os.path.join(seg_path, "Ensemble")
     os.makedirs(output_path, exist_ok=True)
@@ -105,6 +110,7 @@ if __name__ == "__main__":
     parser.add_argument("path", help="Path to the folder containing the segmentation files.")
     parser.add_argument("--alpha", default=0.85, help="Weight for the temporal postprocessing step.")
     parser.add_argument("--num_classes", default=7, help="Number of classes in multiclass segmentation")
+    parser.add_argument("--seg_path", default="Segmentation", help="Number of classes in multiclass segmentation")
     args = parser.parse_args()
 
-    ensemble(args.path, args.alpha, args.num_classes)
+    ensemble(args.path, args.alpha, args.num_classes, args.seg_path)
