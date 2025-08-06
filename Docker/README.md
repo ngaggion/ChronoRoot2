@@ -52,6 +52,24 @@ Then, install Docker:
 sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
+For Windows, ChronoRoot has been tested under Windows Subsystem for Linux, version 2. Please refer to [this link](https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers) for information on how to set up Docker.
+Please, use the command below instead.
+
+```bash
+MOUNT="YOUR_LOCAL_DATA_PATH"
+
+docker run -it --gpus all \
+    -v $MOUNT:/DATA/ \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v /mnt/wslg:/mnt/wslg \
+    -e DISPLAY \
+    -e WAYLAND_DISPLAY \
+    -e XDG_RUNTIME_DIR \
+    -e PULSE_SERVER \
+    --shm-size=8gb \
+    ngaggion/chronoroot:latest
+```
+
 ### 2. Install NVIDIA Container Toolkit (nvidia-docker2)
 
 For GPU acceleration, you need to install nvidia-docker2. See the [official documentation](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) for more details.
