@@ -51,7 +51,7 @@ Pull the Docker image from Docker Hub:
 docker pull ngaggion/chronoroot:latest
 ```
 
-Enable X11 forwarding for the user interface:
+For Linux, enable X11 forwarding for the user interface:
 
 ```bash
 xhost +local:docker
@@ -74,6 +74,24 @@ After use, restrict X server access:
 
 ```bash
 xhost -local:docker
+```
+
+For Windows, ChronoRoot has been tested under Windows Subsystem for Linux, version 2. Please refer to [this link](https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers) for information on how to set up Docker.
+Please, use the command below instead.
+
+```bash
+MOUNT="YOUR_LOCAL_DATA_PATH"
+
+docker run -it --gpus all \
+    -v $MOUNT:/DATA/ \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v /mnt/wslg:/mnt/wslg \
+    -e DISPLAY \
+    -e WAYLAND_DISPLAY \
+    -e XDG_RUNTIME_DIR \
+    -e PULSE_SERVER \
+    --shm-size=8gb \
+    ngaggion/chronoroot:latest
 ```
 
 > **Note**: For GPU support, you need to install nvidia-docker2. See the [Docker documentation](Docker/README.md) for detailed instructions.
