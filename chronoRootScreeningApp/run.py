@@ -764,6 +764,7 @@ class ResultsTab(QWidget):
 
 class ReportsTab(QWidget):
     PARAMETERS = [
+        "Germination",
         "Area",
         "HypocotylLength", 
         "MainRootLength", 
