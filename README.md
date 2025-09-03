@@ -15,6 +15,10 @@ ChronoRoot 2.0 is an integrated open-source platform that combines affordable ha
 - **Comprehensive measurements** including novel gravitropic response parameters
 - **Dual specialized interfaces** for both detailed architectural analysis and high-throughput screening
 
+ChronoRoot 2.0 is thought as a two-step phenotyping solution: first, the segmentation of plant structures using deep learning models, and second, the analysis of the segmented data through user-friendly interfaces. Depending on the research needs, users can choose between a detailed analysis of individual plants or a high-throughput screening of multiple plants.
+
+![Figure](Documents/images/usage_diagram.png)]
+
 ## Repository Structure
 
 ```
@@ -32,6 +36,12 @@ Each component has its own dedicated documentation:
 - [High-throughput Screening Interface](chronoRootScreeningApp/README.md) - For efficient analysis of multiple plants
 - [Segmentation Module](segmentationApp/README.md) - AI-powered plant structure identification
 - [Docker Guide](Docker/README.md) - Complete instructions for Docker-based deployment
+
+PDF usage tutorials were incorporated in Documents for easy access, those make use of the Demo dataset included in the Docker image.
+
+- [Standard Interface Tutorial](Documents/StandardInterfaceTutorial.pdf)
+- [Screening Interface Tutorial](Documents/ScreeningTutorial.pdf)
+- [Segmentation Tutorial](Documents/SegmentationTutorial.pdf)
 
 ## Getting Started
 

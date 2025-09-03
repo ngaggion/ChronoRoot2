@@ -343,10 +343,10 @@ class GerminationAnalyzer:
             ax2 = ax1.twinx()
             ax2.set_ylabel('Number of Seeds')
             
-            # Add detailed information to the title
-            plt.suptitle(f'Germination Curve - {group_name}', fontsize=14)
-            plt.title(f'Seeds: {final_germinated} germinated out of {total_seeds} total ({final_germ_percent:.1f}%)',
-                    fontsize=10)
+            # Add detailed information to the title with proper spacing
+            fig.suptitle(f'Germination Curve - {group_name}\n'
+             f'Seeds: {final_germinated} germinated out of {total_seeds} total ({final_germ_percent:.1f}%)',
+             fontsize=12, y=1.05)
             
             # Reference lines (percentage)
             ax1.axhline(y=50, color='gray', linestyle=':', alpha=0.5)
