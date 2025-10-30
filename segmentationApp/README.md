@@ -1,52 +1,53 @@
 # ChronoRoot 2.0 - Segmentation Module
 
-This directory contains the AI-powered segmentation module for ChronoRoot 2.0, based on a modified version of the nnUNet architecture.
+This directory contains the AI-powered segmentation module for ChronoRoot 2.0, designed to automatically identify plant root structures from images.
+
+-----
 
 ## Overview
 
-The segmentation module identifies six distinct plant structures from infrared images:
+The segmentation module uses a deep learning model to analyze infrared images and identify six distinct plant structures:
 
-1. Main root (primary root axis)
-2. Lateral roots (secondary roots)
-3. Seed (pre- and post-germination structures)
-4. Hypocotyl (stem region between root-shoot junction and cotyledons)
-5. Leaves (including both cotyledons and true leaves)
-6. Petiole (leaf attachment structures)
+1.  **Main root** (primary root axis)
+2.  **Lateral roots** (secondary roots)
+3.  **Seed** (pre- and post-germination structures)
+4.  **Hypocotyl** (stem region between root-shoot junction and cotyledons)
+5.  **Leaves** (including both cotyledons and true leaves)
+6.  **Petiole** (leaf attachment structures)
 
-## Directory Structure
+This application provides a graphical user interface (GUI) to manage and run segmentation and post-processing tasks on large datasets.
+
+### Directory Structure
 
 ```
 segmentationApp/
-├── ensemble_multiclass.py    # Implementation of nnUNet ensemble prediction with temporal consistency
-├── name_handling.py          # Utilities for managing file paths and naming convention
-├── run.py                    # GUI interface for managing segmentation tasks
-├── test.sh                   # Script for running inference on new data
-├── train.sh                  # Script for training new models (optional)
+├── config.json               # Stores user settings (Conda env, alpha, etc.)
+├── models/                   # Contains pre-trained nnUNet models
+│   ├── Arabidopsis/
+│   │   ├── dataset_fingerprint.json
+│   │   ├── dataset.json
+│   │   ├── fold_0/
+│   │   │   └── checkpoint_final.pth
+│   │   └── plans.json
+│   └── Tomato/
+│   │   ├── dataset_fingerprint.json
+│   │   ├── dataset.json
+│   │   ├── fold_0/
+│   │   │   └── checkpoint_final.pth
+│   │   └── plans.json
+├── nnUNet_wrapper.py         # Internal script for nnUNet
+├── postprocess.py            # Script for temporal post-processing
+├── README.md                 # This file
+├── run.py                    # The main GUI application
 └── screenshots/
     └── MainScreen.png        # Screenshot of the GUI interface
 ```
 
-## Getting Started
+-----
 
-### Prerequisites
+## How to Use (GUI Interface)
 
-Before running the segmentation pipeline, you need to download the pre-trained nnUNet models:
-
-```bash
-# Install git-lfs for handling large files
-git lfs install
-
-# Clone the dataset repository
-git clone https://huggingface.co/datasets/ngaggion/ChronoRoot_nnUNet
-```
-
-This will provide the necessary nnUNet folder structure containing pre-trained models.
-
-## Usage
-
-### GUI Interface (Recommended)
-
-For most users, we recommend using the graphical interface which provides an intuitive way to manage multiple robots and segmentation tasks:
+This module is designed to be run through the main graphical interface.
 
 ```bash
 # Run the GUI interface using Docker
@@ -56,138 +57,77 @@ segmentation
 python run.py
 ```
 
-The GUI interface offers:
-- **Multi-robot support**: Load and monitor multiple robot datasets simultaneously
-- **Real-time progress tracking**: Live progress bars showing segmentation and ensemble completion
-- **Queue management**: Add folders to a processing queue for sequential segmentation
-- **Parameter control**: Easily adjust alpha values for temporal consistency
-- **Status monitoring**: Visual status indicators and error handling
+The GUI provides a complete workflow for processing your data:
+
+  * **Multi-robot support**: Load and monitor multiple robot datasets.
+  * **Queue management**: Add folders to a processing queue.
+  * **Real-time progress**: Live progress bars for segmentation and post-processing.
+  * **Parameter control**: Set the Conda environment, species, fast mode, and post-processing `alpha` value directly in the UI.
+  * **Status monitoring**: Clear visual indicators for folder status (Not Started, Segmented, Complete, Error).
 
 ![Main Interface](screenshots/MainScreen.png)
 
-### Manual Usage (Advanced Users)
+### Workflow
 
-#### Running Inference
+1.  **Launch the App:** Run `python run.py`.
+2.  **Set Parameters (Top Bar):**
+      * **Conda:** Enter the name of your Conda environment.
+      * **Alpha:** Set the alpha value for temporal post-processing (see below).
+      * **Species:** Select "arabidopsis" or "tomato".
+      * **Fast Mode:** Check this for faster processing (less augmentation).
+3.  **Load Robot:** Click **"Load Robot"** and select the *root folder* containing your experiment data (e.g., `/path/to/Robot_1/`).
+4.  **Process Data:**
+      * The table will fill with all sub-folders.
+      * Find folders with the status **"Not Started"** and click their **"Add to Queue"** button. This will schedule them for segmentation and post-processing.
+      * If a folder is **"Segmented"** but you want to re-run post-processing (e.g., with a new alpha), click **"Postprocess"**.
+      * If a folder is **"Complete"** but the stored alpha doesn't match the current setting, a **"Re-process"** button will appear.
 
-1. Edit the `test.sh` script to specify the path to your data:
+-----
 
-```bash
-#!/bin/bash
-# Function to process input paths
-process_input_path() {
-  local input_path=$1
-  # Kept fixed
-  dataset="789"
-  config="2d"
-  save_prob="--save_probabilities"
-  
-  # Rename files to nnUNet format
-  python name_handling.py "$input_path"
-  
-  # Folds to use, can be {0,1,2,3,4}. 1+ folds will be ensembled (by averaging predictions)
-  for fold in {0..0}; do
-    output_path="${input_path}/Segmentation/Fold_${fold}"
-    mkdir -p "$output_path"
-    nnUNetv2_predict_chrono -i "$input_path" -o "$output_path" -d "$dataset" -c "$config" -f "$fold" $save_prob
-    python name_handling.py "$input_path" --revert_seg --segpath "$output_path"
-  done
-  
-  # Revert file names and run temporal ensembling
-  python name_handling.py "$input_path" --revert
-  python ensemble_multiclass.py "$input_path" --alpha 0.9
-}
-
-# Add the paths to the nnUNet files
-export nnUNet_raw="nnUNet_raw"
-export nnUNet_preprocessed="nnUNet_preprocessed"
-export nnUNet_results="nnUNet_results"
-
-# Replace with your input data path
-process_input_path /path/to/data
-```
-
-2. Run the segmentation:
-
-```bash
-chmod +x test.sh
-./test.sh
-```
-
-#### What the Segmentation Pipeline Does
-
-The pipeline performs these steps:
-
-1. **File Preparation**: Renames input files to match nnUNet conventions using `name_handling.py`
-2. **Segmentation**: Runs the nnUNet prediction on each image
-3. **Name Restoration**: Reverts files back to their original names
-4. **Temporal Consistency**: Applies temporal consistency processing using `ensemble_multiclass.py`
-
-### Output Format
+## Output Format
 
 The segmentation produces multi-class masks where each pixel value represents a specific plant structure:
-- 0: Background
-- 1: Main root
-- 2: Lateral roots
-- 3: Seed
-- 4: Hypocotyl
-- 5: Leaves
-- 6: Petiole
 
-Outputs include:
-- Original grayscale segmentation masks
-- Color-coded visualization of segmentation results
+  * `0`: Background
+  * `1`: Main root
+  * `2`: Lateral roots
+  * `3`: Seed
+  * `4`: Hypocotyl
+  * `5`: Leaves
+  * `6`: Petiole
 
-## Temporal Post-processing
+The final outputs are saved in the `Segmentation/Ensemble` folder within each data directory.
 
-The `ensemble_multiclass.py` script implements a weighted trailing average approach for temporal consistency. This enhances tracking robustness by incorporating historical structural information alongside new observations.
+-----
 
-The key parameter is `alpha` (default 0.9), which controls the weight of previous frames in the accumulation. Higher values result in more temporal consistency but can reduce responsiveness to rapid changes.
+## Temporal Post-processing (The "Alpha" Value)
 
-## Training New Models (Advanced)
+Biological structures don't change drastically from one image to the next. The post-processing step uses this fact to "smooth" the segmentation results over time, making them more consistent.
 
-If you need to train custom models for different plant species, edit the `train.sh` script:
+The **`alpha`** value controls this smoothing:
 
-```bash
-export nnUNet_raw="nnUNet_raw"
-export nnUNet_preprocessed="nnUNet_preprocessed"
-export nnUNet_results="nnUNet_results"
+  * A **higher alpha** (e.g., 0.9) results in more temporal smoothing. This is good for stable structures but less responsive to rapid changes.
+  * A **lower alpha** (e.g., 0.5) is more responsive to the current frame but may appear "jerkier" over time.
 
-# Plan and preprocess the dataset
-nnUNetv2_plan_and_preprocess -d 789 --verify_dataset_integrity
+-----
 
-# Train each fold
-nnUNetv2_train 789 2d 0 
-nnUNetv2_train 789 2d 1 
-nnUNetv2_train 789 2d 2 
-nnUNetv2_train 789 2d 3 
-nnUNetv2_train 789 2d 4 
-```
+## About the AI Model (nnUNet)
 
-This will:
-1. Plan and preprocess your dataset (which should be prepared according to nnUNet guidelines)
-2. Train 5 separate models (folds) for cross-validation
-3. Save the trained models in the nnUNet results directory
+This tool uses **nnUNet** ("no-new-Net"), a powerful, self-configuring framework for biomedical image segmentation. It is widely recognized for achieving state-of-the-art results.
 
-Note that you can incorporate new images to the nnUNet_raw data files, modify the total number of files in the nnUNet dataset json and then run this script to retrain chronoRoot with extra new annotated images.
+  * **Official nnUNet Repository:** [https://github.com/MIC-DKFZ/nnUNet](https://github.com/MIC-DKFZ/nnUNet)
 
-## Advanced Usage
+### Replacing or Adding Models
 
-### Modifying Inference Parameters
+The `models/` directory contains the pre-trained nnUNet models. This folder structure is a direct copy of a standard nnUNet `nnUNet_results` directory.
 
-You can customize the segmentation process by editing parameters in `test.sh`:
+  * **Origin:** The provided models (Arabidopsis and Tomato) are **nnUNet residual M models**.
+  * **Structure:** The app uses the `plans.json` file to configure the AI and the `checkpoint_final.pth` file in the `fold_0/` directory as the trained model.
 
-- Change the folds used for prediction (0-4)
-- Adjust the `alpha` parameter for temporal consistency
-- Enable/disable probability map saving
+You can replace or add new models (e.g., for a different species) by:
 
-### Customizing the Ensemble Process
+1.  Training a new nnUNet model.
+2.  Creating a new folder inside `models/` (e.g., `models/Maize/`).
+3.  Copying your `dataset.json`, `plans.json`, and the `fold_0/` directory (containing `checkpoint_final.pth`) from your nnUNet results into this new folder.
 
-The `ensemble_multiclass.py` script accepts these parameters:
-
-```bash
-python ensemble_multiclass.py [PATH] --alpha [WEIGHT] --num_classes [NUM_CLASSES]
-```
-
-- `PATH`: Directory containing input images and segmentation results
-- `--alpha`: Weight factor for temporal averaging (default: 0.85)
-- `--num_classes`: Number of segmentation classes (default: 7)
+**Important:** The `plans.json` file is critical. If you ever change the model checkpoint, you **must** also use the matching `plans.json` file from that specific training run.
