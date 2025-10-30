@@ -1,262 +1,252 @@
 #!/usr/bin/env python3
 import sys
 import os
+import tempfile
 import subprocess
 import json
 import shutil
 import glob
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QTableWidget, QTableWidgetItem, 
-                             QHeaderView, QProgressBar, QLabel, QFileDialog, 
+                             QHeaderView, QProgressBar, QLabel, QFileDialog, QCheckBox,
                              QMessageBox, QTextEdit, QComboBox, QInputDialog)
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
 from datetime import datetime
+from pathlib import Path
 
 class SegmentationWorker(QThread):
-    """Worker thread for running segmentation only"""
+    """Worker thread for running segmentation using nnUNet wrapper"""
     finished = pyqtSignal(str, str)  # folder_path, message
     error = pyqtSignal(str, str)     # folder_path, error_message
     progress = pyqtSignal(str, str)  # folder_path, status_update
-    
-    def __init__(self, input_path, robot_name, conda_env="base", nnunet_base_path="/app/Segmentation/ChronoRoot_nnUNet"):
+
+    def __init__(self, input_path, robot_name, species="arabidopsis", fast_mode=False, conda_env="base"):
         super().__init__()
-        self.input_path = input_path
+        self.input_path = Path(input_path)
         self.robot_name = robot_name
+        self.species = species
+        self.fast_mode = fast_mode
         self.conda_env = conda_env
-        self.nnunet_base_path = nnunet_base_path
-        
+        self.script_dir = Path(__file__).parent.resolve()
+        self.seg_folder = self.input_path / 'Segmentation'
+        self.info_file = self.seg_folder / 'segmentation_info.json'
+
+    def _update_info_file(self, data_to_update):
+        """Helper to read, update, and write the JSON info file."""
+        try:
+            os.makedirs(self.seg_folder, exist_ok=True)
+            info_data = {}
+            if self.info_file.exists():
+                with open(self.info_file, 'r') as f:
+                    info_data = json.load(f)
+            
+            info_data.update(data_to_update)
+            
+            with open(self.info_file, 'w') as f:
+                json.dump(info_data, f, indent=2)
+        except Exception as e:
+            self.progress.emit(str(self.input_path), f"Warning: Could not write info file: {e}")
+
     def run(self):
         try:
-            folder_name = os.path.basename(self.input_path)
-            self.progress.emit(self.input_path, "Starting segmentation...")
-            
-            # Save segmentation info before starting
-            self.save_segmentation_info()
-            
-            # Use conda run for reliable conda environment activation
-            conda_prefix = f"conda run -n {self.conda_env}" if self.conda_env != "base" else ""
-            
-            # Create segmentation command (without ensemble step)
-            cmd = f"""
-            export nnUNet_raw="{self.nnunet_base_path}/nnUNet_raw"
-            export nnUNet_preprocessed="{self.nnunet_base_path}/nnUNet_preprocessed"
-            export nnUNet_results="{self.nnunet_base_path}/nnUNet_results"
-            
-            {conda_prefix} python name_handling.py "{self.input_path}"
-            
-            output_path="{self.input_path}/Segmentation/Fold_0"
-            mkdir -p "$output_path"
-            {conda_prefix} nnUNetv2_predict_chrono -i "{self.input_path}" -o "$output_path" -d 789 -c 2d -f 0 --save_probabilities
-            {conda_prefix} python name_handling.py "{self.input_path}" --revert_seg --segpath "$output_path"
-            {conda_prefix} python name_handling.py "{self.input_path}" --revert
-            """
-            
-            self.progress.emit(self.input_path, "Running nnUNet...")
-            process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, 
-                                     stderr=subprocess.PIPE, text=True)
-            
-            stdout, stderr = process.communicate()
-            
-            self.progress.emit(self.input_path, f"Command output: {stdout}...")
-            
-            if process.returncode == 0:
-                # Additional check: verify that segmentation actually produced files
-                output_path = os.path.join(self.input_path, 'Segmentation', 'Fold_0')
-                if os.path.exists(output_path):
-                    seg_files = len(glob.glob(os.path.join(output_path, '*.png')))
-                    if seg_files > 0:
-                        self.update_segmentation_info_complete()
-                        self.finished.emit(self.input_path, f"Segmentation completed for {folder_name} ({seg_files} files)")
-                    else:
-                        self.error.emit(self.input_path, f"Segmentation failed for {folder_name}: No output files generated")
-                else:
-                    self.error.emit(self.input_path, f"Segmentation failed for {folder_name}: Output folder not created")
-            else:
-                error_msg = f"Segmentation failed for {folder_name} (return code {process.returncode}): {stderr[:300]}"
-                self.error.emit(self.input_path, error_msg)
-                
-        except Exception as e:
-            self.error.emit(self.input_path, f"Error running segmentation: {str(e)}")
-    
-    def save_segmentation_info(self):
-        """Save segmentation information to file"""
-        try:
-            seg_folder = os.path.join(self.input_path, 'Segmentation')
-            os.makedirs(seg_folder, exist_ok=True)
-            
-            info_file = os.path.join(seg_folder, 'segmentation_info.json')
-            info_data = {
+            folder_name = self.input_path.name
+            self.progress.emit(str(self.input_path), "Starting segmentation...")
+
+            self._update_info_file({
                 'robot_name': self.robot_name,
                 'conda_env': self.conda_env,
-                'nnunet_base_path': self.nnunet_base_path,
+                'species': self.species,
+                'fast_mode': self.fast_mode,
                 'segmentation_start_time': datetime.now().isoformat(),
-                'folder_path': self.input_path,
+                'folder_path': str(self.input_path),
                 'segmentation_status': 'started'
+            })
+
+            model_name = "Arabidopsis" if self.species == "arabidopsis" else "Tomato"
+            model_path = self.script_dir / "models" / model_name
+
+            if not model_path.exists():
+                self.error.emit(str(self.input_path), f"Model not found at: {model_path}")
+                return
+
+            output_path = self.seg_folder / "Fold_0"
+            os.makedirs(output_path, exist_ok=True)
+
+            model_args = {
+                'model_path': str(model_path),
+                'device': 'cuda',
+                'verbose': False,
+                'use_gaussian': True,
+                'use_mirroring': not self.fast_mode,
+                'tile_step_size': 0.5
             }
             
-            with open(info_file, 'w') as f:
-                json.dump(info_data, f, indent=2)
-                
-        except Exception as e:
-            # Don't fail segmentation if we can't save info
-            pass
-    
-    def update_segmentation_info_complete(self):
-        """Update segmentation info to mark as complete"""
-        try:
-            info_file = os.path.join(self.input_path, 'Segmentation', 'segmentation_info.json')
-            if os.path.exists(info_file):
-                with open(info_file, 'r') as f:
-                    info_data = json.load(f)
-                
-                info_data['segmentation_status'] = 'completed'
-                info_data['segmentation_completion_time'] = datetime.now().isoformat()
-                
-                with open(info_file, 'w') as f:
-                    json.dump(info_data, f, indent=2)
-        except Exception as e:
-            # Don't fail segmentation if we can't update info
-            pass
+            # Using repr() ensures all objects (paths, dict) are
+            # serialized as valid Python code literals.
+            wrapper_script = f"""
+import sys
+import os
+sys.path.append({repr(str(self.script_dir))})
+from nnUNet_wrapper import nnUNetv2
 
-class EnsemblingWorker(QThread):
-    """Worker thread for running ensembling only"""
+model_args = {repr(model_args)}
+model = nnUNetv2(**model_args)
+
+results = model.predict_from_folder(
+    input_dir={repr(str(self.input_path))},
+    output_dir={repr(str(output_path))},
+    save_as_png=True
+)
+print(f"Segmentation completed: {{len(results)}} images processed")
+            """
+            temp_script_path = None
+            try:
+                # Use tempfile for a clean, safe temporary script
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+                    f.write(wrapper_script)
+                    temp_script_path = f.name
+                
+                conda_prefix = f"conda run -n {self.conda_env}"
+                # Quote the script path to handle spaces
+                cmd = f'{conda_prefix} python "{temp_script_path}"'
+
+                self.progress.emit(str(self.input_path), "Running nnUNet...")
+                process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, text=True)
+                stdout, stderr = process.communicate()
+                
+                self.progress.emit(str(self.input_path), f"Command output: {stdout[:200]}...")
+
+                if process.returncode == 0:
+                    seg_files = len(list(output_path.glob('*.png')))
+                    if seg_files > 0:
+                        self._update_info_file({
+                            'segmentation_status': 'completed',
+                            'segmentation_completion_time': datetime.now().isoformat()
+                        })
+                        mode_str = " (fast mode)" if self.fast_mode else ""
+                        self.finished.emit(str(self.input_path),
+                                         f"Segmentation completed for {folder_name} ({self.species}{mode_str}): {seg_files} files")
+                    else:
+                        self.error.emit(str(self.input_path), f"Segmentation failed for {folder_name}: No output files generated")
+                else:
+                    error_msg = f"Segmentation failed for {folder_name} (return code {process.returncode}): {stderr[:300]}"
+                    self.error.emit(str(self.input_path), error_msg)
+
+            finally:
+                # Ensure temp file is always cleaned up
+                if temp_script_path and os.path.exists(temp_script_path):
+                    os.remove(temp_script_path)
+                    
+        except Exception as e:
+            self.error.emit(str(self.input_path), f"Error running segmentation: {str(e)}")
+    
+class PostprocessWorker(QThread):
+    """Worker thread for running postprocessing"""
     finished = pyqtSignal(str, str)  # folder_path, message
     error = pyqtSignal(str, str)     # folder_path, error_message
     progress = pyqtSignal(str, str)  # folder_path, status_update
-    
-    def __init__(self, input_path, robot_name, alpha_parameter=0.9, conda_env="base", nnunet_base_path="/app/Segmentation/ChronoRoot_nnUNet"):
+
+    def __init__(self, input_path, robot_name, species="arabidopsis", alpha_parameter=0.9, conda_env="base"):
         super().__init__()
-        self.input_path = input_path
+        self.input_path = Path(input_path)
         self.robot_name = robot_name
+        self.species = species
         self.alpha_parameter = alpha_parameter
         self.conda_env = conda_env
-        self.nnunet_base_path = nnunet_base_path
-        
+        self.seg_folder = self.input_path / 'Segmentation'
+        self.info_file = self.seg_folder / 'postprocess_info.json'
+
+    def _update_info_file(self, data_to_update):
+        """Helper to read, update, and write the JSON info file."""
+        try:
+            os.makedirs(self.seg_folder, exist_ok=True)
+            info_data = {}
+            if self.info_file.exists():
+                with open(self.info_file, 'r') as f:
+                    info_data = json.load(f)
+            
+            info_data.update(data_to_update)
+            
+            with open(self.info_file, 'w') as f:
+                json.dump(info_data, f, indent=2)
+        except Exception as e:
+            self.progress.emit(str(self.input_path), f"Warning: Could not write info file: {e}")
+
+    def clean_postprocess_folders(self):
+        """Clean existing postprocess folders"""
+        try:
+            for folder in ['Ensemble', 'Ensemble_color']:
+                folder_path = self.seg_folder / folder
+                if folder_path.exists():
+                    shutil.rmtree(folder_path)
+        except Exception as e:
+            pass
+
     def run(self):
         try:
-            folder_name = os.path.basename(self.input_path)
-            self.progress.emit(self.input_path, "Starting ensembling...")
-            
-            # Check if segmentation exists before proceeding
-            fold_0_path = os.path.join(self.input_path, 'Segmentation', 'Fold_0')
-            if not os.path.exists(fold_0_path):
-                self.error.emit(self.input_path, f"Cannot ensemble {folder_name}: No segmentation folder found")
+            folder_name = self.input_path.name
+            self.progress.emit(str(self.input_path), "Starting postprocessing...")
+
+            fold_0_path = self.seg_folder / 'Fold_0'
+            if not fold_0_path.exists():
+                self.error.emit(str(self.input_path), f"Cannot postprocess {folder_name}: No segmentation folder found")
                 return
-            
-            # Count segmentation files to verify we have input
-            seg_files = len(glob.glob(os.path.join(fold_0_path, '*.png')))
-            
+
+            seg_files = len(list(fold_0_path.glob('*.png')))
             if seg_files == 0:
-                self.error.emit(self.input_path, f"Cannot ensemble {folder_name}: No segmentation files found")
+                self.error.emit(str(self.input_path), f"Cannot postprocess {folder_name}: No segmentation files found")
                 return
+
+            self.clean_postprocess_folders()
             
-            # Delete existing ensemble folders before starting
-            self.clean_ensemble_folders()
-            
-            # Save ensembling info before starting
-            self.save_ensemble_info()
-            
-            # Use conda run for reliable conda environment activation
-            conda_prefix = f"conda run -n {self.conda_env}" if self.conda_env != "base" else ""
-            
-            # Create ensembling command
-            cmd = f"""
-            {conda_prefix} python ensemble_multiclass.py "{self.input_path}" --alpha {self.alpha_parameter}
-            """
-            
-            self.progress.emit(self.input_path, "Running ensemble...")
-            process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, 
-                                     stderr=subprocess.PIPE, text=True)
-            
-            stdout, stderr = process.communicate()
-            
-            self.progress.emit(self.input_path, f"Ensemble output: {stdout[:100]}...")
-            
-            if process.returncode == 0:
-                # Additional check: verify that ensemble actually produced files
-                ensemble_path = os.path.join(self.input_path, 'Segmentation', 'Ensemble')
-                if os.path.exists(ensemble_path):
-                    ens_files = 0
-                    for ext in ['*.nii.gz', '*.nii', '*.npz', '*.png']:
-                        ens_files += len(glob.glob(os.path.join(ensemble_path, ext)))
-                    if ens_files > 0:
-                        self.update_ensemble_info_complete()
-                        self.finished.emit(self.input_path, f"Ensembling completed for {folder_name} ({ens_files} files)")
-                    else:
-                        self.error.emit(self.input_path, f"Ensembling failed for {folder_name}: No output files generated")
-                else:
-                    self.error.emit(self.input_path, f"Ensembling failed for {folder_name}: Output folder not created")
-            else:
-                error_msg = f"Ensembling failed for {folder_name} (return code {process.returncode}): {stderr[:300]}"
-                self.error.emit(self.input_path, error_msg)
-                
-        except Exception as e:
-            self.error.emit(self.input_path, f"Error running ensembling: {str(e)}")
-    
-    def clean_ensemble_folders(self):
-        """Delete existing ensemble folders before re-ensembling"""
-        try:
-            seg_folder = os.path.join(self.input_path, 'Segmentation')
-            ensemble_folder = os.path.join(seg_folder, 'Ensemble')
-            
-            if os.path.exists(ensemble_folder):
-                shutil.rmtree(ensemble_folder)
-                self.progress.emit(self.input_path, "Cleaned existing ensemble folder")
-                
-            ensemble_folder = os.path.join(seg_folder, 'Ensemble_color')
-            if os.path.exists(ensemble_folder):
-                shutil.rmtree(ensemble_folder)
-                self.progress.emit(self.input_path, "Cleaned existing ensemble color folder")
-                
-        except Exception as e:
-            self.progress.emit(self.input_path, f"Warning: Could not clean ensemble folder: {str(e)}")
-    
-    def save_ensemble_info(self):
-        """Save ensembling information to file"""
-        try:
-            info_file = os.path.join(self.input_path, 'Segmentation', 'segmentation_info.json')
-            info_data = {}
-            
-            # Load existing info if available
-            if os.path.exists(info_file):
-                with open(info_file, 'r') as f:
-                    info_data = json.load(f)
-            
-            # Add ensemble info
-            info_data.update({
+            self._update_info_file({
+                'robot_name': self.robot_name,
+                'species': self.species,
                 'alpha_parameter': self.alpha_parameter,
-                'conda_env': self.conda_env,
-                'nnunet_base_path': self.nnunet_base_path,
-                'ensemble_start_time': datetime.now().isoformat(),
-                'ensemble_status': 'started'
+                'postprocess_start_time': datetime.now().isoformat(),
+                'folder_path': str(self.input_path),
+                'postprocess_status': 'started'
             })
+
+            script_dir = Path(__file__).parent.resolve()
+            postprocess_path = script_dir / "postprocess.py"
             
-            with open(info_file, 'w') as f:
-                json.dump(info_data, f, indent=2)
+            alpha = self.alpha_parameter
+            if not alpha:
+                alpha = 0.85 if self.species == "arabidopsis" else 0.99
+            
+            conda_prefix = f"conda run -n {self.conda_env}"
+            
+            # This command is correct. It runs an existing script,
+            # so it doesn't need a temp file.
+            cmd = f'{conda_prefix} python "{postprocess_path}" "{self.input_path}" --method {self.species} --alpha {alpha} --seg_path Segmentation'
+
+            self.progress.emit(str(self.input_path), "Running postprocessing...")
+            process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True)
+            stdout, stderr = process.communicate()
+
+            if process.returncode == 0:
+                ensemble_path = self.seg_folder / 'Ensemble'
+                output_files = len(list(ensemble_path.glob('*.png'))) if ensemble_path.exists() else 0
                 
+                if output_files > 0:
+                    self._update_info_file({
+                        'postprocess_status': 'completed',
+                        'postprocess_completion_time': datetime.now().isoformat()
+                    })
+                    self.finished.emit(str(self.input_path),
+                                     f"Postprocessing completed for {folder_name} ({self.species}, α={alpha}): {output_files} files")
+                else:
+                    self.error.emit(str(self.input_path), f"Postprocessing failed for {folder_name}: No output files generated")
+            else:
+                error_msg = f"Postprocessing failed for {folder_name}: {stderr[:300]}"
+                self.error.emit(str(self.input_path), error_msg)
+
         except Exception as e:
-            # Don't fail ensembling if we can't save info
-            pass
-    
-    def update_ensemble_info_complete(self):
-        """Update ensemble info to mark as complete"""
-        try:
-            info_file = os.path.join(self.input_path, 'Segmentation', 'segmentation_info.json')
-            if os.path.exists(info_file):
-                with open(info_file, 'r') as f:
-                    info_data = json.load(f)
-                
-                info_data.update({
-                    'ensemble_status': 'completed',
-                    'ensemble_completion_time': datetime.now().isoformat()
-                })
-                
-                with open(info_file, 'w') as f:
-                    json.dump(info_data, f, indent=2)
-        except Exception as e:
-            # Don't fail ensembling if we can't update info
-            pass
+            self.error.emit(str(self.input_path), f"Error running postprocessing: {str(e)}")
 
 class nnUNetMonitorUI(QMainWindow):
     def __init__(self):
@@ -264,13 +254,16 @@ class nnUNetMonitorUI(QMainWindow):
         self.robots = {}  # robot_name -> {path: str, folders: dict}
         self.folder_data = {}  # folder_path -> data dict
         self.processing_queue = []  # Simple list for serial processing
-        self.current_segmentation_worker = None
-        self.current_ensemble_worker = None
         self.alpha_parameter = 0.9  # Default alpha value
         self.conda_env = "base"  # Default conda environment
-        self.nnunet_base_path = "/app/Segmentation/ChronoRoot_nnUNet"  # Default nnUNet base path
-        self.load_settings()
+        self.fast_mode = False  # Default fast mode setting
+        self.species = "arabidopsis"  # Default species
+        
+        self.current_segmentation_worker = None
+        self.current_postprocess_worker = None
+        
         self.init_ui()
+        self.load_settings()
         self.setup_timer()
         
     def init_ui(self):
@@ -317,11 +310,20 @@ class nnUNetMonitorUI(QMainWindow):
         self.conda_button.clicked.connect(self.set_conda_env)
         self.conda_button.setStyleSheet("background-color: #4CAF50; color: white;")
         
-        # nnUNet path button
-        self.nnunet_button = QPushButton("nnUNet Path")
-        self.nnunet_button.clicked.connect(self.set_nnunet_path)
-        self.nnunet_button.setStyleSheet("background-color: #FF5722; color: white;")
-        self.nnunet_button.setToolTip(f"Current: {self.nnunet_base_path}")
+        # Fast mode checkbox (replaces nnUNet path)
+        self.fast_mode_checkbox = QCheckBox("Fast Mode")
+        self.fast_mode_checkbox.setChecked(self.fast_mode)
+        self.fast_mode_checkbox.setToolTip("Disable test-time augmentation for faster processing")
+        self.fast_mode_checkbox.stateChanged.connect(self.update_fast_mode)
+        layout.addWidget(self.fast_mode_checkbox)
+        
+        # Species selection
+        layout.addWidget(QLabel("Species:"))
+        self.species_combo = QComboBox()
+        self.species_combo.addItems(["arabidopsis", "tomato"])
+        self.species_combo.setCurrentText(self.species)
+        self.species_combo.currentTextChanged.connect(self.update_species)
+        layout.addWidget(self.species_combo)
         
         # Queue control button
         self.clear_queue_button = QPushButton("Clear Queue")
@@ -343,12 +345,13 @@ class nnUNetMonitorUI(QMainWindow):
         header_layout.addWidget(QLabel("|"))
         header_layout.addWidget(self.queue_info_label)
         header_layout.addWidget(self.alpha_button)
-        header_layout.addWidget(self.conda_button)
-        header_layout.addWidget(self.nnunet_button)
+        header_layout.addWidget(self.species_combo)
+        header_layout.addWidget(self.fast_mode_checkbox)
         header_layout.addWidget(self.clear_queue_button)
         header_layout.addStretch()
         header_layout.addWidget(self.manual_refresh_button)
         header_layout.addWidget(self.auto_refresh_button)
+        header_layout.addWidget(self.conda_button)
         
         layout.addLayout(header_layout)
         
@@ -360,7 +363,8 @@ class nnUNetMonitorUI(QMainWindow):
         self.robot_filter.currentTextChanged.connect(self.update_table)
         
         self.status_filter = QComboBox()
-        self.status_filter.addItems(["All Status", "Not Started", "Queued", "Segmenting", "Segmented", "Ensembling", "Complete", "Error"])
+        self.status_filter.addItems(["All Status", "Not Started", "Queued", "Segmenting", 
+                                    "Segmented", "Postprocessing", "Complete", "Error"])
         self.status_filter.currentTextChanged.connect(self.update_table)
         
         filter_layout.addWidget(QLabel("Filter by Robot:"))
@@ -376,7 +380,7 @@ class nnUNetMonitorUI(QMainWindow):
         self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
             "Robot", "Folder Name", "Total Images", "Segmentation %", 
-            "Ensemble %", "Status", "Alpha Used", "Actions", "Delete"
+            "Postprocess %", "Status", "Alpha Used", "Actions", "Delete"
         ])
         
         # Set column widths
@@ -421,9 +425,9 @@ class nnUNetMonitorUI(QMainWindow):
         self.log_message("Manual refresh completed")
         
     def set_alpha_parameter(self):
-        """Set the alpha parameter for ensemble"""
+        """Set the alpha parameter for postprocessing"""
         value, ok = QInputDialog.getDouble(self, 'Alpha Parameter', 
-                                         'Enter alpha value for ensemble (0.0-1.0):', 
+                                         'Enter alpha value for postprocessing (0.0-1.0):', 
                                          self.alpha_parameter, 0.0, 1.0, 2)
         if ok:
             self.alpha_parameter = value
@@ -442,47 +446,61 @@ class nnUNetMonitorUI(QMainWindow):
             self.save_settings()
             self.log_message(f"Conda environment set to '{self.conda_env}'")
     
-    def set_nnunet_path(self):
-        """Set the nnUNet base path using folder browser"""
-        folder_path = QFileDialog.getExistingDirectory(
-            self, 
-            "Select nnUNet Base Path (folder containing nnUNet_raw, nnUNet_preprocessed, nnUNet_results)",
-            self.nnunet_base_path
-        )
-        if folder_path:
-            self.nnunet_base_path = folder_path
-            self.nnunet_button.setToolTip(f"Current: {self.nnunet_base_path}")
-            self.save_settings()
-            self.log_message(f"nnUNet base path set to '{self.nnunet_base_path}'")
+    def update_species(self, text):
+        """Update the species setting"""
+        self.species = text
+        # Update alpha default based on species
+        if self.species == "arabidopsis":
+            self.alpha_parameter = 0.85
+            self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
+        else:  # tomato
+            self.alpha_parameter = 0.99
+            self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
+        self.save_settings()
+        self.log_message(f"Species set to: {self.species}")
     
-    def load_settings(self):
-        """Load settings from config file"""
-        try:
-            config_file = os.path.join(os.path.expanduser("~"), ".nnunet_monitor_config.json")
-            if os.path.exists(config_file):
-                with open(config_file, 'r') as f:
-                    settings = json.load(f)
-                self.conda_env = settings.get('conda_env', 'base')
-                self.nnunet_base_path = settings.get('nnunet_base_path', '/app/Segmentation/ChronoRoot_nnUNet')
-                self.alpha_parameter = settings.get('alpha_parameter', 0.9)
-        except Exception as e:
-            # Don't log during initialization as log widget doesn't exist yet
-            pass
-    
+    def update_fast_mode(self, state):
+        """Update fast mode setting"""
+        self.fast_mode = (state == Qt.Checked)
+        mode_str = "enabled" if self.fast_mode else "disabled"
+        self.save_settings()
+        self.log_message(f"Fast mode {mode_str}")
+        
     def save_settings(self):
-        """Save settings to config file"""
+        """Save configuration to file"""
         try:
-            config_file = os.path.join(os.path.expanduser("~"), ".nnunet_monitor_config.json")
-            settings = {
+            config = {
                 'conda_env': self.conda_env,
-                'nnunet_base_path': self.nnunet_base_path,
-                'alpha_parameter': self.alpha_parameter
+                'alpha': self.alpha_parameter,
+                'species': self.species,
+                'fast_mode': self.fast_mode
             }
-            with open(config_file, 'w') as f:
-                json.dump(settings, f, indent=2)
+            with open('config.json', 'w') as f:
+                json.dump(config, f, indent=2)
         except Exception as e:
-            self.log_message(f"Could not save settings: {str(e)}")
-    
+            self.log_message(f"Failed to save config: {str(e)}")
+
+    def load_settings(self):
+        """Load configuration from file"""
+        if os.path.exists('config.json'):
+            with open('config.json', 'r') as f:
+                config = json.load(f)
+                self.conda_env = config.get('conda_env', 'base')
+                self.species = config.get('species', 'arabidopsis')
+                self.alpha_parameter = config.get('alpha', 0.85)
+                self.fast_mode = config.get('fast_mode', False)
+                
+                # Update UI elements
+                self.conda_button.setText(f"Conda: {self.conda_env}")
+                self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
+                self.species_combo.setCurrentText(self.species)
+                self.fast_mode_checkbox.setChecked(self.fast_mode)
+                
+                # Scan loaded robots
+                for robot_name in self.robots.keys():
+                    self.scan_robot_folders(robot_name)
+                    self.log_message(f"Loaded robot: {robot_name}")
+            
     def toggle_auto_refresh(self):
         """Toggle auto-refresh on/off"""
         self.auto_refresh_enabled = not self.auto_refresh_enabled
@@ -505,18 +523,34 @@ class nnUNetMonitorUI(QMainWindow):
         except:
             pass
         return None
+
+    def load_postprocess_info(self, folder_path):
+        """Load postprocessing info from file"""
+        try:
+            info_file = os.path.join(folder_path, 'Segmentation', 'postprocess_info.json')
+            if os.path.exists(info_file):
+                with open(info_file, 'r') as f:
+                    return json.load(f)
+        except:
+            pass
+        return None
     
-    def needs_re_ensemble(self, folder_path, current_status):
-        """Check if folder needs re-ensembling due to alpha change"""
+    def needs_re_postprocess(self, folder_path, current_status):
+        """Check if folder needs re-postprocessing due to alpha change"""
         if current_status != 'Complete':
             return False
             
-        info = self.load_segmentation_info(folder_path)
+        info = self.load_postprocess_info(folder_path)
         if info is None:
-            return True  # No info file, might need re-ensembling
-            
+            return True  # No info file, might need re-processing
+
         stored_alpha = info.get('alpha_parameter', 0.9)
-        return abs(stored_alpha - self.alpha_parameter) > 0.001  # Small tolerance for float comparison
+        # Handle case where stored_alpha might be string
+        try:
+            stored_alpha_float = float(stored_alpha)
+            return abs(stored_alpha_float - self.alpha_parameter) > 0.001
+        except (ValueError, TypeError):
+            return True # If stored value is invalid, recommend re-processing
     
     def delete_segmentation_folder(self, folder_path):
         """Delete the segmentation folder completely"""
@@ -587,11 +621,11 @@ class nnUNetMonitorUI(QMainWindow):
             'robot': robot_name,
             'total_images': 0,
             'segmentation_progress': 0,
-            'ensemble_progress': 0,
+            'postprocess_progress': 0, 
             'status': 'Not Started',
             'last_error': '',
             'stored_alpha': None,
-            'needs_re_ensemble': False,
+            'needs_re_postprocess': False, 
             'is_actively_processing': False
         }
         
@@ -615,66 +649,60 @@ class nnUNetMonitorUI(QMainWindow):
                 return data
             
             # Check if currently processing
-            is_currently_segmenting = self.current_segmentation_worker and self.current_segmentation_worker.input_path == folder_path
-            is_currently_ensembling = self.current_ensemble_worker and self.current_ensemble_worker.input_path == folder_path
-            data['is_actively_processing'] = is_currently_segmenting or is_currently_ensembling
+            is_currently_segmenting = self.current_segmentation_worker and self.current_segmentation_worker.input_path == Path(folder_path)
+            is_currently_postprocessing = self.current_postprocess_worker and self.current_postprocess_worker.input_path == Path(folder_path)
+            data['is_actively_processing'] = is_currently_segmenting or is_currently_postprocessing
             
-            # Load segmentation info to check completion status
             seg_info = self.load_segmentation_info(folder_path)
-            if seg_info:
-                data['stored_alpha'] = seg_info.get('alpha_parameter', 'Unknown')
+            post_info = self.load_postprocess_info(folder_path)
+            
+            if post_info:
+                data['stored_alpha'] = post_info.get('alpha_parameter', 'Unknown')
             
             # Check segmentation progress
             seg_folder = os.path.join(folder_path, 'Segmentation')
             if os.path.exists(seg_folder):
-                # Check for actual error files (only .error files, ignore warnings)
-                error_files = glob.glob(os.path.join(seg_folder, '*.error'))
+                # Check for error files (seg or postprocess)
+                error_files = (glob.glob(os.path.join(seg_folder, '*.error')) + 
+                               glob.glob(os.path.join(seg_folder, '*.error')))
                 if error_files:
-                    # Only treat as error if it contains actual error content
-                    is_real_error = False
                     error_content = ""
                     try:
                         with open(error_files[0], 'r') as f:
                             error_content = f.read()
-                            # Check if it's a real error (not just warnings)
-                            if any(keyword in error_content.lower() for keyword in ['error', 'failed', 'exception', 'traceback']):
-                                is_real_error = True
                     except:
-                        is_real_error = True  # If we can't read it, assume it's an error
+                        pass
                     
-                    if is_real_error:
-                        data['status'] = 'Error'
-                        data['last_error'] = error_content[:100]
-                        return data
+                    data['status'] = 'Error'
+                    data['last_error'] = error_content[:100]
+                    return data
                 
-                # Check if segmentation is officially completed according to the info file
+                # Check if segmentation is officially completed
                 segmentation_officially_complete = (seg_info and 
                                                   seg_info.get('segmentation_status') == 'completed')
                 
-                # Check ensemble folder first (final step)
+                # Check 'Ensemble' folder (output of postprocess worker)
+                # Note: The folder name is still "Ensemble" as per PostprocessWorker
                 ensemble_folder = os.path.join(seg_folder, 'Ensemble')
                 if os.path.exists(ensemble_folder):
-                    # Count ensemble files (including .png)
-                    ensemble_files = 0
+                    postprocess_files = 0
                     for ext in ['*.nii.gz', '*.nii', '*.npz', '*.png']:
-                        ensemble_files += len(glob.glob(os.path.join(ensemble_folder, ext)))
+                        postprocess_files += len(glob.glob(os.path.join(ensemble_folder, ext)))
                     
-                    if ensemble_files > 0:
-                        data['ensemble_progress'] = min(100, int((ensemble_files / total_images) * 100))
+                    if postprocess_files > 0:
+                        data['postprocess_progress'] = min(100, int((postprocess_files / total_images) * 100))
                         
-                        # Check if ensemble is officially completed
-                        ensemble_officially_complete = (seg_info and 
-                                                      seg_info.get('ensemble_status') == 'completed')
+                        postprocess_officially_complete = (post_info and 
+                                                         post_info.get('postprocess_status') == 'completed')
                         
-                        if data['ensemble_progress'] >= 90 and ensemble_officially_complete:
+                        if data['postprocess_progress'] >= 90 and postprocess_officially_complete:
                             data['segmentation_progress'] = 100
                             data['status'] = 'Complete'
-                            # Check if needs re-ensembling due to alpha change
-                            data['needs_re_ensemble'] = self.needs_re_ensemble(folder_path, 'Complete')
+                            data['needs_re_postprocess'] = self.needs_re_postprocess(folder_path, 'Complete')
                             return data
                         else:
-                            data['segmentation_progress'] = 100 if segmentation_officially_complete else min(100, data['ensemble_progress'])
-                            data['status'] = 'Ensembling' if is_currently_ensembling else 'Processing'
+                            data['segmentation_progress'] = 100 if segmentation_officially_complete else min(100, data['postprocess_progress'])
+                            data['status'] = 'Postprocessing' if is_currently_postprocessing else 'Processing'
                 
                 # Check Fold_0 for segmentation files
                 fold_0_path = os.path.join(seg_folder, 'Fold_0')
@@ -686,26 +714,26 @@ class nnUNetMonitorUI(QMainWindow):
                     if seg_files > 0:
                         data['segmentation_progress'] = min(100, int((seg_files / total_images) * 100))
                         
-                        # Only mark as "Segmented" if segmentation is officially complete
-                        if segmentation_officially_complete and data['ensemble_progress'] == 0:
+                        # Only mark as "Segmented" if seg is complete and postprocess hasn't started
+                        if segmentation_officially_complete and data['postprocess_progress'] == 0:
                             data['status'] = 'Segmented'
                         elif data['segmentation_progress'] > 0:
                             data['status'] = 'Segmenting' if is_currently_segmenting else 'Processing'
                 
-                # If segmentation folder exists but no clear progress
-                if data['segmentation_progress'] == 0 and data['ensemble_progress'] == 0:
+                # If seg folder exists but no clear progress
+                if data['segmentation_progress'] == 0 and data['postprocess_progress'] == 0:
                     if is_currently_segmenting:
                         data['status'] = 'Segmenting'
-                    elif is_currently_ensembling:
-                        data['status'] = 'Ensembling'
+                    elif is_currently_postprocessing: 
+                        data['status'] = 'Postprocessing' 
                     else:
                         data['status'] = 'Processing'
             
-            # Override status if currently processing (but keep the progress percentages)
+            # Override status if currently processing
             if is_currently_segmenting:
                 data['status'] = 'Segmenting'
-            elif is_currently_ensembling:
-                data['status'] = 'Ensembling'
+            elif is_currently_postprocessing: 
+                data['status'] = 'Postprocessing' 
         
         except Exception as e:
             data['status'] = 'Error'
@@ -721,17 +749,15 @@ class nnUNetMonitorUI(QMainWindow):
         for robot_name in self.robots.keys():
             self.robot_filter.addItem(robot_name)
         
-        # Restore selection if still valid
+        # Restore selection
         index = self.robot_filter.findText(current_selection)
         if index >= 0:
             self.robot_filter.setCurrentIndex(index)
         
-        # Update counts
         self.robot_count_label.setText(f"Robots: {len(self.robots)}")
     
     def update_table(self):
         """Update the table with current folder data"""
-        # Apply filters
         robot_filter = self.robot_filter.currentText()
         status_filter = self.status_filter.currentText()
         
@@ -749,26 +775,19 @@ class nnUNetMonitorUI(QMainWindow):
             folder_path = data['path']
             folder_name = os.path.basename(folder_path)
             
-            # Robot name
             self.table.setItem(row, 0, QTableWidgetItem(data['robot']))
-            
-            # Folder name
             self.table.setItem(row, 1, QTableWidgetItem(folder_name))
-            
-            # Total images
             self.table.setItem(row, 2, QTableWidgetItem(str(data['total_images'])))
             
-            # Segmentation progress
             seg_progress = QProgressBar()
             seg_progress.setValue(data['segmentation_progress'])
             seg_progress.setFormat(f"{data['segmentation_progress']}%")
             self.table.setCellWidget(row, 3, seg_progress)
             
-            # Ensemble progress
-            ens_progress = QProgressBar()
-            ens_progress.setValue(data['ensemble_progress'])
-            ens_progress.setFormat(f"{data['ensemble_progress']}%")
-            self.table.setCellWidget(row, 4, ens_progress)
+            post_progress = QProgressBar()
+            post_progress.setValue(data['postprocess_progress'])
+            post_progress.setFormat(f"{data['postprocess_progress']}%")
+            self.table.setCellWidget(row, 4, post_progress)
             
             # Status with colors
             status_item = QTableWidgetItem(data['status'])
@@ -776,7 +795,7 @@ class nnUNetMonitorUI(QMainWindow):
                 status_item.setBackground(QColor(144, 238, 144))  # Light green
             elif data['status'] == 'Segmented':
                 status_item.setBackground(QColor(255, 255, 0))    # Yellow
-            elif data['status'] in ['Segmenting', 'Ensembling']:
+            elif data['status'] in ['Segmenting', 'Postprocessing']:
                 status_item.setBackground(QColor(173, 216, 230))  # Light blue
             elif data['status'] == 'Queued':
                 status_item.setBackground(QColor(255, 255, 0))    # Yellow
@@ -792,8 +811,8 @@ class nnUNetMonitorUI(QMainWindow):
             # Alpha used
             alpha_text = str(data.get('stored_alpha', '—'))
             alpha_item = QTableWidgetItem(alpha_text)
-            if data.get('needs_re_ensemble', False):
-                alpha_item.setBackground(QColor(255, 255, 0))  # Yellow background
+            if data.get('needs_re_postprocess', False):
+                alpha_item.setBackground(QColor(255, 255, 0))  # Yellow
                 alpha_item.setToolTip(f"Current alpha: {self.alpha_parameter}, Stored alpha: {alpha_text}")
             self.table.setItem(row, 6, alpha_item)
             
@@ -803,27 +822,25 @@ class nnUNetMonitorUI(QMainWindow):
                 action_button.clicked.connect(lambda checked, path=folder_path, robot=data['robot']: self.add_to_queue(path, robot, 'both'))
                 self.table.setCellWidget(row, 7, action_button)
             elif data['status'] == 'Segmented':
-                ensemble_button = QPushButton("Ensemble")
-                ensemble_button.setStyleSheet("background-color: #ff9800; color: white;")
-                ensemble_button.clicked.connect(lambda checked, path=folder_path, robot=data['robot']: self.add_to_queue(path, robot, 'ensemble'))
-                self.table.setCellWidget(row, 7, ensemble_button)
-            elif data['status'] == 'Complete' and data.get('needs_re_ensemble', False):
-                re_ensemble_button = QPushButton("Re-ensemble")
-                re_ensemble_button.setStyleSheet("background-color: #ff9800; color: white;")
-                re_ensemble_button.clicked.connect(lambda checked, path=folder_path, robot=data['robot']: self.add_to_queue(path, robot, 'ensemble'))
-                self.table.setCellWidget(row, 7, re_ensemble_button)
+                postprocess_button = QPushButton("Postprocess")
+                postprocess_button.setStyleSheet("background-color: #ff9800; color: white;")
+                postprocess_button.clicked.connect(lambda checked, path=folder_path, robot=data['robot']: self.add_to_queue(path, robot, 'postprocess'))
+                self.table.setCellWidget(row, 7, postprocess_button)
+            elif data['status'] == 'Complete' and data.get('needs_re_postprocess', False):
+                re_process_button = QPushButton("Re-process")
+                re_process_button.setStyleSheet("background-color: #ff9800; color: white;")
+                re_process_button.clicked.connect(lambda checked, path=folder_path, robot=data['robot']: self.add_to_queue(path, robot, 'postprocess'))
+                self.table.setCellWidget(row, 7, re_process_button)
             elif data['status'] == 'Queued':
                 remove_button = QPushButton("Remove")
                 remove_button.clicked.connect(lambda checked, path=folder_path: self.remove_from_queue(path))
                 self.table.setCellWidget(row, 7, remove_button)
-            elif data['status'] in ['Segmenting', 'Ensembling']:
+            elif data['status'] in ['Segmenting', 'Postprocessing']:
                 if data.get('is_actively_processing', False):
-                    # Show that it's actively processing but no cancel option
                     processing_label = QLabel("Running...")
                     processing_label.setStyleSheet("color: #2196F3; font-weight: bold;")
                     self.table.setCellWidget(row, 7, processing_label)
                 else:
-                    # Processing but not currently active (partial files exist)
                     action_button = QPushButton("Add to Queue")
                     action_button.clicked.connect(lambda checked, path=folder_path, robot=data['robot']: self.add_to_queue(path, robot, 'both'))
                     self.table.setCellWidget(row, 7, action_button)
@@ -843,7 +860,7 @@ class nnUNetMonitorUI(QMainWindow):
             self, 
             'Confirm Delete', 
             f'Delete the entire segmentation folder for "{folder_name}"?\n\n'
-            f'This will remove all segmentation and ensemble results.\n'
+            f'This will remove all segmentation and postprocessing results.\n'
             f'This action cannot be undone.',
             QMessageBox.Yes | QMessageBox.No, 
             QMessageBox.No
@@ -859,12 +876,10 @@ class nnUNetMonitorUI(QMainWindow):
         folder_name = os.path.basename(folder_path)
         
         if operation_type == 'both':
-            # Check if segmentation folder already exists for 'both' operation
             seg_folder = os.path.join(folder_path, 'Segmentation')
             if os.path.exists(seg_folder):
-                # Get stored alpha for information
-                seg_info = self.load_segmentation_info(folder_path)
-                stored_alpha = seg_info.get('alpha_parameter', 'Unknown') if seg_info else 'Unknown'
+                post_info = self.load_postprocess_info(folder_path)
+                stored_alpha = post_info.get('alpha_parameter', 'Unknown') if post_info else 'Unknown'
                 current_alpha = self.alpha_parameter
                 
                 reply = QMessageBox.question(
@@ -884,16 +899,14 @@ class nnUNetMonitorUI(QMainWindow):
                     self.log_message(f"Cancelled adding {folder_name} to queue - user chose to keep existing segmentation")
                     return
                 
-                # Delete existing segmentation folder
                 if not self.delete_segmentation_folder(folder_path):
                     self.log_message(f"Failed to delete existing segmentation for {folder_name}")
                     return
         
-        # Add to queue
         queue_item = {'path': folder_path, 'robot': robot_name, 'operation': operation_type}
         if queue_item not in self.processing_queue:
             self.processing_queue.append(queue_item)
-            operation_text = "segmentation + ensemble" if operation_type == 'both' else operation_type
+            operation_text = "segmentation + postprocess" if operation_type == 'both' else operation_type
             self.log_message(f"Added {folder_name} ({robot_name}) to queue for {operation_text}")
             self.update_queue_info()
             self.refresh_data()
@@ -920,41 +933,48 @@ class nnUNetMonitorUI(QMainWindow):
     
     def process_queue(self):
         """Process the next item in queue if not currently processing"""
-        if not self.current_segmentation_worker and not self.current_ensemble_worker and self.processing_queue:
+        if not self.current_segmentation_worker and not self.current_postprocess_worker and self.processing_queue:
             next_item = self.processing_queue.pop(0)
             folder_path = next_item['path']
             robot_name = next_item['robot']
             operation = next_item['operation']
             
             if operation == 'both':
-                # Start with segmentation, ensemble will follow
-                self.start_segmentation(folder_path, robot_name, chain_ensemble=True)
-            elif operation == 'ensemble':
-                # Start ensemble only
-                self.start_ensemble(folder_path, robot_name)
+                self.start_segmentation(folder_path, robot_name, chain_postprocess=True)
+            elif operation == 'segment':
+                self.start_segmentation(folder_path, robot_name, chain_postprocess=False)
+            elif operation == 'postprocess': # This will now work
+                self.start_postprocess(folder_path, robot_name)
             
             self.update_queue_info()
             self.refresh_data()
     
-    def start_segmentation(self, folder_path, robot_name, chain_ensemble=False):
+    def start_segmentation(self, folder_path, robot_name, chain_postprocess=False):
         """Start segmentation worker"""
-        self.current_segmentation_worker = SegmentationWorker(folder_path, robot_name, self.conda_env, self.nnunet_base_path)
-        self.current_segmentation_worker.finished.connect(lambda path, msg: self.on_segmentation_finished(path, msg, chain_ensemble))
+        self.current_segmentation_worker = SegmentationWorker(
+            folder_path, robot_name, self.species, self.fast_mode, self.conda_env
+        )
+        self.current_segmentation_worker.finished.connect(
+            lambda path, msg: self.on_segmentation_finished(path, msg, chain_postprocess)
+        )
         self.current_segmentation_worker.error.connect(self.on_segmentation_error)
         self.current_segmentation_worker.progress.connect(self.on_progress_update)
         self.current_segmentation_worker.start()
         
-        self.log_message(f"Started segmentation for {os.path.basename(folder_path)} ({robot_name}) using conda env '{self.conda_env}' and nnUNet path '{self.nnunet_base_path}'")
+        mode_str = " (fast)" if self.fast_mode else ""
+        self.log_message(f"Started segmentation for {os.path.basename(folder_path)} ({robot_name}) - {self.species}{mode_str}")
     
-    def start_ensemble(self, folder_path, robot_name):
-        """Start ensemble worker"""
-        self.current_ensemble_worker = EnsemblingWorker(folder_path, robot_name, self.alpha_parameter, self.conda_env, self.nnunet_base_path)
-        self.current_ensemble_worker.finished.connect(self.on_ensemble_finished)
-        self.current_ensemble_worker.error.connect(self.on_ensemble_error)
-        self.current_ensemble_worker.progress.connect(self.on_progress_update)
-        self.current_ensemble_worker.start()
+    def start_postprocess(self, folder_path, robot_name):
+        """Start postprocess worker"""
+        self.current_postprocess_worker = PostprocessWorker(
+            folder_path, robot_name, self.species, self.alpha_parameter, self.conda_env
+        )
+        self.current_postprocess_worker.finished.connect(self.on_postprocess_finished)
+        self.current_postprocess_worker.error.connect(self.on_postprocess_error)
+        self.current_postprocess_worker.progress.connect(self.on_progress_update)
+        self.current_postprocess_worker.start()
         
-        self.log_message(f"Started ensembling for {os.path.basename(folder_path)} ({robot_name}) with alpha={self.alpha_parameter} using conda env '{self.conda_env}'")
+        self.log_message(f"Started postprocessing for {os.path.basename(folder_path)} ({robot_name}) - {self.species}, α={self.alpha_parameter}")
     
     def update_queue_info(self):
         """Update queue information display"""
@@ -962,29 +982,28 @@ class nnUNetMonitorUI(QMainWindow):
         current = "None"
         if self.current_segmentation_worker:
             current = f"Segmenting: {os.path.basename(self.current_segmentation_worker.input_path)}"
-        elif self.current_ensemble_worker:
-            current = f"Ensembling: {os.path.basename(self.current_ensemble_worker.input_path)}"
+        elif self.current_postprocess_worker:
+            current = f"Postprocessing: {os.path.basename(self.current_postprocess_worker.input_path)}"
         
         self.queue_info_label.setText(f"Queue: {queue_size} | Processing: {current}")
     
-    def on_segmentation_finished(self, folder_path, message, chain_ensemble=False):
+    def on_segmentation_finished(self, folder_path, message, chain_postprocess=False):
         """Handle segmentation completion"""
         self.log_message(message)
         robot_name = self.current_segmentation_worker.robot_name
         self.current_segmentation_worker = None
         
-        if chain_ensemble:
-            # Double-check that segmentation actually succeeded before chaining to ensemble
+        if chain_postprocess:
             fold_0_path = os.path.join(folder_path, 'Segmentation', 'Fold_0')
             if os.path.exists(fold_0_path):
                 seg_files = len(glob.glob(os.path.join(fold_0_path, '*.png')))
                 if seg_files > 0:
-                    self.start_ensemble(folder_path, robot_name)
+                    self.start_postprocess(folder_path, robot_name)
                 else:
-                    self.log_message(f"Skipping ensemble for {os.path.basename(folder_path)} - segmentation produced no files")
+                    self.log_message(f"Skipping postprocessing for {os.path.basename(folder_path)} - segmentation produced no files")
                     self.update_queue_info()
             else:
-                self.log_message(f"Skipping ensemble for {os.path.basename(folder_path)} - segmentation folder missing")
+                self.log_message(f"Skipping postprocessing for {os.path.basename(folder_path)} - segmentation folder missing")
                 self.update_queue_info()
         else:
             self.update_queue_info()
@@ -995,7 +1014,6 @@ class nnUNetMonitorUI(QMainWindow):
         """Handle segmentation error"""
         self.log_message(f"SEGMENTATION ERROR: {message}")
         
-        # Save error to file
         try:
             seg_folder = os.path.join(folder_path, 'Segmentation')
             os.makedirs(seg_folder, exist_ok=True)
@@ -1009,27 +1027,26 @@ class nnUNetMonitorUI(QMainWindow):
         self.update_queue_info()
         self.refresh_data()
     
-    def on_ensemble_finished(self, folder_path, message):
-        """Handle ensemble completion"""
+    def on_postprocess_finished(self, folder_path, message):
+        """Handle postprocessing completion"""
         self.log_message(message)
-        self.current_ensemble_worker = None
+        self.current_postprocess_worker = None
         self.update_queue_info()
         self.refresh_data()
     
-    def on_ensemble_error(self, folder_path, message):
-        """Handle ensemble error"""
-        self.log_message(f"ENSEMBLE ERROR: {message}")
+    def on_postprocess_error(self, folder_path, message):
+        """Handle postprocessing error"""
+        self.log_message(f"POSTPROCESS ERROR: {message}")
         
-        # Save error to file
         try:
             seg_folder = os.path.join(folder_path, 'Segmentation')
-            error_file = os.path.join(seg_folder, 'ensemble.error')
+            error_file = os.path.join(seg_folder, 'postprocess.error')
             with open(error_file, 'w') as f:
                 f.write(f"{datetime.now()}: {message}")
         except:
             pass
         
-        self.current_ensemble_worker = None
+        self.current_postprocess_worker = None
         self.update_queue_info()
         self.refresh_data()
     
@@ -1047,7 +1064,6 @@ class nnUNetMonitorUI(QMainWindow):
         """Add message to log"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"[{timestamp}] {message}")
-        # Auto-scroll to bottom
         scrollbar = self.log_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
