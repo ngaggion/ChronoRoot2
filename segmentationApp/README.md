@@ -109,11 +109,12 @@ The **`alpha`** value controls this smoothing:
   * A **higher alpha** (e.g., 0.9) results in more temporal smoothing. This is good for stable structures but less responsive to rapid changes.
   * A **lower alpha** (e.g., 0.5) is more responsive to the current frame but may appear "jerkier" over time.
 
+Modifications on the post-processing script can allow the usage of different methods if needed, for example as in "tomato" experiments where roots grow and move very fast.
 -----
 
 ## About the AI Model (nnUNet)
 
-This tool uses **nnUNet** ("no-new-Net"), a powerful, self-configuring framework for biomedical image segmentation. It is widely recognized for achieving state-of-the-art results.
+This tool uses **nnUNet** ("no-new-Net"), a powerful, self-configuring framework for biomedical image segmentation. As configured to use with Docker, the nnUNet environment should already be set as "base". If you are running the app in a different Conda environment, ensure that nnUNet is installed and properly configured and set up the environment name in the GUI.
 
   * **Official nnUNet Repository:** [https://github.com/MIC-DKFZ/nnUNet](https://github.com/MIC-DKFZ/nnUNet)
 
@@ -121,8 +122,8 @@ This tool uses **nnUNet** ("no-new-Net"), a powerful, self-configuring framework
 
 The `models/` directory contains the pre-trained nnUNet models. This folder structure is a direct copy of a standard nnUNet `nnUNet_results` directory.
 
-  * **Origin:** The provided models (Arabidopsis and Tomato) are **nnUNet residual M models**.
-  * **Structure:** The app uses the `plans.json` file to configure the AI and the `checkpoint_final.pth` file in the `fold_0/` directory as the trained model.
+  * The provided models (Arabidopsis and Tomato) are **nnUNet residual M models**.
+  * The app uses the `plans.json` file to configure the AI and the `checkpoint_final.pth` file in the `fold_0/` directory as the trained model.
 
 You can replace or add new models (e.g., for a different species) by:
 
