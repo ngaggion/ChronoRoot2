@@ -141,7 +141,7 @@ conda install -c conda-forge scikit-fda scipy pandas matplotlib seaborn ipykerne
 
 #### 2. nnUNet Installation
 
-Follow the instructions in our [modified nnUNet repository](https://github.com/ngaggion/nnUNet) designed specifically for ChronoRoot 2.0.
+Follow the instructions in the [official nnUNet repository](https://github.com/MIC-DKFZ/nnUNet).
 
 ### Singularity Installation
 
