@@ -3,6 +3,7 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
+import time
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -116,9 +117,12 @@ class nnUNetv2:
         print(f"Saving results to: {output_path}")
         
         results = []
+        
+        t1 = time.time()
+        
         for png_file in png_files:
-            print(f"Processing: {png_file.name}")
-            
+            print(f"Processing: {png_file.name}", end='', flush=True)
+                        
             # Read image
             img, props = self._read_png_image(png_file)
             
@@ -135,9 +139,11 @@ class nnUNetv2:
                 np.save(str(output_file.with_suffix('.npy')), result)
             
             results.append(result)
-            print(f"  -> Saved: {output_file.name}")
+            print(" ✓")
+            
+        print(f"\nCompleted processing {len(results)} images in {time.time() - t1:.2f} seconds.")
+        print(f"Average time per image: {(time.time() - t1) / len(results):.2f} seconds.")
         
-        print(f"\nCompleted processing {len(results)} images!")
         return results
     
     def predict_single_image(self, image_path: str, output_path: str = None,
