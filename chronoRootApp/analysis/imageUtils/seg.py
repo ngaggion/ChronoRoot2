@@ -26,7 +26,7 @@ def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, 
     multi_class_mask = cv2.imread(segmentation_path, 0)[roi_bounds[0]:roi_bounds[1], roi_bounds[2]:roi_bounds[3]]
     
     # Remove anything above the original seed point (not part of root)
-    # multi_class_mask[0:fixed_seed_position[1], :] = 0
+    multi_class_mask[0:fixed_seed_position[1], :] = 0
 
     # Combine segmentation classes (1, 2 are root classes)
     binary_mask = (multi_class_mask == 1) + (multi_class_mask == 2)
@@ -55,7 +55,7 @@ def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, 
     
     # Find the component that contains or is near the root base
     for area, component in components_by_area:
-        if area < 30:  # Skip tiny components
+        if area < 40:  # Skip tiny components
             break
         
         # Check if this component contains the current root base position

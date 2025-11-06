@@ -38,12 +38,20 @@ def preview(conf):
     """
 
     images, segFiles = getImages(conf)
+    
     N = len(images)
 
     n = len(images)
     n2 = len(segFiles)
     
     n = min(n, n2)
+
+    # Limit the images loaded to the maximum specified in conf
+    processingLimit = conf.get('processingLimit', None)
+    if processingLimit is not None:
+        n = min(n, processingLimit * 24 * 4)
+        N = min(n, N)
+    
     images = images[:n]
     segFiles = segFiles[:n]
 

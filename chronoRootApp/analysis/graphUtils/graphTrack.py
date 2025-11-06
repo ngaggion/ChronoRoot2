@@ -6,28 +6,22 @@ Assigns node types and tracks nodes across frames.
 import numpy as np
 import networkx as nx
 
-
 def graphInit(graph):
     """
     Initialize a newly created graph by assigning node types.
-    
     Node types:
     - "Ini": Initial node (seed/root base) - topmost node (minimum y)
     - "FTip": Final tip (main root tip) - bottommost node (maximum y)
     - "Bif": Bifurcation (branch point) - degree > 1
     - "LTip": Lateral tip (side branch endpoint) - degree == 1
-    
     Also initializes ages to 1 for seed and tip if only 2 nodes exist,
     and marks the main root path.
-    
     Args:
         graph: NetworkX graph with node attribute 'pos' (x, y)
-        
     Returns:
         graph: Same graph with updated 'type' and 'age' attributes
     """
     node_list = list(graph.nodes())
-    
     if len(node_list) == 0:
         raise Exception("Cannot initialize empty graph")
     
@@ -44,50 +38,53 @@ def graphInit(graph):
     tip_node = node_list[tip_idx]
     tip_position = positions[tip_idx]
     
+    # Check if seed and tip are the same (degenerate case)
+    if seed_node == tip_node:
+        raise Exception("Seed and tip nodes are the same - cannot initialize graph")
+    
     # Assign node types
     for i, node in enumerate(node_list):
         node_position = positions[i]
-        
         if np.array_equal(node_position, seed_position):
-            # This is the seed/root base
             graph.nodes[node]['type'] = "Ini"
         elif np.array_equal(node_position, tip_position):
-            # This is the main root tip
             graph.nodes[node]['type'] = "FTip"
         else:
-            # Check degree to determine type
             degree = graph.degree(node)
             if degree > 2:
-                # Branch point (more than 2 neighbors)
                 graph.nodes[node]['type'] = "Bif"
             elif degree == 1:
-                # Endpoint (lateral root tip)
                 graph.nodes[node]['type'] = "LTip"
             else:
-                # Degree == 2: part of a chain 
                 graph.nodes[node]['type'] = "null"
     
-    # Special case: if graph has only 2 nodes (seed and tip)
+    # Special case: if graph has only 2 nodes
     if len(node_list) == 2:
-        # Mark the single edge as main root (root_type = 10)
-        graph.edges[seed_node, tip_node]['root_type'] = 10
-        # Set ages to 1
-        graph.nodes[seed_node]['age'] = 1
-        graph.nodes[tip_node]['age'] = 1
+        # Check if edge exists
+        if graph.has_edge(seed_node, tip_node):
+            graph.edges[seed_node, tip_node]['root_type'] = 10
+            graph.nodes[seed_node]['age'] = 1
+            graph.nodes[tip_node]['age'] = 1
+        else:
+            raise Exception(f"Graph has 2 nodes but no edge between them: {seed_node} and {tip_node}")
     else:
         # Find shortest weighted path from seed to tip
-        main_root_path = nx.shortest_path(
-            graph,
-            source=seed_node, 
-            target=tip_node, 
-            weight='weight'
-        )
-        # Mark all edges on main root path
-        for i in range(len(main_root_path) - 1):
-            u = main_root_path[i]
-            v = main_root_path[i + 1]
-            graph.edges[u, v]['root_type'] = 10  # Main root marker
-
+        try:
+            main_root_path = nx.shortest_path(
+                graph,
+                source=seed_node, 
+                target=tip_node, 
+                weight='weight'
+            )
+            
+            # Mark all edges on main root path
+            for i in range(len(main_root_path) - 1):
+                u = main_root_path[i]
+                v = main_root_path[i + 1]
+                graph.edges[u, v]['root_type'] = 10
+        except nx.NetworkXNoPath:
+            raise Exception(f"No path found between seed {seed_node} and tip {tip_node}")
+    
     return graph
 
 
