@@ -21,71 +21,82 @@ import cv2
 import numpy as np
 import cv2
 
-def getCleanSeg(segFile, bbox, seed, originalSeed):
-    # Loads the segmentation file
-    seg = cv2.imread(segFile, 0)[bbox[0]:bbox[1],bbox[2]:bbox[3]]
+def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, fixed_seed_position):
+    # Load segmentation and crop to region of interest
+    multi_class_mask = cv2.imread(segmentation_path, 0)[roi_bounds[0]:roi_bounds[1], roi_bounds[2]:roi_bounds[3]]
     
-    # Removes all the segmentations over the seed point
-    seg[0:originalSeed[1],:] = 0
+    # Remove anything above the original seed point (not part of root)
+    # multi_class_mask[0:fixed_seed_position[1], :] = 0
 
-    seg = (seg == 1) + (seg == 2) + (seg == 4)
-    seg = np.array(seg, dtype = 'uint8') * 255
-
-    # Opening and closing morphological operations
-    kernel_size = 3
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(kernel_size,kernel_size))
-    seg = cv2.dilate(seg, kernel)
-    seg = cv2.erode(seg, kernel)
-    seg = cv2.erode(seg, kernel)
-    seg = cv2.dilate(seg, kernel)
+    # Combine segmentation classes (1, 2 are root classes)
+    binary_mask = (multi_class_mask == 1) + (multi_class_mask == 2)
+    binary_mask = np.array(binary_mask, dtype='uint8') * 255
     
-    # Finding the different connected components, in order of size
-    contours, _ = cv2.findContours(seg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contour_sizes = [(cv2.contourArea(contour), contour) for contour in contours]
-
-    j = 0
-
-    if len(contour_sizes) != 0:
-        ### Sorts list of contours by size from bigger to smaller
-        contour_sizes.sort(key=lambda x: x[0], reverse=True)
+    # Clean up mask with morphological operations 
+    morph_kernel_size = 5
+    morph_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (morph_kernel_size, morph_kernel_size))
+    binary_mask = cv2.dilate(binary_mask, morph_kernel)
+    binary_mask = cv2.erode(binary_mask, morph_kernel)
+    
+    morph_kernel_size = 3
+    morph_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (morph_kernel_size, morph_kernel_size))
+    binary_mask = cv2.erode(binary_mask, morph_kernel)
+    binary_mask = cv2.dilate(binary_mask, morph_kernel)
+    
+    # Find all connected components
+    connected_components, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    components_by_area = [(cv2.contourArea(component), component) for component in connected_components]
+    
+    if len(components_by_area) == 0:
+        return binary_mask, False
+    
+    # Sort components by area (largest first)
+    components_by_area.sort(key=lambda x: x[0], reverse=True)
+    
+    # Find the component that contains or is near the root base
+    for area, component in components_by_area:
+        if area < 30:  # Skip tiny components
+            break
         
-        for contour in contour_sizes:
-            if contour[0] < 30:
-                break
-            else:
-                dist = cv2.pointPolygonTest(contour[1],(int(seed[0]), int(seed[1])), True)
-                dist = np.abs(dist)
-                is_in = cv2.pointPolygonTest(contour[1],(int(seed[0]), int(seed[1])), False) > 0
-                
-                if (dist < 30 or is_in):
-                    mask = np.zeros(seg.shape, np.uint8)
-                    cv2.drawContours(mask,[contour[1]], -1, 255, -1) 
-                    seg2 = cv2.bitwise_and(mask, seg.copy())
-                
-                    return seg2, True
-            
-    return seg, False
-
-
-def getCleanSke(seg):
-    ske = np.array(skeletonize(seg // 255), dtype = 'uint8')
-    
-    contours, _ = cv2.findContours(ske, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    ske = prune(ske, 5)
-    ske = trim(ske)
-    ske = prune(ske, 3)
-    ske = trim(ske)
-
-    contours, _ = cv2.findContours(ske, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    bnodes, enodes = skeleton_nodes(ske)
-    
-    flag = False
-    if len(enodes) >= 2:
-        flag = True
+        # Check if this component contains the current root base position
+        distance_to_root_base = cv2.pointPolygonTest(component, (int(current_root_base[0]), int(current_root_base[1])), True)
+        distance_to_root_base = np.abs(distance_to_root_base)
+        contains_root_base = cv2.pointPolygonTest(component, (int(current_root_base[0]), int(current_root_base[1])), False) > 0
         
-    return ske, bnodes, enodes, flag
+        if distance_to_root_base < 50 or contains_root_base:
+            # This is the root - extract only this component
+            component_mask = np.zeros(binary_mask.shape, np.uint8)
+            cv2.drawContours(component_mask, [component], -1, 255, -1)
+            filtered_mask = cv2.bitwise_and(component_mask, binary_mask.copy())
+            return filtered_mask, True
+    
+    # No component found near root base
+    return binary_mask, False
+
+
+def extract_skeleton(binary_mask):
+    # Convert binary mask to 1-pixel-wide skeleton
+    skeleton = np.array(skeletonize(binary_mask // 255), dtype='uint8')
+
+    # First cleanup pass
+    skeleton = prune(skeleton, 5)  # Remove branches shorter than 7 pixels
+    skeleton = trim(skeleton)
+    
+    # Second cleanup pass: remove shorter branches emerged after trimming
+    skeleton = prune(skeleton, 3)  # Remove branches shorter than 5 pixels
+    skeleton = trim(skeleton)
+
+    # Third cleanup pass: remove shorter branches emerged after trimming
+    skeleton = prune(skeleton, 3)  # Remove branches shorter than 3 pixels
+    skeleton = trim(skeleton)
+    
+    # Identify branch points (where root splits) and end points (root tips)
+    branch_points, end_points = skeleton_nodes(skeleton)
+        
+    # Valid skeleton must have at least 2 endpoints (seed + at least one tip)
+    is_valid = len(end_points) >= 2
+    
+    return skeleton, branch_points, end_points, is_valid
 
 def trim(ske): ## Removes unwanted pixels from the skeleton
     

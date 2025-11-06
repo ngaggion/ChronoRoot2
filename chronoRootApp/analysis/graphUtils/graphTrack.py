@@ -1,196 +1,326 @@
-""" 
-ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture
-Copyright (C) 2020 Nicolás Gaggion
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
+"""
+Graph initialization and temporal tracking functions.
+Assigns node types and tracks nodes across frames.
 """
 
 import numpy as np
-import graph_tool.all as gt
+import networkx as nx
+
 
 def graphInit(graph):
-    g, pos, weight, clase, nodetype, age = graph
+    """
+    Initialize a newly created graph by assigning node types.
     
-    vertices = g.get_vertices()
+    Node types:
+    - "Ini": Initial node (seed/root base) - topmost node (minimum y)
+    - "FTip": Final tip (main root tip) - bottommost node (maximum y)
+    - "Bif": Bifurcation (branch point) - degree > 1
+    - "LTip": Lateral tip (side branch endpoint) - degree == 1
     
-    pos_vertex = []
-    for i in vertices:
-        pos_vertex.append(pos[i])
-    pos_vertex = np.array(pos_vertex)
+    Also initializes ages to 1 for seed and tip if only 2 nodes exist,
+    and marks the main root path.
     
-    s = np.argmin(pos_vertex[:,1])
-    seed = pos_vertex[s,:]
-    t = np.argmax(pos_vertex[:,1])
-    tip = pos_vertex[t,:]
-    
-    for i in vertices:
-        p1 = pos_vertex[i]
-        if np.array_equal(p1, seed):
-            nodetype[i] = "Ini"
-        else:
-            if np.array_equal(p1, tip):
-                nodetype[i] = "FTip"
-            else:
-                vecinos = g.get_out_neighbours(i)
-                if len(vecinos) > 1:
-                    nodetype[i] = "Bif"
-                else:
-                    if len(vecinos) == 1:
-                        nodetype[i] = "LTip"
-                
-    if len(vertices) == 2:
-        clase[g.edge(s,t)][1] = 10
-        age[g.vertex(s)] = 1
-        age[g.vertex(t)] = 1
-
-    return [g, pos, weight, clase, nodetype, age]
-
-
-def find_nearest_b(node, lnodes):
-    d = np.linalg.norm(node-lnodes, axis = 1)
-    p = np.argmin(d)
-
-    return p, d[p]
-
-
-def find_nearest_nodes(node, lnodes, thresh = 10): 
-    d = np.linalg.norm(node-lnodes, axis = 1)
-    nodes = d<thresh
-    
-    p = nodes.nonzero()[0]
-
-    return p, d[p]
-
-
-def matchGraphs(graph1, graph2):
-    g1, pos1, weight1, clase1, nodetype1, age1 = graph1
-    g2, pos2, weight2, clase2, nodetype2, age2 = graph2
-    
-    vertices1 = g1.get_vertices()
-    vertices2 = g2.get_vertices()
-    
-    age = np.zeros_like(vertices1)
-    
-    for i in range(0, len(vertices1)):
-        age[i] = age1[vertices1[i]]
-    
-    vertices1 = np.argsort(age)[::-1]
-    
-    pos_vertex2 = []
-    for i in vertices2:
-        pos_vertex2.append(pos2[i])
-    pos_vertex2 = np.array(pos_vertex2)
-
-    for i in vertices1:
-        p1 = pos1[i]
-        v, d = find_nearest_nodes(p1, pos_vertex2, 15)
+    Args:
+        graph: NetworkX graph with node attribute 'pos' (x, y)
         
-        v = v[np.argsort(d)]
-        if len(v) == 1:
-            age2[v[0]] = age1[i] + 1            
-            if nodetype2[v[0]] == "null":
-                nodetype2[v[0]] = nodetype1[i]
-        elif len(v) == 2:
-            n_0 = len(g1.get_out_neighbours(i))
-            n_1 = len(g2.get_out_neighbours(v[0]))
-            n_2 = len(g2.get_out_neighbours(v[1]))
-            
-            dif_a = np.abs(n_1 - n_0)
-            dif_b = np.abs(n_2 - n_0)
-            if dif_a <= dif_b:
-                age2[v[0]] = age1[i] + 1            
-                if nodetype2[v[0]] == "null":
-                    nodetype2[v[0]] = nodetype1[i]
+    Returns:
+        graph: Same graph with updated 'type' and 'age' attributes
+    """
+    node_list = list(graph.nodes())
+    
+    if len(node_list) == 0:
+        raise Exception("Cannot initialize empty graph")
+    
+    # Get all node positions
+    positions = np.array([graph.nodes[node]['pos'] for node in node_list])
+    
+    # Find seed (topmost = minimum y coordinate)
+    seed_idx = np.argmin(positions[:, 1])
+    seed_node = node_list[seed_idx]
+    seed_position = positions[seed_idx]
+    
+    # Find main root tip (bottommost = maximum y coordinate)
+    tip_idx = np.argmax(positions[:, 1])
+    tip_node = node_list[tip_idx]
+    tip_position = positions[tip_idx]
+    
+    # Assign node types
+    for i, node in enumerate(node_list):
+        node_position = positions[i]
+        
+        if np.array_equal(node_position, seed_position):
+            # This is the seed/root base
+            graph.nodes[node]['type'] = "Ini"
+        elif np.array_equal(node_position, tip_position):
+            # This is the main root tip
+            graph.nodes[node]['type'] = "FTip"
+        else:
+            # Check degree to determine type
+            degree = graph.degree(node)
+            if degree > 2:
+                # Branch point (more than 2 neighbors)
+                graph.nodes[node]['type'] = "Bif"
+            elif degree == 1:
+                # Endpoint (lateral root tip)
+                graph.nodes[node]['type'] = "LTip"
             else:
-                age2[v[1]] = age1[i] + 1            
-                if nodetype2[v[1]] == "null":
-                    nodetype2[v[1]] = nodetype1[i]
-            
-    available = np.ones(pos_vertex2.shape[0])
+                # Degree == 2: part of a chain 
+                graph.nodes[node]['type'] = "null"
     
-    ## If seed is not found => debug
-    seed = gt.find_vertex(g2, nodetype2, "Ini")
-    if len(seed) == 1:
-        seed = seed[0]
+    # Special case: if graph has only 2 nodes (seed and tip)
+    if len(node_list) == 2:
+        # Mark the single edge as main root (root_type = 10)
+        graph.edges[seed_node, tip_node]['root_type'] = 10
+        # Set ages to 1
+        graph.nodes[seed_node]['age'] = 1
+        graph.nodes[tip_node]['age'] = 1
     else:
-        seed_prev = gt.find_vertex(g1, nodetype1, "Ini")
-        p1 = pos1[seed_prev[0]]
-        v, d = find_nearest_b(p1, pos_vertex2)
-        if d < 20:
-            age2[v] = age1[seed_prev[0]] + 1
-            nodetype2[v] = "Ini"
-            seed = g2.vertex(v)
-            available[v] = 0
-        else:
-            #print('No SEED')
-            raise Exception ("No seed point")
+        # Find shortest weighted path from seed to tip
+        main_root_path = nx.shortest_path(
+            graph,
+            source=seed_node, 
+            target=tip_node, 
+            weight='weight'
+        )
+        # Mark all edges on main root path
+        for i in range(len(main_root_path) - 1):
+            u = main_root_path[i]
+            v = main_root_path[i + 1]
+            graph.edges[u, v]['root_type'] = 10  # Main root marker
+
+    return graph
+
+
+def find_nearest_node(target_position, node_positions_array):
+    """
+    Find the single nearest node to target position.
     
-    pos_vertex2[:,0] = pos_vertex2[:,0] * available
-    pos_vertex2[:,1] = pos_vertex2[:,1] * available
+    Args:
+        target_position: (x, y) or [x, y] target
+        node_positions_array: Nx2 array of node positions
+        
+    Returns:
+        nearest_idx: Index of nearest node
+        distance: Distance to nearest node
+    """
+    distances = np.linalg.norm(target_position - node_positions_array, axis=1)
+    nearest_idx = np.argmin(distances)
+    return nearest_idx, distances[nearest_idx]
+
+
+def find_nearby_nodes(target_position, node_positions_array, distance_threshold=30):
+    """
+    Find all nodes within distance_threshold of target position.
     
-    ## If main root tip is not found => debug
-    end = gt.find_vertex(g2, nodetype2, "FTip")
-    if len(end) == 1:
-        end = end[0]
+    Args:
+        target_position: (x, y) or [x, y] target
+        node_positions_array: Nx2 array of node positions
+        distance_threshold: Maximum distance to consider "nearby"
+        
+    Returns:
+        nearby_indices: Array of indices of nearby nodes
+        distances: Distances to those nodes
+    """
+    distances = np.linalg.norm(target_position - node_positions_array, axis=1)
+    nearby_mask = distances < distance_threshold
+    nearby_indices = np.where(nearby_mask)[0]
+    
+    return nearby_indices, distances[nearby_indices]
+
+
+def matchGraphs(previous_graph, current_graph, max_movement=70):
+    """
+    Match nodes between consecutive frames to track growth over time.
+    Propagates node ages and types from previous frame to current frame.
+
+    Args:
+        previous_graph: NetworkX graph from previous frame
+        current_graph: NetworkX graph from current frame
+        max_movement: Maximum pixels a node can move between frames (default 70)
+
+    Returns:
+        current_graph: Updated with propagated ages and types
+    """
+    
+    # Get node lists and positions
+    prev_nodes = list(previous_graph.nodes())
+    curr_nodes = list(current_graph.nodes())
+    
+    if len(curr_nodes) == 0:
+        raise Exception("Current graph has no nodes")
+    elif len(prev_nodes) == 2:
+        # Make a check that everything is ok if previous graph has only 2 nodes
+        seed_node = [n for n in prev_nodes if previous_graph.nodes[n]['type'] == "Ini"][0]
+        tip_node = [n for n in prev_nodes if previous_graph.nodes[n]['type'] == "FTip"][0]
+        # seed should be higher than tip, this is a basic sanity check
+        # can happen early on 
+        if previous_graph.nodes[seed_node]['pos'][1] >= previous_graph.nodes[tip_node]['pos'][1]:
+            current_graph = graphInit(current_graph)
+            return current_graph
+
+    curr_positions = np.array([current_graph.nodes[node]['pos'] for node in curr_nodes])
+    
+    # Track which current nodes have been matched
+    matched_current_nodes = set()
+    
+    # ========================================================================
+    # PHASE 1: Match SEED node (Ini)
+    # ========================================================================
+    
+    prev_seed_nodes = [n for n in prev_nodes if previous_graph.nodes[n]['type'] == "Ini"]
+    
+    if len(prev_seed_nodes) == 0:
+        raise Exception("Previous graph has no seed node - cannot track")
+    
+    prev_seed = prev_seed_nodes[0]
+    prev_seed_position = np.array(previous_graph.nodes[prev_seed]['pos'])
+    prev_seed_age = previous_graph.nodes[prev_seed]['age']
+    
+    # Find nearest node to previous seed position
+    distances_to_seed = np.linalg.norm(curr_positions - prev_seed_position, axis=1)
+    nearest_seed_idx = np.argmin(distances_to_seed)
+    seed_distance = distances_to_seed[nearest_seed_idx]
+    
+    # FIX: Check if seed moved too far - use topology if so
+    if seed_distance > max_movement:    
+        print(f"Seed moved {seed_distance:.1f}px")
+        raise Exception("Seed tracking lost - cannot reliably assign seed node")
     else:
-        end_prev = gt.find_vertex(g1, nodetype1, "FTip")
-        p1 = pos1[end_prev[0]]
-        v, d = find_nearest_b(p1, pos_vertex2)
-        if d < 20:
-            age2[v] = age1[end_prev[0]] + 1
-            nodetype2[v] = "FTip"
-            end = g2.vertex(v)
-        else:
-            v = np.argmax(pos_vertex2[:,1])
-            nodetype2[v] = "FTip"
-            end = g2.vertex(v)
-            # print('No TIP')
-            # raise Exception ("BAD TRACKING")
+        # Match the seed normally
+        seed_node = curr_nodes[nearest_seed_idx]
+        current_graph.nodes[seed_node]['age'] = prev_seed_age + 1
     
-    vertices2 = g2.get_vertices()
-    for i in vertices2:
-        if age2[i] == 0:
-            age2[i] == 1
-        if nodetype2[i] == "null":
-            vecinos = g2.get_out_neighbours(i)
-            if len(vecinos) > 1:
-                nodetype2[i] = "Bif"
+    current_graph.nodes[seed_node]['type'] = "Ini"
+    matched_current_nodes.add(seed_node)
+    
+    # ========================================================================
+    # PHASE 2: Match MAIN TIP (FTip)
+    # ========================================================================
+    
+    prev_tip_nodes = [n for n in prev_nodes if previous_graph.nodes[n]['type'] == "FTip"]
+    
+    if len(prev_tip_nodes) > 0:
+        prev_tip = prev_tip_nodes[0]
+        prev_tip_position = np.array(previous_graph.nodes[prev_tip]['pos'])
+        prev_tip_age = previous_graph.nodes[prev_tip]['age']
+        
+        # Calculate distances, excluding already matched seed
+        distances_to_tip = np.linalg.norm(curr_positions - prev_tip_position, axis=1)
+        
+        # Create mask for valid candidates (exclude seed)
+        valid_mask = np.ones(len(curr_nodes), dtype=bool)
+        valid_mask[curr_nodes.index(seed_node)] = False
+        
+        # Find nearest among valid nodes
+        valid_distances = distances_to_tip.copy()
+        valid_distances[~valid_mask] = np.inf
+        nearest_tip_idx = np.argmin(valid_distances)
+        tip_distance = valid_distances[nearest_tip_idx]
+        
+        # FIX: Check if tip moved too far
+        if tip_distance > max_movement:
+            # Check how many nodes are below previous tip position
+            below_mask = curr_positions[:, 1] > prev_tip_position[1]
+            available_below = np.where(below_mask & valid_mask)[0]
+            if len(available_below) == 0:
+                # Check the distance between the two nearest nodes
+                top2_indices = np.argsort(valid_distances)[:2]
+                dist_between = np.abs(curr_positions[top2_indices[0], 1] - curr_positions[top2_indices[1], 1])
+                if dist_between < max_movement:
+                    # Two nodes are very close - ambiguous
+                    raise Exception("Tip tracking ambiguous - two close candidates found")
+                else:
+                    # Assign the nearest node anyway
+                    tip_node = curr_nodes[nearest_tip_idx]
+                    current_graph.nodes[tip_node]['age'] = prev_tip_age + 1                
+            elif len(available_below) > 1:
+                # Multiple candidates below previous tip - ambiguous
+                raise Exception("Tip tracking ambiguous - multiple candidates found")
             else:
-                if len(vecinos) == 1:
-                    nodetype2[i] = "LTip"
-
-    seed = gt.find_vertex(g2, nodetype2, "Ini")
-    if len(seed) == 1:
-        seed = seed[0]
-    else:
-        seed_prev = gt.find_vertex(g1, nodetype1, "Ini")
-        p1 = pos1[seed_prev[0]]
-        v, d = find_nearest_b(p1, pos_vertex2)
-        if d < 20:
-            age2[v] = age1[seed_prev[0]] + 1
-            nodetype2[v] = "Ini"
-            seed = g2.vertex(v)
+                # Single candidate below previous tip - assign it
+                tip_node = curr_nodes[available_below[0]]
+                current_graph.nodes[tip_node]['age'] = prev_tip_age + 1
         else:
-            #print('No SEED')
-            raise Exception ("No seed point")
+            # Match the tip normally
+            tip_node = curr_nodes[nearest_tip_idx]
+            current_graph.nodes[tip_node]['age'] = prev_tip_age + 1
+        
+        current_graph.nodes[tip_node]['type'] = "FTip"
+        matched_current_nodes.add(tip_node)
+    else:
+        raise Exception("Previous graph has no tip node - cannot track")
+    
+    # ========================================================================
+    # PHASE 3: Match REMAINING nodes - NEW nodes find OLD matches
+    # ========================================================================
+
+    # Get previous node data (excluding seed/tip already matched)
+    prev_remaining = [n for n in prev_nodes 
+                    if previous_graph.nodes[n]['type'] not in ["Ini", "FTip"]]
+    prev_remaining_positions = np.array([previous_graph.nodes[n]['pos'] 
+                                        for n in prev_remaining])
+
+    # For each unmatched current node, find best previous match
+    for curr_node in curr_nodes:
+        # Skip already matched seed and tip
+        if curr_node in matched_current_nodes:
+            continue
+        
+        curr_pos = np.array(current_graph.nodes[curr_node]['pos'])
+        
+        if len(prev_remaining) == 0:
+            # No previous nodes to match - this is a new node
+            current_graph.nodes[curr_node]['age'] = 1
+            degree = current_graph.degree(curr_node)
+            if degree > 2:
+                current_graph.nodes[curr_node]['type'] = "Bif"
+            elif degree == 1:
+                current_graph.nodes[curr_node]['type'] = "LTip"
+            else:
+                current_graph.nodes[curr_node]['type'] = "null"
+            continue
+        
+        # Find nearest previous node
+        distances = np.linalg.norm(prev_remaining_positions - curr_pos, axis=1)
+        nearest_idx = np.argmin(distances)
+        
+        if distances[nearest_idx] < max_movement:
+            # Match found - propagate age and type
+            prev_match = prev_remaining[nearest_idx]
+            current_graph.nodes[curr_node]['age'] = previous_graph.nodes[prev_match]['age'] + 1
             
-    # edge tracking
-    camino, _ = gt.shortest_path(g2, seed, end, weights = weight2)
-
-    l = len(camino)
-    for k in range(0, l-1):
-        arista = g2.edge(camino[k], camino[k+1])
-        clase2[arista][1] = 10
-
-    return [g2, pos2, weight2, clase2, nodetype2, age2]
+            # Keep topology-based type if already assigned, otherwise use previous type
+            if current_graph.nodes[curr_node]['type'] == "null":
+                current_graph.nodes[curr_node]['type'] = previous_graph.nodes[prev_match]['type']
+        else:
+            # No match - new node
+            current_graph.nodes[curr_node]['age'] = 1
+            degree = current_graph.degree(curr_node)
+            if degree > 2:
+                current_graph.nodes[curr_node]['type'] = "Bif"
+            elif degree == 1:
+                current_graph.nodes[curr_node]['type'] = "LTip"
+    
+    # ========================================================================
+    # PHASE 4: Mark MAIN ROOT path from seed to tip
+    # ========================================================================
+    
+    try:
+        # Find shortest weighted path from seed to tip
+        main_root_path = nx.shortest_path(
+            current_graph, 
+            source=seed_node, 
+            target=tip_node, 
+            weight='weight'
+        )
+        
+        # Mark all edges on main root path
+        for i in range(len(main_root_path) - 1):
+            u = main_root_path[i]
+            v = main_root_path[i + 1]
+            current_graph.edges[u, v]['root_type'] = 10  # Main root marker
+            
+    except nx.NetworkXNoPath:
+        print("Warning: Graph disconnected - no path from seed to tip")
+    
+    return current_graph

@@ -25,7 +25,7 @@ import os
 import scipy.stats as stats
 import numpy as np
 import cv2
-import graph_tool.all as gt
+import networkx as nx
 import json
 
 # remove FutureWarning
@@ -328,12 +328,12 @@ def get_atlases(psave, days = [6,7,8,9,10], rotateRoot = True):
             graph_path = seg.replace(spath,gpath).replace('png','xml.gz')
             if index != -1:
                 try:
-                    g = gt.load_graph(graph_path)
+                    g = nx.read_graphml(graph_path)
                 except:
-                    g = gt.load_graph(graphs[-1])
+                    g = nx.read_graphml(graphs[-1])
             else:
-                g = gt.load_graph(graphs[index])
-                
+                g = nx.read_graphml(graphs[index])
+
             path = os.path.abspath(os.path.join(i, 'metadata.json'))
             with open(path) as f:
                 metadata = json.load(f)
@@ -343,12 +343,12 @@ def get_atlases(psave, days = [6,7,8,9,10], rotateRoot = True):
             img = np.pad(img,((0,0),(200,0)))
             shape = img.shape
 
-            for j in g.get_vertices():
-                tipo = g.vp.nodetype[j]
+            for j in g.nodes():
+                tipo = g.nodes[j]['type']
                 if tipo == 'FTip':
-                    end1 = np.array(g.vp.pos[j])
+                    end1 = np.array([g.nodes[j]["pos_x"], g.nodes[j]["pos_y"]])
                 if tipo == 'Ini':
-                    end2 = np.array(g.vp.pos[j])
+                    end2 = np.array([g.nodes[j]["pos_x"], g.nodes[j]["pos_y"]])
 
             # choose the root end, because the endpoints may be inverted
             if end1[1] > end2[1]:

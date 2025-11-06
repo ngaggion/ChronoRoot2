@@ -100,9 +100,12 @@ def preview(conf):
         if key == 27:
             break
         # close by clicking the X button
-        if cv2.getWindowProperty('Preview Image (show segmentation with "s" key)', cv2.WND_PROP_VISIBLE) < 1:
+        try:
+            if cv2.getWindowProperty('Preview Image (show segmentation with "s" key)', cv2.WND_PROP_VISIBLE) < 1:
+                break
+        except cv2.error:
             break
-
+        
         if key == ord('c'):
             break
         elif key == ord('s'):
@@ -114,7 +117,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture')
     parser.add_argument('--preview', action='store_true', default=False, help='Previews the sequence of images')
     parser.add_argument('--config', type=str, default='config.json', help='Path to the configuration file (default: config.json)')
-    parser.add_argument('--get_bbox', action='store_true', default=False, help='Only gets the bounding box of the root system')
     parser.add_argument('--rerun', action='store_true', default=False, help='Reruns the analysis, even if the results already exist')
 
     args = parser.parse_args()
@@ -125,12 +127,9 @@ if __name__ == "__main__":
         conf['fileKey'] = conf['identifier']
         conf['sequenceLabel'] = conf['identifier'] + "_" + conf['Images'] + "_" + str(conf['plant'])
         conf['Plant'] = 'Arabidopsis thaliana'
-
-        if args.get_bbox:
-            plantAnalysis(conf, False, True)
-        elif 'bounding_box' in conf and not args.rerun:
-            plantAnalysis(conf, True, False)
+        if 'bounding box' in conf and args.rerun:
+            plantAnalysis(conf, True)
         else:
-            plantAnalysis(conf, False, False)
+            plantAnalysis(conf, False)
     else:
         preview(conf)

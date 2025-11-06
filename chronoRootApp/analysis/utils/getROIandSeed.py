@@ -19,17 +19,62 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 import cv2 
 import numpy as np
 
-def selectROI(image):    
-    cv2.namedWindow('Select ROI with cursor, then press double enter', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Select ROI with cursor, then press double enter', 1000, 1000)
-
-    roi = cv2.selectROI("Select ROI with cursor, then press double enter", image)
-
-    cv2.waitKey()
-    cv2.destroyAllWindows()
-
-    return roi
-
+def selectROI(image):
+        instructions = (
+            f"Select ROI\n"
+            "1. Click and drag to select region\n"
+            "2. Press ENTER TWICE to confirm selection\n"
+            "3. Press 'r' to redo selection\n"
+            "4. Press 'q' to quit analysis"
+        )
+        window_name = "Select ROI"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 1000, 1000)
+        
+        while True:
+            # Create fresh copy of image for display
+            img_copy = image.copy()
+            
+            # Add instructions to the image
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 2.5
+            thickness = 8
+            color = (255, 255, 255)
+            
+            y0 = 60
+            for i, line in enumerate(instructions.split('\n')):
+                y = y0 + i * 70
+                cv2.putText(img_copy, line, (10, y), font, font_scale, color, thickness)
+            
+            # Draw ROI
+            roi = cv2.selectROI(window_name, img_copy, fromCenter=False, showCrosshair=True)
+            
+            if roi[2] == 0 or roi[3] == 0:  # If ROI has no area
+                key = cv2.waitKey(1)
+                if key == ord('q'):  # Check if user pressed 'q' to quit
+                    cv2.destroyWindow(window_name)
+                    return None
+                print("Invalid selection, please try again or press 'q' to quit")
+                continue
+            
+            # Draw the selection for confirmation
+            cv2.rectangle(img_copy, (roi[0], roi[1]), 
+                         (roi[0] + roi[2], roi[1] + roi[3]), (255, 255, 255), 5)
+            cv2.imshow(window_name, img_copy)
+            
+            print(f"\nSelection made.")
+            print("Press 'r' to redo selection or 'q' to quit analysis")
+            
+            key = cv2.waitKey(0)
+            if key == ord('q'):
+                cv2.destroyWindow(window_name)
+                return None
+            elif key == ord('r'):
+                continue
+            else:
+                cv2.destroyWindow(window_name)
+                return roi
+            
 pos = None
 
 def mouse_callback(event, x, y, flags, param):
@@ -127,9 +172,14 @@ def selectSeed(images, segFiles, bbox, conf):
 
 def getROIandSeed(conf, images, segFiles):
     last_image = cv2.imread(images[-1])
-    r = selectROI(last_image)
-
-    if r[0] == 0 and r[1] == 0 and r[2] == 0 and r[3] == 0:
+    try:
+        r = selectROI(last_image)
+    except:
+        return None, None
+    
+    if r is None:
+        return None, None
+    elif r[0] == 0 and r[1] == 0 and r[2] == 0 and r[3] == 0:
         return None, None
 
     bbox = [int(r[1]),int(r[1]+r[3]), int(r[0]),int(r[0]+r[2])]    

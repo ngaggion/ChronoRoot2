@@ -73,8 +73,11 @@ def review(images, segFiles, bbox, conf):
             break
         
         # close by clicking the X button
-        if cv2.getWindowProperty('Review plant segmentation', cv2.WND_PROP_VISIBLE) < 1:
-            return None
+        try:
+            if cv2.getWindowProperty('Review plant segmentation', cv2.WND_PROP_VISIBLE) < 1:
+                break
+        except cv2.error:
+            break  
 
         if key == ord('c'):
             break
@@ -84,8 +87,6 @@ def review(images, segFiles, bbox, conf):
             return None
         elif key == 13:
             break
-
-        
     
     cv2.destroyAllWindows()
     return 

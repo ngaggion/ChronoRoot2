@@ -1,6 +1,10 @@
-#!/usr/bin/env python3
-import sys
 import os
+import sys
+
+# Suppress Qt and OpenGL warnings
+os.environ['QT_LOGGING_RULES'] = '*=false'
+os.environ['LIBGL_ALWAYS_INDIRECT'] = '1'
+
 import tempfile
 import subprocess
 import json

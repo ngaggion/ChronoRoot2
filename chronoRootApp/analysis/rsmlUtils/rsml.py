@@ -26,42 +26,101 @@ import os
 
 n_points = 0
 
-def createTree(conf, i, images, grafo, ske, ske2):
+def createTree(conf, frame_idx, images, graph, skeleton, skeleton_overlay):
+    """
+    Create RSML tree structure from graph for export.
+    
+    RSML (Root System Markup Language) is an XML format for storing root architecture.
+    This function converts the NetworkX graph into RSML format.
+    
+    Args:
+        conf: Configuration dictionary
+        frame_idx: Current frame index
+        images: List of image paths
+        graph: NetworkX graph with node attributes (pos, type, age) 
+               and edge attributes (weight, color, root_type)
+        skeleton: Binary skeleton image
+        skeleton_overlay: Skeleton with color-coded segments
+        
+    Returns:
+        tree: XML tree in RSML format
+        number_lateral_roots: Count of first-order lateral roots
+        
+    Raises:
+        Exception: If RSML file is incomplete (missing significant portion of skeleton)
+    """
     global n_points
     n_points = 0
-
-    tree = createHeader(conf, i, images)
+    
+    # Create RSML header
+    tree = createHeader(conf, frame_idx, images)
     root = tree.getroot()
     
-    _, enodes = skeleton_nodes(ske)
-      
-    ## Gets the start node of the graph
-    v = grafo[0].get_vertices()
-    for k in v:
-        if grafo[4][k] == "Ini":
-            seed = grafo[1][k]
-            seed = np.array(seed, dtype='int')
+    # Extract endpoint positions from skeleton
+    _, end_points = skeleton_nodes(skeleton)
+    end_points = np.array(end_points)
     
-    # if seed is not in enodes, seed is the nearest enode
-    if not np.any(np.all(enodes == seed, axis=1)):
-        dist = np.linalg.norm(enodes - seed, axis=1)
-        seed = enodes[np.argmin(dist)]
-
-    ## Gets the labels of every edge of the main root
-    mainRoot = []
-    for k in grafo[3]:
-        if k[1] == 10:
-            mainRoot.append(k[0])
-
-    ## We send the number of first order lateral roots for each analyzed image
-    _, numberLR = completeRSML(ske2.copy(), seed, enodes, root, mainRoot)
-
-    total_points = np.sum(ske > 0)
-    if n_points < total_points / 2:
-        raise Exception('RSML file is incomplete')
+    # ----------------------------------------------------------------
+    # Find the seed (Ini) node in the graph
+    # ----------------------------------------------------------------
+    seed_nodes = [node for node in graph.nodes() if graph.nodes[node]['type'] == "Ini"]
     
-    return tree, numberLR
-
+    if len(seed_nodes) == 0:
+        raise Exception("No seed node (Ini) found in graph")
+    
+    seed_node = seed_nodes[0]
+    seed_position = np.array(graph.nodes[seed_node]['pos'], dtype='int')
+    
+    # Verify seed is at a skeleton endpoint (or find nearest if not)
+    # This can happen if trimming moved the node slightly
+    seed_is_endpoint = np.any(np.all(end_points == seed_position, axis=1))
+    
+    if not seed_is_endpoint:
+        # Seed not exactly at an endpoint - find nearest endpoint
+        distances = np.linalg.norm(end_points - seed_position, axis=1)
+        nearest_idx = np.argmin(distances)
+        seed_position = end_points[nearest_idx]
+    
+    # ----------------------------------------------------------------
+    # Extract main root edge colors
+    # ----------------------------------------------------------------
+    main_root_colors = []
+    
+    for u, v, data in graph.edges(data=True):
+        edge_type = data.get('root_type', 0)
+        edge_color = data.get('color', 0)
+        
+        if edge_type == 10:
+            # This edge is part of the main root
+            main_root_colors.append(edge_color)
+    
+    # ----------------------------------------------------------------
+    # Build RSML structure recursively from skeleton
+    # ----------------------------------------------------------------
+    # This function traverses the skeleton and builds the RSML tree
+    # Returns the number of first-order lateral roots
+    _, number_lateral_roots = completeRSML(
+        skeleton_overlay.copy(), 
+        seed_position, 
+        end_points, 
+        root, 
+        main_root_colors
+    )
+    
+    # ----------------------------------------------------------------
+    # Validate completeness of RSML
+    # ----------------------------------------------------------------
+    # Count total skeleton pixels
+    total_skeleton_points = np.sum(skeleton > 0)
+    
+    # Check if we captured at least 50% of the skeleton in RSML
+    if n_points < total_skeleton_points / 2:
+        raise Exception(
+            f'RSML file incomplete: captured {n_points}/{total_skeleton_points} points '
+            f'({100*n_points/total_skeleton_points:.1f}%)'
+        )
+    
+    return tree, number_lateral_roots
 
 ## Load configuration values for the experiment
 

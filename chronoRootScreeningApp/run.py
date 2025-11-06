@@ -1,5 +1,10 @@
-import sys
 import os
+import sys
+
+# Suppress Qt and OpenGL warnings
+os.environ['QT_LOGGING_RULES'] = '*=false'
+os.environ['LIBGL_ALWAYS_INDIRECT'] = '1'
+
 import json
 import subprocess
 from datetime import datetime
@@ -132,7 +137,7 @@ class AnalysisTab(QWidget):
         # Pixel distance input
         pixel_dist_layout = QHBoxLayout()
         self.pixel_dist_edit = QLineEdit()
-        self.pixel_dist_edit.setPlaceholderText('100')
+        self.pixel_dist_edit.setPlaceholderText('240')
         self.pixel_dist_edit.setValidator(QIntValidator(1, 10000))
         pixel_dist_layout.addWidget(QLabel('Corresponding pixels:'))
         pixel_dist_layout.addWidget(self.pixel_dist_edit)
