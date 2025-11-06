@@ -9,6 +9,7 @@ import pathlib
 import re
 import sys
 import cv2
+import shutil
 
 def natural_keys(text):
     return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', text)]
@@ -53,7 +54,9 @@ class Ui_ChronoRootAnalysis:
         data.update({field.objectName(): field.text() for field in [self.identifierField, self.videoField, self.projectField,
                                                                     self.everyXhourField, self.everyXhourFieldFourier, 
                                                                     self.everyXhourFieldAngles, self.numComponentsFPCAField]})
-        data.update({field.objectName(): field.isChecked() for field in [self.saveImagesButton, self.saveImagesConvex, 
+        data.update({field.objectName(): field.isChecked() for field in [self.saveImagesButton, 
+                                                                         self.videoHasQRbutton,
+                                                                         self.saveImagesConvex, 
                                                                          self.doConvex, self.doFourier, self.doLateralAngles,
                                                                          self.doFPCA, self.normFPCA, self.averagePerPlantStats]})
         
@@ -70,12 +73,16 @@ class Ui_ChronoRootAnalysis:
         data["timeStep"] = data["captureIntervalField"]
         data["MainFolder"] = data["projectField"]
         data["saveImages"] = data["saveImagesButton"]
+        data["videoHasQR"] = data["videoHasQRbutton"]
         data["emergenceDistance"] = data["emergenceDistanceField"]
 
         if data["processingLimit"] != "":
             data['Limit'] = int(data["processingLimit"] * 24 * 60 / int(data['timeStep']))
         else:
             data['Limit'] = 0
+            
+        data['knownDistance'] = self.knownDistanceField.text()
+        data['pixelDistance'] = self.pixelDistanceField.text()
 
         with open(json_path_1, "w") as json_file:
             json.dump(data, json_file)
@@ -102,11 +109,15 @@ class Ui_ChronoRootAnalysis:
             if field.objectName() in data:
                 field.setText(data[field.objectName()])
 
-        for field in [self.saveImagesButton, self.saveImagesConvex, self.doConvex, self.doFourier, self.doLateralAngles,
+        for field in [self.saveImagesButton, self.videoHasQRbutton,
+                      self.saveImagesConvex, self.doConvex, self.doFourier, self.doLateralAngles,
                       self.doFPCA, self.normFPCA, self.averagePerPlantStats]:
             if field.objectName() in data:
                 field.setChecked(data[field.objectName()])
 
+        self.knownDistanceField.setText(str(data['knownDistance']))
+        self.pixelDistanceField.setText(str(data['pixelDistance']))
+    
         if "daysConvexHull" in data:
             self.daysConvexField.setText(str(data["daysConvexHull"]))
         if "daysAngles" in data:
@@ -147,13 +158,13 @@ class Ui_ChronoRootAnalysis:
             # read the error rate from the log file first line
             if os.path.exists(os.path.join(file, "log.txt")):
                 with open(os.path.join(file, "log.txt"), 'r') as f:
-                    date = f.readline().replace("Finish time: ", "")
+                    date = f.readline().replace("Analysis completed: ", "")
 
-                    if  "No segmentation found" in date:
-                        error_rate = "No segmentation found"
-                    else:
-                        error_rate = float(f.readline().split(':')[-1])
-                        error_rate = round(error_rate, 4)
+                    # error rate is in the last line
+                    lines = f.readlines()
+                    last_line = lines[-1]
+                    error_rate = float(last_line.split(":")[-1].strip())
+                    error_rate = round(error_rate, 4)
                 status = "Finished"
             else:
                 date = ""
@@ -231,13 +242,12 @@ class Ui_ChronoRootAnalysis:
         if not os.path.exists(os.path.dirname(removed_path)):
             os.makedirs(os.path.dirname(removed_path))
 
-        # Open the directory in the file explorer
-        if os.name == 'nt':
-            os.system(f'move "{path}" "{removed_path}"')
-        elif sys.platform == 'darwin':
-            os.system(f'mv "{path}" "{removed_path}"')
-        else:
-            os.system(f'mv "{path}" "{removed_path}"')
+        # Remove existing destination if it exists
+        if os.path.exists(removed_path):
+            shutil.rmtree(removed_path)
+
+        # Move to removed folder
+        shutil.move(path, removed_path)
         
         self.refresh_table()
         
@@ -429,8 +439,39 @@ class Ui_ChronoRootAnalysis:
         self.refresh_table()
         
         return
-
+    
     def analysis(self):
+        """Run analysis with calibration validation"""
+        # Validate calibration settings before proceeding
+        if not self.videoHasQRbutton.isChecked():                
+            if not self.knownDistanceField.text() or not self.pixelDistanceField.text():
+                QtWidgets.QMessageBox.warning(
+                    None, 
+                    'Error', 
+                    'Please provide both known distance and pixel distance for manual calibration,\n'
+                    'or enable "Video has QR codes"!'
+                )
+                return
+            
+            try:
+                known_dist = float(self.knownDistanceField.text())
+                pixel_dist = int(self.pixelDistanceField.text())
+                if known_dist <= 0 or pixel_dist <= 0:
+                    QtWidgets.QMessageBox.warning(
+                        None, 
+                        'Error', 
+                        'Calibration values must be positive numbers!'
+                    )
+                    return
+            except ValueError:
+                QtWidgets.QMessageBox.warning(
+                    None, 
+                    'Error', 
+                    'Invalid calibration values!\n'
+                    'Known distance must be a number, pixel distance must be an integer.'
+                )
+                return
+        
         self.saveFieldsIntoJson()
         subprocess.Popen(["python", "1_analysis.py"])
 
@@ -557,7 +598,8 @@ class Ui_ChronoRootAnalysis:
             if field.objectName() in data:
                 field.setText(data[field.objectName()])
 
-        for field in [self.saveImagesButton, self.saveImagesConvex, self.doConvex, self.doFourier, self.doLateralAngles,
+        for field in [self.saveImagesButton, self.videoHasQRbutton,
+                      self.saveImagesConvex, self.doConvex, self.doFourier, self.doLateralAngles,
                       self.doFPCA, self.normFPCA, self.averagePerPlantStats]:
             if field.objectName() in data:
                 field.setChecked(data[field.objectName()])
@@ -610,8 +652,12 @@ class Ui_ChronoRootAnalysis:
         self.identifierField.setObjectName("identifierField")
 
         self.saveImagesButton = QtWidgets.QCheckBox(self.tab1)
-        self.saveImagesButton.setGeometry(QtCore.QRect(10, 400, 161, 31))
+        self.saveImagesButton.setGeometry(QtCore.QRect(10, 380, 161, 31))
         self.saveImagesButton.setObjectName("saveImagesButton")
+        
+        self.videoHasQRbutton = QtWidgets.QCheckBox(self.tab1)
+        self.videoHasQRbutton.setGeometry(QtCore.QRect(10, 410, 161, 31))
+        self.videoHasQRbutton.setObjectName("videoHasQRbutton")
 
         self.captureIntervalField = QtWidgets.QLineEdit(self.tab1)
         self.captureIntervalField.setGeometry(QtCore.QRect(190, 500, 51, 31))
@@ -691,7 +737,7 @@ class Ui_ChronoRootAnalysis:
         self.label_8.setGeometry(QtCore.QRect(360, 300, 261, 31))
         self.label_8.setObjectName("label_8")
         self.label_9 = QtWidgets.QLabel(self.tab1)
-        self.label_9.setGeometry(QtCore.QRect(10, 360, 541, 31))
+        self.label_9.setGeometry(QtCore.QRect(10, 350, 541, 31))
         self.label_9.setObjectName("label_9")
         self.label_11 = QtWidgets.QLabel(self.tab1)
         self.label_11.setGeometry(QtCore.QRect(10, 500, 161, 31))
@@ -705,9 +751,6 @@ class Ui_ChronoRootAnalysis:
         self.label_27 = QtWidgets.QLabel(self.tab1)
         self.label_27.setGeometry(QtCore.QRect(260, 500, 261, 31))
         self.label_27.setObjectName("label_27")
-        self.label_28 = QtWidgets.QLabel(self.tab1)
-        self.label_28.setGeometry(QtCore.QRect(190, 400, 441, 31))
-        self.label_28.setObjectName("label_28")
         self.label_30 = QtWidgets.QLabel(self.tab1)
         self.label_30.setGeometry(QtCore.QRect(10, 10, 541, 31))
         self.label_30.setObjectName("label_30")
@@ -722,7 +765,78 @@ class Ui_ChronoRootAnalysis:
         self.line_2.setFrameShadow(QtWidgets.QFrame.Sunken)
         self.line_2.setObjectName("line_2")
 
+        # Create container widget for manual calibration (hidden by default)
+        self.manual_calib_widget = QtWidgets.QWidget(self.tab1)
+        self.manual_calib_widget.setGeometry(QtCore.QRect(210, 375, 380, 70))
+        
+        
+        # Write a "Manual Calibration" label
+        self.manual_calib_label = QtWidgets.QLabel(self.manual_calib_widget)
+        self.manual_calib_label.setGeometry(QtCore.QRect(0, 0, 200, 31))
+        self.manual_calib_label.setText("Manual Calibration Parameters:")
+        
+        # Known distance label and field - first row
+        self.known_dist_label = QtWidgets.QLabel(self.manual_calib_widget)
+        self.known_dist_label.setGeometry(QtCore.QRect(220, 0, 100, 31))
+        self.known_dist_label.setText("Known (mm):")
+        
+        self.knownDistanceField = QtWidgets.QLineEdit(self.manual_calib_widget)
+        self.knownDistanceField.setGeometry(QtCore.QRect(320, 0, 51, 31))
+        self.knownDistanceField.setPlaceholderText("10")
+        self.knownDistanceField.setObjectName("knownDistanceField")
+        
+        # Pixel distance label and field - continue first row
+        self.pixel_dist_label = QtWidgets.QLabel(self.manual_calib_widget)
+        self.pixel_dist_label.setGeometry(QtCore.QRect(220, 31, 70, 31))
+        self.pixel_dist_label.setText("Pixels:")
+        
+        self.pixelDistanceField = QtWidgets.QLineEdit(self.manual_calib_widget)
+        self.pixelDistanceField.setGeometry(QtCore.QRect(320, 32, 51, 31))
+        self.pixelDistanceField.setPlaceholderText("240")
+        self.pixelDistanceField.setObjectName("pixelDistanceField")
+        
+        # Calibration helper button - second row
+        self.calibrateBtn = QtWidgets.QPushButton(self.manual_calib_widget)
+        self.calibrateBtn.setGeometry(QtCore.QRect(0, 30, 180, 31))
+        self.calibrateBtn.setText("Open Calibration Helper")
+        self.calibrateBtn.clicked.connect(self.open_calibration_helper)
+        
+        # Connect toggle function to checkbox
+        self.videoHasQRbutton.stateChanged.connect(self.toggle_calibration_mode)
+        
+        # Initialize visibility
+        self.toggle_calibration_mode()
+    
         return
+    
+    def toggle_calibration_mode(self):
+        """Toggle between QR and manual calibration modes"""
+        has_qr = self.videoHasQRbutton.isChecked()
+        self.manual_calib_widget.setVisible(not has_qr)
+
+    def open_calibration_helper(self):
+        """Opens calibration helper window"""
+        if not self.videoField.text():
+            QtWidgets.QMessageBox.warning(None, 'Error', 'Please select a video directory first!')
+            return
+
+        args = [
+            "python",
+            "calibration_helper.py",
+            "--video-dir", self.videoField.text()
+        ]
+
+        try:
+            subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            QtWidgets.QMessageBox.information(
+                None,
+                "Calibration Helper",
+                "Calibration helper window has been opened.\n"
+                "Measure the pixel distance between two points\n"
+                "of known physical distance in your image."
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(None, "Error", f"Error starting calibration helper: {str(e)}")
 
     def setup_tab2_elements(self):
         # Create the table
@@ -1149,7 +1263,6 @@ class Ui_ChronoRootAnalysis:
             set_translation(self.label_12, "<html><head/><body><p>Set processing limit</p></body></html>")
             set_translation(self.label_26, "(in days, 0 means no limit)")
             set_translation(self.label_27, "(in minutes, usually 15 minutes)")
-            set_translation(self.label_28, "(useful to make growth videos, takes extra time and disk space)")
             set_translation(self.label_30, "<html><head/><body><p><span style=\" font-size:10pt; font-weight:600;\">Individual plant root analysis</span></p></body></html>")
             set_translation(self.daysFieldConvex, "Days to report")
             set_translation(self.daysConvexText, "(Numbers separated by commas)")
@@ -1168,6 +1281,7 @@ class Ui_ChronoRootAnalysis:
             set_translation(self.loadConfigFileButton, "Load\nconfig json\nfrom file")
             set_translation(self.loadLastConfigButton, "Load\nprevious\nconfiguration")
             set_translation(self.saveImagesButton, "Save Cropped Images")
+            set_translation(self.videoHasQRbutton, "Video has QR codes")
             set_translation(self.analysisButton, "Analyze Plant")
             set_translation(self.previewAnalysisButton, "Preview video")
             set_translation(self.PostProcessButton, "Process\nall plants")

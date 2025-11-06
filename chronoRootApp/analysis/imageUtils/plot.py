@@ -20,64 +20,123 @@ import cv2
 import os
 import numpy as np
 
+
 def getImgName(image, conf):
-    return image.replace(conf['ImagePath'],'').replace('/','')
+    """Extract just the image filename from full path."""
+    return image.replace(conf['ImagePath'], '').replace('/', '')
 
-def plot_seg(grafo1, ske):
-    g, _, _, clase, _, _ = grafo1
-    
 
-    mr = np.zeros_like(ske).astype('uint8')
-    lr = np.zeros_like(ske).astype('uint8')
+def plot_segmentation_overlay(graph, skeleton_overlay):
+    """
+    Create a color-coded visualization of the root system.
     
-    for a in g.get_edges():
-        e = g.edge(a[0],a[1])
-        pos = np.where(ske==clase[e][0])
-        if clase[e][1] == 10:
-            mr[pos]=255
+    Main root is shown in green, lateral roots in blue.
+    
+    Args:
+        graph: NetworkX graph with edge attribute 'root_type' and 'color'
+        skeleton_overlay: Skeleton image with color-coded segments
+        
+    Returns:
+        colored_overlay: 3-channel image (BGR) with main root (green) and laterals (blue)
+    """
+    # Create separate masks for main root and lateral roots
+    main_root_mask = np.zeros_like(skeleton_overlay).astype('uint8')
+    lateral_root_mask = np.zeros_like(skeleton_overlay).astype('uint8')
+    
+    # Iterate through all edges and mark pixels by root type
+    for u, v, data in graph.edges(data=True):
+        edge_color = data.get('color', 0)
+        edge_type = data.get('root_type', 0)
+        
+        # Find pixels in skeleton that belong to this edge
+        pixel_positions = np.where(skeleton_overlay == edge_color)
+        
+        if edge_type == 10:
+            # Main root edge
+            main_root_mask[pixel_positions] = 255
         else:
-            lr[pos]=255
+            # Lateral root edge
+            lateral_root_mask[pixel_positions] = 255
     
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7,7))
-    mr = cv2.dilate(mr, kernel)
-    lr = cv2.dilate(lr, kernel)
+    # Dilate masks to make roots more visible
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    main_root_mask = cv2.dilate(main_root_mask, kernel)
+    lateral_root_mask = cv2.dilate(lateral_root_mask, kernel)
     
-    ske3 = np.zeros(list(ske.shape)+[3], dtype='uint8')
-    ske3[:,:,1] = mr
-    ske3[:,:,0] = lr 
+    # Create 3-channel color image (BGR format for OpenCV)
+    colored_overlay = np.zeros(list(skeleton_overlay.shape) + [3], dtype='uint8')
+    colored_overlay[:, :, 1] = main_root_mask      # Green channel = main root
+    colored_overlay[:, :, 0] = lateral_root_mask   # Blue channel = lateral roots
     
-    return ske3
+    # Draw Ini and FTip nodes in green and blue dots
+    nodes = list(graph.nodes())
+    for i in range(len(nodes)):
+        node = graph.nodes[nodes[i]]
+        node_type = node["type"]
+        x, y = np.array(node["pos"])
+        if node_type == 'Ini':
+            cv2.circle(colored_overlay, (x, y), 5, (0, 0, 255), -1)  # Red dot
+        elif node_type == 'FTip':
+            cv2.circle(colored_overlay, (x, y), 5, (255, 255, 0), -1)  # Yellow dot
 
-def saveImages(conf, images, i, seg, grafo = None, ske = None):
-    folder = conf['folders']['images']
-    name = getImgName(images[i], conf)
-    bbox = conf['bounding box']
+    return colored_overlay
 
+
+def saveImages(conf, images, frame_idx, segmentation_mask, graph=None, skeleton_overlay=None):
+    """
+    Save visualization images for a frame.
+    
+    Saves three types of images:
+    1. Input: Original cropped image
+    2. Seg: Binary segmentation mask
+    3. SegMulti: Color-coded root visualization (main root in green, laterals in blue)
+    
+    Args:
+        conf: Configuration dictionary with folders and settings
+        images: List of image paths
+        frame_idx: Index of current frame
+        segmentation_mask: Binary segmentation mask
+        graph: NetworkX graph (None if frame failed)
+        skeleton_overlay: Skeleton with color-coded segments (None if frame failed)
+    """
+    output_folder = conf['folders']['images']
+    image_name = getImgName(images[frame_idx], conf)
+    roi_bounds = conf['bounding box']
+    
+    # Only save if enabled in config
     if conf['saveImages']:
-        original = cv2.imread(images[i])[bbox[0]:bbox[1],bbox[2]:bbox[3]]
-
-        f1 = os.path.join(folder, "Input")
-        path = os.path.join(f1, name)
-        cv2.imwrite(path, original)
-  
-    f2 = os.path.join(folder, "Seg")
-    path = os.path.join(f2, name)
-    cv2.imwrite(path, seg)
-
-    if grafo is None or ske is None:
-        image = np.ones_like(seg).astype('uint8') * 0
+        # ----------------------------------------------------------------
+        # Save 1: Original cropped image
+        # ----------------------------------------------------------------
+        original_image = cv2.imread(images[frame_idx])[
+            roi_bounds[0]:roi_bounds[1], 
+            roi_bounds[2]:roi_bounds[3]
+        ]
+        input_folder = os.path.join(output_folder, "Input")
+        input_path = os.path.join(input_folder, image_name)
+        cv2.imwrite(input_path, original_image)
+    
+    # ----------------------------------------------------------------
+    # Save 2: Binary segmentation mask
+    # ----------------------------------------------------------------
+    seg_folder = os.path.join(output_folder, "Seg")
+    seg_path = os.path.join(seg_folder, image_name)
+    cv2.imwrite(seg_path, segmentation_mask)
+    
+    # ----------------------------------------------------------------
+    # Save 3: Color-coded root visualization
+    # ----------------------------------------------------------------
+    if graph is None or graph is False or skeleton_overlay is None:
+        # No valid graph - save black image
+        colored_image = np.zeros_like(segmentation_mask).astype('uint8')
+        # Convert to 3-channel for consistency
+        colored_image = np.stack([colored_image] * 3, axis=-1)
     else:
-        image = plot_seg(grafo, ske)
-
-    f3 = os.path.join(folder, "SegMulti")
-    path = os.path.join(f3, name)
-    cv2.imwrite(path, image)
+        # Create color visualization from graph
+        colored_image = plot_segmentation_overlay(graph, skeleton_overlay)
+    
+    segmulti_folder = os.path.join(output_folder, "SegMulti")
+    segmulti_path = os.path.join(segmulti_folder, image_name)
+    cv2.imwrite(segmulti_path, colored_image)
     
     return
-
-
-
-
-
-        
-

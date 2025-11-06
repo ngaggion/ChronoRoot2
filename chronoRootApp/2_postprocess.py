@@ -57,19 +57,33 @@ if __name__ == "__main__":
                 try:
                     pixel_size = metadata['pixel_size']
                 except:
-                    image_path = metadata['ImagePath']
-                    images = load_path(image_path, '*.png')
-                    
-                    k = 0
-                    for image in images:
-                        qr = qr_detect(image)
-                        if qr is not None:
-                            pixel_size = 10 / get_pixel_size(qr[0])
-                            break
-                        k+=1
-                        if k > 20:
-                            pixel_size = 0.04
-                            break
+                    # check if video has QR
+                    try:
+                        conf['videoHasQRbutton']
+                    except:
+                        conf['videoHasQRbutton'] = True
+                        conf['knownDistance'] = ""
+                        conf['pixelDistance'] = ""
+                        
+                    if not conf['videoHasQRbutton']:
+                        # manual calibration
+                        knownDistance = float(conf['knownDistance'])
+                        pixelDistance = float(conf['pixelDistance'])
+                        pixel_size = knownDistance / pixelDistance
+                    else:
+                        image_path = metadata['ImagePath']
+                        images = load_path(image_path, '*.png')
+                        
+                        k = 0
+                        for image in images:
+                            qr = qr_detect(image)
+                            if qr is not None:
+                                pixel_size = 10 / get_pixel_size(qr[0])
+                                break
+                            k+=1
+                            if k > 20:
+                                pixel_size = 0.04
+                                break
                         
                 for plant in plants:
                     results = load_path(plant, '*')
