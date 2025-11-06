@@ -52,6 +52,12 @@ def setupPlantAnalysis(conf, replicate):
     # Load image and segmentation file paths
     image_paths, segmentation_paths = getImages(conf)
     
+    # Limit the images loaded to the maximum specified in conf
+    processingLimit = conf.get('processingLimit', None)
+    if processingLimit is not None:
+        image_paths = image_paths[: processingLimit * 24 * 4]
+        segmentation_paths = segmentation_paths[: processingLimit * 24 * 4]
+
     if not replicate:
         roi_bounds, seed_position = getROIandSeed(conf, image_paths, segmentation_paths)
         
@@ -153,7 +159,14 @@ def plantAnalysis(conf, replicate=False):
                 branch_points
             )
             #graph, skeleton, skeleton_overlay = trimGraph(graph, skeleton, skeleton_overlay)
-            graph = graphInit(graph)
+            try:
+                graph = graphInit(graph)
+            except Exception as e:
+                frame_name = getImgName(images[frame_idx], conf)
+                saveProps(frame_name, frame_idx, False, csv_writer, 0)
+                saveImages(conf, images, frame_idx, root_mask, None, None)
+                frame_errors.append(0)
+                continue
             
             rsml_tree, lateral_root_count = createTree(conf, frame_idx, images, graph, skeleton, skeleton_overlay)
             
@@ -260,7 +273,7 @@ def plantAnalysis(conf, replicate=False):
                     # Matching failed - decide whether to reinitialize or fail
                     frames_since_start = frame_idx - growth_start_frame
                     
-                    if frames_since_start < 50:
+                    if frames_since_start < 300:
                         # Early in tracking - try reinitializing
                         try:
                             print(f'\nFrame {frame_idx}: Matching failed, reinitializing graph')
