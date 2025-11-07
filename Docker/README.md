@@ -6,19 +6,19 @@ This directory contains the Dockerfile and documentation for the official Chrono
 
 The Docker image `ngaggion/chronoroot` contains a complete environment for running all ChronoRoot 2.0 components:
 
-- nnUNet for segmentation (in the `base` conda environment)
-- Standard Root Phenotyping Interface (in the `ChronoRootInterface` conda environment)
-- Screening Interface (in the `ChronoRootInterface` conda environment)
-- Functional PCA analysis tools (in the `FDA` conda environment)
+- nnUNetv2 for AI-powered segmentation
+- Standard Root Phenotyping Interface for detailed individual plant analysis
+- Screening Interface for high-throughput batch processing
+- Functional PCA analysis tools (scikit-fda)
 - All necessary dependencies and libraries
 - Pre-downloaded nnUNet models
 
-The image is based on `pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime` and uses three separate conda environments to manage different components of the system.
+The image is based on `pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime` and uses a single unified conda environment (`ChronoRoot`) that contains all components, simplifying usage and maintenance.
 
 ## System Requirements
 
 - Docker installed on your system
-- NVIDIA GPU with appropriate drivers (for optimal performance)
+- NVIDIA GPU with appropriate drivers (recommended for segmentation performance)
 - nvidia-docker2 package installed (for GPU acceleration)
 - At least 30GB of free disk space
 - 16GB RAM recommended (8GB minimum)
@@ -29,7 +29,7 @@ The image is based on `pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime` and uses t
 
 Follow the [official Docker installation guide](https://docs.docker.com/get-docker/) for your operating system.
 
-For Ubuntu, you can use the following command:
+For Ubuntu, you can use the following commands:
 
 ```bash
 # Add Docker's official GPG key:
@@ -45,30 +45,12 @@ echo \
   $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 sudo apt-get update
-```
 
-Then, install Docker:
-```bash
+# Install Docker
 sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
-For Windows, ChronoRoot has been tested under Windows Subsystem for Linux, version 2. Please refer to [this link](https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers) for information on how to set up Docker.
-Please, use the command below instead.
-
-```bash
-MOUNT="YOUR_LOCAL_DATA_PATH"
-
-docker run -it --gpus all \
-    -v $MOUNT:/DATA/ \
-    -v /tmp/.X11-unix:/tmp/.X11-unix \
-    -v /mnt/wslg:/mnt/wslg \
-    -e DISPLAY \
-    -e WAYLAND_DISPLAY \
-    -e XDG_RUNTIME_DIR \
-    -e PULSE_SERVER \
-    --shm-size=8gb \
-    ngaggion/chronoroot:latest
-```
+For Windows, ChronoRoot has been tested under Windows Subsystem for Linux, version 2. Please refer to [this link](https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers) for information on how to set up Docker with WSL2.
 
 ### 2. Install NVIDIA Container Toolkit (nvidia-docker2)
 
@@ -116,29 +98,11 @@ Pull the latest version of the ChronoRoot 2.0 Docker image:
 docker pull ngaggion/chronoroot:latest
 ```
 
-## Updating the ChronoRoot 2.0 Image
-
-If you want to update the nnUNet models and github repo locally, you can build the image from the `Update` directory:
-
-```bash
-cd Docker/Update
-docker build -t ngaggion/chronoroot:latest .
-```
-
 ## Running ChronoRoot 2.0
 
-### Basic Usage
+### Linux Systems
 
-For command-line only usage (e.g., running segmentation without GUI):
-
-```bash
-MOUNT="YOUR_LOCAL_DATA_PATH"
-docker run -it --gpus all -v $MOUNT:/DATA/ ngaggion/chronoroot:latest
-```
-
-### With Graphical Interface
-
-To run ChronoRoot 2.0 with the graphical interfaces, you need to enable X11 forwarding:
+For Linux systems, you need to enable X11 forwarding to use the graphical interfaces:
 
 ```bash
 # Allow Docker to access X server
@@ -150,181 +114,166 @@ docker run -it --gpus all \
     -v $MOUNT:/DATA/ \
     -e DISPLAY=$DISPLAY \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
+    --shm-size=8gb \
     ngaggion/chronoroot:latest
 
-# Restrict X server access when done
+# When finished, restrict X server access
 xhost -local:docker
 ```
 
+### Windows Systems (WSL2)
+
+For Windows Subsystem for Linux 2, use the following command:
+
+```bash
+MOUNT="YOUR_LOCAL_DATA_PATH"
+
+docker run -it --gpus all \
+    -v $MOUNT:/DATA/ \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v /mnt/wslg:/mnt/wslg \
+    -e DISPLAY \
+    -e WAYLAND_DISPLAY \
+    -e XDG_RUNTIME_DIR \
+    -e PULSE_SERVER \
+    --shm-size=8gb \
+    ngaggion/chronoroot:latest
+```
+
+### Without GPU
+
+If you don't have an NVIDIA GPU or want to run without GPU acceleration, simply remove the `--gpus all` flag:
+
+```bash
+docker run -it \
+    -v $MOUNT:/DATA/ \
+    -e DISPLAY=$DISPLAY \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    --shm-size=8gb \
+    ngaggion/chronoroot:latest
+```
+
+> **Note**: Segmentation will be significantly slower without GPU acceleration.
+
 ## Usage Inside the Container
 
-Once inside the container, you'll be in the ChronoRootInterface environment. You can:
+Once inside the container, you'll automatically be in the `ChronoRoot` conda environment. The container includes convenient aliases for quick access to each component:
 
-### Run the Standard Interface
+### Quick Access with Aliases
 
 ```bash
-# Make sure you're in the ChronoRootInterface environment
-conda activate ChronoRootInterface
+chronoroot     # Launch Standard Root Phenotyping Interface
+screening      # Launch High-throughput Screening Interface
+segmentation   # Launch Segmentation Interface
+```
 
-# Start the Standard Interface
-cd /app/ChronoRoot2/chronoRootApp
+### Manual Activation
+
+If you prefer to activate manually or the aliases don't work:
+
+#### Standard Root Phenotyping Interface
+
+```bash
+conda activate ChronoRoot
+cd /app/chronoRootApp
 python run.py
 ```
 
-### Run the Screening Interface
+#### Screening Interface
 
 ```bash
-# Make sure you're in the ChronoRootInterface environment
-conda activate ChronoRootInterface
-
-# Start the Screening Interface
-cd /app/ChronoRoot2/chronoRootScreeningApp
+conda activate ChronoRoot
+cd /app/chronoRootScreeningApp
 python run.py
 ```
 
-### Run the Segmentation Pipeline
+#### Segmentation Pipeline
 
 ```bash
-# Switch to the base environment where nnUNet is installed
-conda activate base
-
-# Go to segmentation directory
-cd /app/ChronoRoot2/segmentationApp
-
-# Edit test.sh to specify your input/output paths
-nano test.sh
-
-# Run segmentation
-./test.sh
+conda activate ChronoRoot
+cd /app/segmentationApp
+python run.py
 ```
 
 ## Data Management
 
-The Docker container mounts your local directory to `/DATA/` inside the container. This is the recommended location for storing your input videos and output results.
+The Docker container mounts your local directory to `/DATA/` inside the container. The mounted directory should contain your videos, projects, and results.
 
 Example directory structure:
 
 ```
 /DATA/
-├── input_videos/          # Place your raw videos here <- Segmentations will be stored within them
-└── analysis_results/      # Analysis results will be stored here
+├── Videos/                # Place your raw videos here
+│   ├── experiment1/
+│   └── experiment2/
+├── Projects/              # Analysis projects will be created here
+│   ├── project1/
+│   └── project2/
+└── Results/               # Final results and reports
 ```
+
+**Important Notes:**
+- Segmentation results are stored within the video directories
+- Analysis projects can be created anywhere but `/DATA/Projects/` is recommended
+- All data in `/DATA/` persists between container runs
 
 ## Docker Image Structure
 
-The image is built with three conda environments:
+The image uses a single unified conda environment called `ChronoRoot` that contains:
 
-1. **Base environment**: Contains nnUNet for segmentation
-2. **ChronoRootInterface**: Contains dependencies for both user interfaces
-3. **FDA**: Contains libraries for Functional Principal Component Analysis
+- Python 3.13.9
+- PyQt 5.15.11 for graphical interfaces
+- nnUNetv2 2.6.2 for segmentation
+- scikit-fda 0.10.1 for functional data analysis
+- All analysis dependencies (pandas, seaborn, scipy, etc.)
 
-## Dockerfile Breakdown
-
-```dockerfile
-FROM pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime
-```
-- Base image with PyTorch and CUDA 11.8 support
-
-```dockerfile
-RUN apt-get update && \
-    apt-get install -y wget git python3-pyqt5 nano gedit
-```
-- Installs system dependencies and useful utilities
-
-```dockerfile
-RUN git clone https://github.com/ngaggion/nnUNet /nnUNet
-WORKDIR /nnUNet
-RUN /opt/conda/bin/conda run pip install -e .
-```
-- Installs the modified nnUNet package in the base environment
-
-```dockerfile
-RUN /opt/conda/bin/conda create -y -n ChronoRootInterface python=3.8.2 \
-    graph-tool=2.29 pyqt=5.9.2 numpy=1.18.1 scikit-image=0.16.2 pandas=1.0.3 seaborn=0.12.2 -c conda-forge/label/cf202003 && \
-    /opt/conda/bin/conda install -y -n ChronoRootInterface -c conda-forge pyzbar pip
-```
-- Creates the ChronoRootInterface environment with precise dependency versions
-- Note the use of specific conda-forge channel (cf202003) for compatibility
-
-```dockerfile
-RUN /opt/conda/bin/conda create -y -n FDA && \
-    /opt/conda/bin/conda install -y -n FDA -c conda-forge scikit-fda scipy pandas matplotlib seaborn ipykernel
-```
-- Creates the FDA environment for functional data analysis
-
-```dockerfile
-RUN git clone https://github.com/ngaggion/ChronoRoot2.git /app
-```
-- Clones the ChronoRoot 2.0 repository into the /app directory
-
-```dockerfile
-WORKDIR /app/Segmentation
-RUN wget https://github.com/git-lfs/git-lfs/releases/download/v3.5.1/git-lfs-linux-amd64-v3.5.1.tar.gz && \
-    tar -xvf git-lfs-linux-amd64-v3.5.1.tar.gz && \
-    [...] \
-    git clone https://huggingface.co/datasets/ngaggion/ChronoRoot_nnUNet
-```
-- Installs git-lfs and downloads pre-trained segmentation models
-
-## Building the Image
-
-If you want to build the Docker image locally:
-
-```bash
-cd Docker
-docker build -t chronoroot:latest .
-```
-
-## Customization
-
-If you need to adapt the image for different hardware requirements, you can modify the base image in the first line:
-
-```dockerfile
-FROM pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime
-```
-
-For example, to use CUDA 12.1:
-
-```dockerfile
-FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
-```
-
-## Working with the Pre-installed Models
-
-The container comes with pre-downloaded nnUNet models from Hugging Face. These models are located in:
-
-```
-/app/Segmentation/ChronoRoot_nnUNet
-```
-
-## Getting Updates
-
-To update to the latest version of ChronoRoot 2.0:
-
-```bash
-# Pull the latest image
-docker pull ngaggion/chronoroot:latest
-
-# Inside the container, update the code
-git -C /app/ChronoRoot2 pull
-```
-
-## Available Tools
-
-The Docker container includes several useful utilities:
-
-- `nano` and `gedit` text editors for file editing
-- `git` for version control
-- `git-lfs` for handling large files (e.g., models)
+This unified environment simplifies usage and eliminates the need to switch between environments.
 
 ## Troubleshooting
 
-If you encounter issues with the graphical interface, make sure:
-- X11 forwarding is properly configured
-- Your NVIDIA drivers are compatible with CUDA 11.8
-- The container has access to your GPU
+### Display Issues
 
-For GPU memory errors, you can try:
-- Reducing batch size in segmentation
-- Processing videos in smaller segments
-- Using a machine with more GPU memory
+If the graphical interface doesn't appear:
+
+1. **On Linux**: Verify X11 forwarding is enabled
+   ```bash
+   xhost +local:docker
+   ```
+
+2. **On WSL2**: Ensure WSLg is properly configured
+   - Update to the latest WSL version: `wsl --update`
+   - Verify display variables are set correctly
+
+### GPU Issues
+
+If GPU is not detected:
+
+1. Verify nvidia-docker2 is installed: `docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu20.04 nvidia-smi`
+2. Check NVIDIA drivers are compatible with CUDA 11.8
+3. Ensure Docker daemon has been restarted after installing nvidia-docker2
+
+### Memory Issues
+
+If you encounter out-of-memory errors:
+
+- Increase `--shm-size` parameter (default is 8gb)
+  ```bash
+  docker run -it --gpus all --shm-size=16gb [...]
+  ```
+
+### Permission Issues
+
+If you encounter permission errors when accessing `/DATA/`:
+
+```bash
+# On the host system, ensure the mounted directory has correct permissions
+sudo chmod -R 755 /your/data/path
+```
+
+## Getting Help
+
+If you encounter issues not covered here:
+
+1. Check the [main repository issues](https://github.com/ngaggion/ChronoRoot2/issues)
+2. Review the [component-specific documentation](../README.md)
+3. Open a new issue with detailed information about your problem.
