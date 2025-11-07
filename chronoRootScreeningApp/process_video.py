@@ -16,6 +16,10 @@ matplotlib.use('Agg')
 
 from skimage.morphology import skeletonize
 
+# ignore future warnings from pandas
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 class GroupROISelector:
     def __init__(self, image_path: str, group_names: List[str]):
         # Read and normalize image

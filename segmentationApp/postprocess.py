@@ -9,7 +9,6 @@ import pathlib
 import re
 import os
 import numpy as np
-import skimage.io as io
 import cv2
 
 def natural_key(string_):
@@ -109,7 +108,7 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
     print(f"Processing {len(images)} images with {num_classes} classes")
     
     # Initialize accumulator
-    img = io.imread(images[0], as_gray=True)
+    img = cv2.imread(images[0], 0)
     accum = np.zeros((num_classes, *img.shape[:2]), dtype=np.float32)
     
     # Create output directories
@@ -134,7 +133,7 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
                 seg_file = os.path.join(fold_path, image_name)
                 
                 if os.path.exists(seg_file):
-                    seg = io.imread(seg_file, as_gray=True)
+                    seg = cv2.imread(seg_file, 0)
                     # Convert to one-hot encoding
                     for i in range(num_classes):
                         ensemble[i] += (seg == i)
@@ -155,7 +154,7 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
                 print(f"Warning: Segmentation not found for {image_name}")
                 continue
                 
-            seg = io.imread(seg_file, as_gray=True)
+            seg = cv2.imread(seg_file, 0)
             ensemble = np.zeros((num_classes, *seg.shape[:2]), dtype=np.float32)
             for i in range(num_classes):
                 ensemble[i] = (seg == i)
@@ -196,14 +195,14 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
         
         # Save segmentation as PNG with class values
         output_file = os.path.join(output_path, f"{os.path.splitext(image_name)[0]}.png")
-        io.imsave(output_file, segmentation.astype(np.uint8), check_contrast=False)
+        cv2.imwrite(output_file, segmentation.astype(np.uint8))
         
         # Save color visualization
         color_segmentation = colormap[segmentation]
         color_segmentation = color_segmentation[:, :, :3].astype(np.uint8)
         color_file = os.path.join(color_path, f"{os.path.splitext(image_name)[0]}.png")
-        io.imsave(color_file, color_segmentation, check_contrast=False)
-        
+        cv2.imwrite(color_file, color_segmentation)
+
         if (image_idx + 1) % 10 == 0:
             print(f"  Processed {image_idx + 1}/{len(images)} images...")
     

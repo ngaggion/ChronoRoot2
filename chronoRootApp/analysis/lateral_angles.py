@@ -10,6 +10,8 @@ import os
 from .report import load_path as loadPath
 import scipy.stats as stats
 import cv2
+import logging
+logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
 plt.switch_backend('agg')
 
@@ -280,7 +282,7 @@ def dataWork(df, firstDay, lastDay):
     df[columns] = df['Date'].apply(lambda x: pd.Series(x.strftime("%Y-%m-%d-%H-%M").split("-")))
     
     df = df.drop('Date', axis=1)
-    df = df.groupby(['Year', 'Month', 'Day', 'Hour']).mean().reset_index()
+    df = df.groupby(['Year', 'Month', 'Day', 'Hour']).mean(numeric_only=True).reset_index()
     df = df.drop(['Year', 'Month'], axis=1)
     
     df['Day'] = df['Day'].astype(int)
@@ -482,7 +484,7 @@ def makeLateralAnglesPlots(conf):
         subdata = data[data['Time'].isin(hours)]
 
         subdata["First LR tip"] = subdata["First LR tip"].astype(float)
-        subdata = subdata.groupby(['Experiment', 'Plant_id'])["First LR tip"].mean().reset_index()
+        subdata = subdata.groupby(['Experiment', 'Plant_id'])["First LR tip"].mean(numeric_only=True).reset_index()
         subdata = subdata.groupby(['Experiment']).agg({'First LR tip': ['count', 'mean', 'std']})
 
         subdata.columns = [' '.join(col).strip() for col in subdata.columns.values]
@@ -591,7 +593,7 @@ def performStatisticalAnalysisFirstLR(conf, data, metric):
 
             if conf['averagePerPlantStats']:
                 subdata[metric] = subdata[metric].astype(float)
-                subdata = subdata.groupby(['Experiment', 'Plant_id']).mean().reset_index()
+                subdata = subdata.groupby(['Experiment', 'Plant_id']).mean(numeric_only=True).reset_index()
 
             for i in range(0, N_exp-1):
                 for j in range(i+1, N_exp):

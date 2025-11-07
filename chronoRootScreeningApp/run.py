@@ -181,7 +181,7 @@ class AnalysisTab(QWidget):
         
         # Show tracking visualization checkbox
         self.show_tracking_checkbox = QCheckBox('Show tracking visualization')
-        self.show_tracking_checkbox.setChecked(True)
+        self.show_tracking_checkbox.setChecked(False)
         checks_layout.addWidget(self.show_tracking_checkbox)
 
         layout.addLayout(checks_layout)

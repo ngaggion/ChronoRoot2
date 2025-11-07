@@ -54,7 +54,7 @@ def setupPlantAnalysis(conf, replicate):
     
     # Limit the images loaded to the maximum specified in conf
     processingLimit = conf.get('processingLimit', None)
-    if processingLimit is not None:
+    if processingLimit != 0:
         image_paths = image_paths[: processingLimit * 24 * 4]
         segmentation_paths = segmentation_paths[: processingLimit * 24 * 4]
 
