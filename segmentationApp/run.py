@@ -25,7 +25,7 @@ class SegmentationWorker(QThread):
     error = pyqtSignal(str, str)     # folder_path, error_message
     progress = pyqtSignal(str, str)  # folder_path, status_update
 
-    def __init__(self, input_path, robot_name, species="arabidopsis", fast_mode=False, conda_env="base"):
+    def __init__(self, input_path, robot_name, species="arabidopsis", fast_mode=False, conda_env="ChronoRoot"):
         super().__init__()
         self.input_path = Path(input_path)
         self.robot_name = robot_name
@@ -152,7 +152,7 @@ class PostprocessWorker(QThread):
     error = pyqtSignal(str, str)     # folder_path, error_message
     progress = pyqtSignal(str, str)  # folder_path, status_update
 
-    def __init__(self, input_path, robot_name, species="arabidopsis", alpha_parameter=0.9, conda_env="base"):
+    def __init__(self, input_path, robot_name, species="arabidopsis", alpha_parameter=0.9, conda_env="ChronoRoot"):
         super().__init__()
         self.input_path = Path(input_path)
         self.robot_name = robot_name
@@ -259,7 +259,7 @@ class nnUNetMonitorUI(QMainWindow):
         self.folder_data = {}  # folder_path -> data dict
         self.processing_queue = []  # Simple list for serial processing
         self.alpha_parameter = 0.9  # Default alpha value
-        self.conda_env = "base"  # Default conda environment
+        self.conda_env = "ChronoRoot"  # Default conda environment
         self.fast_mode = False  # Default fast mode setting
         self.species = "arabidopsis"  # Default species
         
@@ -489,7 +489,7 @@ class nnUNetMonitorUI(QMainWindow):
         if os.path.exists('config.json'):
             with open('config.json', 'r') as f:
                 config = json.load(f)
-                self.conda_env = config.get('conda_env', 'base')
+                self.conda_env = config.get('conda_env', 'ChronoRoot')
                 self.species = config.get('species', 'arabidopsis')
                 self.alpha_parameter = config.get('alpha', 0.85)
                 self.fast_mode = config.get('fast_mode', False)

@@ -5,8 +5,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import signal
 import subprocess
-import json
 from data_processing.fourier import process_data, plot_fourier_summary, store_results
+from data_processing.fpca import run_fpca_analysis as run_fpca_func
+import argparse
 
 class PlantGrowthAnalyzer:
     """Analyzes multiple plant growth parameters and generates plots."""
@@ -15,7 +16,7 @@ class PlantGrowthAnalyzer:
         "HypocotylLength", "Area", "MainRootLength", "TotalRootLength", "DenseRootArea"
     ]
     
-    def __init__(self, data=None, output_dir='.', conda_env="FDA", add_time_before_photo=0):
+    def __init__(self, data=None, output_dir='.', add_time_before_photo=0):
         """
         Initialize the analyzer.
         
@@ -27,7 +28,6 @@ class PlantGrowthAnalyzer:
         self.data = data
         self.base_dir = output_dir
         self.plot_dirs = {}
-        self.conda_env = conda_env
         self.add_time_before_photo = add_time_before_photo
         self.all_results = {}
         
@@ -486,53 +486,9 @@ class PlantGrowthAnalyzer:
         plt.close()
         return saved_paths
 
-    def _build_fpca_command(self, input_path, output_dir, x_col, y_cols, components, normalize=False):
-        """
-        Create standardized command for FPCA analysis.
-        
-        Args:
-            input_path: Path to the input data file
-            output_dir: Directory to save FPCA results
-            x_col: Column name for x-axis (time)
-            y_cols: Column name(s) for y-axis (parameters to analyze)
-            components: Number of FPCA components to compute
-            normalize: Whether to apply inverse rank normalization
-            
-        Returns:
-            List containing the command and arguments for subprocess
-        """
-        # Convert y_cols to list if it's a single string
-        if isinstance(y_cols, str):
-            y_cols = [y_cols]
-        
-        command = [
-            "conda", "run", "-n", self.conda_env, "python", "data_processing/fpca.py",
-            "--file", input_path,
-            "--xcol", x_col,
-            "--ycols"
-        ]
-        
-        # Add y_cols as separate arguments
-        command.extend(y_cols)
-        
-        command.extend([
-            "--output", output_dir,
-            "--components", str(components),
-            "--groupby", "Group",
-            "--id_col", "UID"
-        ])
-        
-        if normalize:
-            command.append("--normalize")
-        
-        return command
-
     def run_fpca_analysis(self, parameter, components=2, normalize=False):
         """
         Run FPCA analysis on hourly data results for a specific parameter.
-        
-        This method should be called after the parameter data has been processed
-        and hourly data has been generated.
         
         Args:
             parameter: Plant parameter to analyze
@@ -556,22 +512,26 @@ class PlantGrowthAnalyzer:
         )
         os.makedirs(fpca_output_dir, exist_ok=True)
         
-        # Build command for FPCA analysis
-        command = self._build_fpca_command(
-            hourly_data_path,
-            fpca_output_dir,
-            "SyncHour",
-            [parameter, "GrowthRate"],
-            components,
-            normalize
+        # Create arguments object for FPCA
+        fpca_args = argparse.Namespace(
+            file=hourly_data_path,
+            xcol="SyncHour",
+            ycols=[parameter, "GrowthRate"],
+            output=fpca_output_dir,
+            normalize=normalize,
+            components=components,
+            groupby="Group",
+            id_col="UID",
+            figsize=[8, 16],
+            dpi=300
         )
         
         # Run the FPCA analysis
         print(f"Running FPCA analysis for {parameter}...")
         try:
-            subprocess.run(command, check=True)
+            run_fpca_func(fpca_args)
             print(f"FPCA analysis completed for {parameter}. Results saved to {fpca_output_dir}")
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             error_msg = f"Error running FPCA analysis for {parameter}: {str(e)}"
             print(error_msg)
             with open(os.path.join(fpca_output_dir, "error_log.txt"), "w") as f:

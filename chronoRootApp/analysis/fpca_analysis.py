@@ -15,9 +15,10 @@ import json
 import sys
 plt.switch_backend('agg')
 
-if __name__ == "__main__":
-    conf_path = sys.argv[1]
+import logging
+logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
+def performFPCA(conf_path):
     COLUMNS = [
     'MainRootLength (mm)',
     'LateralRootsLength (mm)',

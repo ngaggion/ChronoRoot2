@@ -27,6 +27,8 @@ import numpy as np
 import cv2
 import networkx as nx
 import json
+import logging
+logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
 # remove FutureWarning
 import warnings
@@ -119,7 +121,7 @@ def performStatisticalAnalysis(conf, data, metric):
             subdata = data[data['ElapsedTime (h)'].isin(hours)]
 
             if conf['averagePerPlantStats']:
-                subdata = subdata.groupby(['Experiment', 'Plant_id']).mean().reset_index()
+                subdata = subdata.groupby(['Experiment', 'Plant_id']).mean(numeric_only=True).reset_index()
     
             subdata['Experiment'] = subdata['Experiment'].astype(str)
             
@@ -167,7 +169,7 @@ def generateTableTemporal(conf, data):
         end = int(min(end, data['ElapsedTime (h)'].max()))
         hours = np.arange(dt * step, end)
         subdata = data[data['ElapsedTime (h)'].isin(hours)]
-        subdata = subdata.groupby(['Experiment', 'Plant_id']).mean().reset_index()
+        subdata = subdata.groupby(['Experiment', 'Plant_id']).mean(numeric_only=True).reset_index()
         subdata = subdata.groupby(['Experiment']).agg({'MainRootLength (mm)': ['count', 'mean', 'std'],
                                                       'LateralRootsLength (mm)': ['mean', 'std'], 
                                                       'TotalLength (mm)': ['mean', 'std'], 

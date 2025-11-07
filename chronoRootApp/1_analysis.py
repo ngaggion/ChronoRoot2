@@ -48,7 +48,7 @@ def preview(conf):
 
     # Limit the images loaded to the maximum specified in conf
     processingLimit = conf.get('processingLimit', None)
-    if processingLimit is not None:
+    if processingLimit != 0:
         n = min(n, processingLimit * 24 * 4)
         N = min(n, N)
     

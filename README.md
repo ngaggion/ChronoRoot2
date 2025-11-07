@@ -15,9 +15,9 @@ ChronoRoot 2.0 is an integrated open-source platform that combines affordable ha
 - **Comprehensive measurements** including novel gravitropic response parameters
 - **Dual specialized interfaces** for both detailed architectural analysis and high-throughput screening
 
-ChronoRoot 2.0 is thought as a two-step phenotyping solution: first, the segmentation of plant structures using deep learning models, and second, the analysis of the segmented data through user-friendly interfaces. Depending on the research needs, users can choose between a detailed analysis of individual plants or a high-throughput screening of multiple plants.
+ChronoRoot 2.0 is designed as a two-step phenotyping solution: first, the segmentation of plant structures using deep learning models, and second, the analysis of the segmented data through user-friendly interfaces. Depending on the research needs, users can choose between a detailed analysis of individual plants or a high-throughput screening of multiple plants.
 
-![Figure](Documents/images/usage_diagram.png)]
+![Figure](Documents/images/usage_diagram.png)
 
 ## Repository Structure
 
@@ -26,8 +26,10 @@ ChronoRoot2
 ├── chronoRootApp              # Standard Root Phenotyping Interface
 ├── chronoRootScreeningApp     # High-throughput Screening Interface
 ├── segmentationApp            # AI-based segmentation tools (nnUNet)
+├── environment.yml            # Conda environment specification
+├── install.sh                 # Automated installation script
 ├── Docker                     # Dockerfile for containerized deployment
-└── Documentation              # User guides and technical documentation
+└── Documents                  # User guides and technical documentation
 ```
 
 Each component has its own dedicated documentation:
@@ -37,7 +39,7 @@ Each component has its own dedicated documentation:
 - [Segmentation Module](segmentationApp/README.md) - AI-powered plant structure identification
 - [Docker Guide](Docker/README.md) - Complete instructions for Docker-based deployment
 
-PDF usage tutorials were incorporated in Documents for easy access, those make use of the Demo dataset included in the Docker image.
+PDF usage tutorials were incorporated in Documents for easy access. These make use of the Demo dataset included in the Docker image.
 
 - [Standard Interface Tutorial](Documents/StandardInterfaceTutorial.pdf)
 - [Screening Interface Tutorial](Documents/ScreeningTutorial.pdf)
@@ -49,19 +51,25 @@ PDF usage tutorials were incorporated in Documents for easy access, those make u
 
 ChronoRoot 2.0 can be installed and used in three ways:
 
-1. **Docker Container (Recommended)**: Complete environment with all dependencies
-2. **Local Installation**: Separate installation of interfaces and segmentation tools
-3. **Singularity Container**: Alternative for environments without sudo access
+1. **Docker Container (Recommended)**: Complete environment with all dependencies pre-configured
+2. **Local Installation**: Quick conda-based setup for Ubuntu/macOS systems
+3. **Singularity Container**: Alternative for HPC environments without Docker access
 
-### Docker Installation (Recommended)
 
-Pull the Docker image from Docker Hub:
+
+## Docker Installation (Recommended)
+
+Docker provides the most reliable installation method across all platforms, ensuring an identical environment regardless of your operating system.
+
+### Pull the Docker Image
 
 ```bash
 docker pull ngaggion/chronoroot:latest
 ```
 
-For Linux, enable X11 forwarding for the user interface:
+### Running on Linux
+
+For Linux systems, enable X11 forwarding for the graphical user interface:
 
 ```bash
 xhost +local:docker
@@ -86,8 +94,11 @@ After use, restrict X server access:
 xhost -local:docker
 ```
 
-For Windows, ChronoRoot has been tested under Windows Subsystem for Linux, version 2. Please refer to [this link](https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers) for information on how to set up Docker.
-Please, use the command below instead.
+### Running on Windows (WSL2)
+
+ChronoRoot has been tested under Windows Subsystem for Linux, version 2. Please refer to [this link](https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers) for information on how to set up Docker with WSL2.
+
+Use the command below for WSL2:
 
 ```bash
 MOUNT="YOUR_LOCAL_DATA_PATH"
@@ -104,52 +115,75 @@ docker run -it --gpus all \
     ngaggion/chronoroot:latest
 ```
 
-> **Note**: For GPU support, you need to install nvidia-docker2. See the [Docker documentation](Docker/README.md) for detailed instructions.
+> **Note**: If you don't have a GPU, remove the `--gpus all` flag from the command above. For GPU support, you need to install nvidia-docker2. See the [Docker documentation](Docker/README.md) for detailed instructions.
 
-#### Convenient Aliases (Docker)
 
-To simplify usage, these aliases were added to the Docker container's bashrc:
+### Convenient Aliases (Docker)
 
-``` bash
-alias segmentation='source activate ChronoRootInterface; cd /app/segmentationApp; python run.py'
-alias chronoroot='source activate ChronoRootInterface; cd /app/chronoRootApp; python run.py'
-alias screening='source activate ChronoRootInterface; cd /app/chronoRootScreeningApp; python run.py'
+To simplify usage, these aliases are pre-configured in the Docker container:
+
+```bash
+alias segmentation='conda activate ChronoRoot; cd /app/segmentationApp; python run.py'
+alias chronoroot='conda activate ChronoRoot; cd /app/chronoRootApp; python run.py'
+alias screening='conda activate ChronoRoot; cd /app/chronoRootScreeningApp; python run.py'
 ```
 
 With these aliases, you can simply use `segmentation`, `chronoroot`, or `screening` commands instead of the full activation and navigation commands.
 
-### Local Installation
+## Local Installation
 
-#### 1. Interface Installation
+**Platform Compatibility**: Local installation has been thoroughly tested on Ubuntu. **For other systems, we strongly recommend using Docker** to avoid potential compatibility issues.
 
-```bash
-conda create -y -n ChronoRootInterface python=3.8
-conda activate ChronoRootInterface
-conda install -c "conda-forge/label/cf202003" graph-tool=2.29 pyqt=5.9.2
-conda install numpy scikit-image pandas seaborn
-conda install -c conda-forge pyzbar
-pip install opencv-python filterpy lifelines
-```
+### Quick Installation (Ubuntu)
 
-For Functional PCA analysis:
+Clone the repository and run the automated installer:
 
 ```bash
-conda create -n FDA
-conda activate FDA
-conda install -c conda-forge scikit-fda scipy pandas matplotlib seaborn ipykernel
+git clone https://github.com/ngaggion/ChronoRoot2.git
+cd ChronoRoot2
+bash install.sh
+conda activate ChronoRoot
 ```
 
-#### 2. nnUNet Installation
+The installer will:
+1. Install required system dependencies (zbar library)
+2. Create a conda environment with all necessary packages
+3. Install Python dependencies via pip
 
-Follow the instructions in the [official nnUNet repository](https://github.com/MIC-DKFZ/nnUNet).
+### Manual Conda Installation
 
-### Singularity Installation
+If you prefer to install manually or need to customize the installation:
 
-For environments without sudo access:
+```bash
+conda create -y -n ChronoRoot python=3.13.9 \
+    networkx=3.5 \
+    pyqt=5.15.11 \
+    numpy=2.2 \
+    scikit-image=0.25.2 \
+    pandas=2.3.3 \
+    seaborn=0.13.2 \
+    filterpy=1.4.5 \
+    lifelines=0.30.0 \
+    scikit-fda=0.10.1 \
+    scipy=1.16.3 \
+    pyzbar=0.1.9 \
+    -c conda-forge
+
+conda activate ChronoRoot
+pip install opencv-python lapx==0.9.2 nnunetv2==2.6.2
+```
+
+> **Note**: This single environment handles all functionality including segmentation, analysis, and FPCA. No separate environments are needed.
+
+## Singularity Installation
+
+For high-performance computing environments where Docker is not available:
 
 ```bash
 singularity build ChronoRoot.simg docker://ngaggion/chronoroot
 ```
+
+This creates a Singularity container from the Docker image, providing the same functionality in HPC environments.
 
 ## Hardware and Module Controller
 
@@ -162,7 +196,9 @@ ChronoRoot 2.0 is designed to work with an affordable custom hardware setup that
 
 For detailed hardware specifications and assembly instructions, see the [ChronoRootModuleHardware repository](https://github.com/ThomasBlein/ChronoRootModuleHardware).
 
-For the controller of the Raspberry Pi 3B, see the [ChronoRoot Module Controller repository](https://github.com/ThomasBlein/ChronoRootControl).
+For the controller software for the Raspberry Pi 3B, see the [ChronoRoot Module Controller repository](https://github.com/ThomasBlein/ChronoRootControl).
+
+
 
 ## Usage
 
@@ -170,14 +206,14 @@ For the controller of the Raspberry Pi 3B, see the [ChronoRoot Module Controller
 
 For detailed architectural analysis of individual plants:
 
-**With aliases (Docker):**
+**With Docker aliases:**
 ```bash
 chronoroot
 ```
 
-**Manual activation:**
+**Manual activation (local installation):**
 ```bash
-conda activate ChronoRootInterface
+conda activate ChronoRoot
 cd chronoRootApp
 python run.py
 ```
@@ -190,14 +226,14 @@ For more details on using this interface, see the [Standard Interface documentat
 
 For high-throughput analysis of multiple plants:
 
-**With aliases (Docker):**
+**With Docker aliases:**
 ```bash
 screening
 ```
 
-**Manual activation:**
+**Manual activation (local installation):**
 ```bash
-conda activate ChronoRootInterface
+conda activate ChronoRoot
 cd chronoRootScreeningApp
 python run.py
 ```
@@ -208,16 +244,16 @@ For more details on using this interface, see the [Screening Interface documenta
 
 ### Segmentation
 
-To run the segmentation pipeline:
+To run the AI-powered segmentation pipeline:
 
-**With aliases (Docker):**
+**With Docker aliases:**
 ```bash
 segmentation
 ```
 
-**Manual activation:**
+**Manual activation (local installation):**
 ```bash
-conda activate ChronoRootInterface
+conda activate ChronoRoot
 cd segmentationApp
 python run.py
 ```
@@ -230,10 +266,15 @@ For detailed instructions on the segmentation process, see the [Segmentation doc
 
 A typical ChronoRoot 2.0 workflow involves:
 
-1. **Data Acquisition**: Collect temporal sequences of plant images using the hardware setup
-2. **Segmentation**: Process raw images to identify plant structures using the nnUNet models (`segmentation` command)
-3. **Analysis**: Analyze the segmented data with either the Standard (`chronoroot` command) or Screening (`screening` command) interface
-4. **Report Generation**: Generate comprehensive reports with statistical analysis and visualizations
+1. **Data Acquisition**: Collect temporal sequences of plant images using the ChronoRoot hardware setup. Images are captured at regular intervals (typically every 15 minutes) over several days.
+
+2. **Segmentation**: Process raw images to identify plant structures using the nnUNet models. This step uses deep learning to automatically detect and segment different plant organs.
+
+3. **Analysis**: Analyze the segmented data with either:
+   - **Standard Interface** (`chronoroot` command): For detailed analysis of individual plants with manual quality control
+   - **Screening Interface** (`screening` command): For high-throughput automated analysis of multiple plants
+
+4. **Report Generation**: Generate comprehensive reports with statistical analysis, visualizations, and comparisons between experimental groups.
 
 ## Citation
 
