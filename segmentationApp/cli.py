@@ -42,7 +42,7 @@ def main():
     parser.add_argument('--postprocess-only', action='store_true',
                        help='Only run postprocessing (skip segmentation)')
     parser.add_argument('--alpha', type=float,
-                       help='Alpha parameter for postprocessing (default: 0.85 for arabidopsis, 0.99 for tomato)')
+                       help='Alpha parameter for postprocessing (default: 0.85 for arabidopsis, 0.50 for tomato)')
 
     args = parser.parse_args()
     

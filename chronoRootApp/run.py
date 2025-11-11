@@ -14,6 +14,8 @@ import json
 import pathlib
 import re
 import shutil
+import glob
+import os
 from PIL import Image
 
 def natural_keys(text):
@@ -448,13 +450,47 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         return
     
     def analysis(self):
-        """Run analysis with calibration validation"""
-        # Validate calibration settings before proceeding
+        """Run analysis with validation"""
+        
+        # Get and validate video folder
+        video_folder = self.videoField.text()
+        
+        if not video_folder:
+            QtWidgets.QMessageBox.warning(None, 'Error', 'Please specify a video folder first!')
+            return
+            
+        if not os.path.exists(video_folder):
+            QtWidgets.QMessageBox.warning(None, 'Error', 'Video folder does not exist!\nPlease check the path.')
+            return
+        
+        # Check for PNG images
+        images = glob.glob(os.path.join(video_folder, "*.png"))
+        
+        if not images:
+            QtWidgets.QMessageBox.warning(
+                None, 'Error', 
+                'No images found in the video folder!\nPlease check the path to the folder where the images are located.'
+            )
+            return
+        
+        # Check for segmentation files (required for analysis)
+        seg_folder = os.path.join(video_folder, "Segmentation", "Ensemble")
+        seg_files = glob.glob(os.path.join(seg_folder, "*.png")) if os.path.exists(seg_folder) else []
+        
+        if not seg_files:
+            QtWidgets.QMessageBox.warning(
+                None, 'Error',
+                f'Found {len(images)} images but no segmentation files!\n\n'
+                'Segmentation is required for analysis.\n'
+                'Please ensure the images have been properly segmented first.'
+            )
+            return
+        
+        # Validate calibration settings
         if not self.videoHasQRbutton.isChecked():                
             if not self.knownDistanceField.text() or not self.pixelDistanceField.text():
                 QtWidgets.QMessageBox.warning(
-                    None, 
-                    'Error', 
+                    None, 'Error', 
                     'Please provide both known distance and pixel distance for manual calibration,\n'
                     'or enable "Video has QR codes"!'
                 )
@@ -464,24 +500,18 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
                 known_dist = float(self.knownDistanceField.text())
                 pixel_dist = int(self.pixelDistanceField.text())
                 if known_dist <= 0 or pixel_dist <= 0:
-                    QtWidgets.QMessageBox.warning(
-                        None, 
-                        'Error', 
-                        'Calibration values must be positive numbers!'
-                    )
+                    QtWidgets.QMessageBox.warning(None, 'Error', 'Calibration values must be positive numbers!')
                     return
             except ValueError:
                 QtWidgets.QMessageBox.warning(
-                    None, 
-                    'Error', 
-                    'Invalid calibration values!\n'
-                    'Known distance must be a number, pixel distance must be an integer.'
+                    None, 'Error', 
+                    'Invalid calibration values!\nKnown distance must be a number, pixel distance must be an integer.'
                 )
                 return
         
+        # All validations passed, run analysis
         self.saveFieldsIntoJson()
         subprocess.Popen(["python", "1_analysis.py"])
-
     def getBBOX(self):
         self.saveFieldsIntoJson()
         subprocess.Popen(["python", "1_analysis.py", "--getbbox"])
@@ -504,7 +534,45 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         subprocess.Popen(["python", "1_analysis.py", "--config", metadata_path, "--rerun"])
 
     def preview(self):
+        """Preview with validation for images and segmentation"""
+        
+        # Save fields first
         self.saveFieldsIntoJson()
+        
+        # Get and validate video folder path
+        video_folder = self.videoField.text()
+        
+        if not video_folder:
+            QtWidgets.QMessageBox.warning(None, 'Error', 'Please specify a video folder first!')
+            return
+        
+        if not os.path.exists(video_folder):
+            QtWidgets.QMessageBox.warning(None, 'Error', 'Video folder does not exist!\nPlease check the path to the folder.')
+            return
+        
+        # Check for PNG images
+        images = glob.glob(os.path.join(video_folder, "*.png"))
+        
+        if not images:
+            QtWidgets.QMessageBox.warning(
+                None, 'Error', 
+                'No images found in the video folder!\nPlease check the path to the folder where the images are located.'
+            )
+            return
+        
+        # Check for segmentation files in Segmentation/Ensemble folder
+        seg_folder = os.path.join(video_folder, "Segmentation", "Ensemble")
+        seg_files = glob.glob(os.path.join(seg_folder, "*.png")) if os.path.exists(seg_folder) else []
+        
+        if not seg_files:
+            # Images exist but no segmentation found
+            QtWidgets.QMessageBox.warning(
+                None, 'Error',
+                f'Found {len(images)} images but no segmentation files!\n The images may not have been properly segmented.'
+            )
+            return
+        
+        # Launch preview
         subprocess.Popen(["python", "1_analysis.py", "--preview"])
 
     def PostProcess(self):

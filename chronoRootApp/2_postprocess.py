@@ -34,6 +34,19 @@ if __name__ == "__main__":
     print('Post processing started.')
     
     for variety in varieties:
+        rpi = load_path(variety, '*')
+        for rpi in rpi:
+            cam = load_path(rpi, '*')
+            for cam in cam:
+                plants = load_path(cam, '*')
+                for plant in plants:
+                    results = load_path(plant, '*')
+                    if len(results) == 0:
+                        # remove empty plant folder
+                        os.rmdir(plant)
+
+    
+    for variety in varieties:
         print('Processing ' + variety)
         rpi = load_path(variety, '*')
         for rpi in rpi:

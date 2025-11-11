@@ -161,6 +161,7 @@ def plantAnalysis(conf, replicate=False):
             #graph, skeleton, skeleton_overlay = trimGraph(graph, skeleton, skeleton_overlay)
             try:
                 graph = graphInit(graph)
+                rsml_tree, lateral_root_count = createTree(conf, frame_idx, images, graph, skeleton, skeleton_overlay)
             except Exception as e:
                 frame_name = getImgName(images[frame_idx], conf)
                 saveProps(frame_name, frame_idx, False, csv_writer, 0)
@@ -168,12 +169,9 @@ def plantAnalysis(conf, replicate=False):
                 frame_errors.append(0)
                 continue
             
-            rsml_tree, lateral_root_count = createTree(conf, frame_idx, images, graph, skeleton, skeleton_overlay)
-            
             # Success! Store the initial valid frame
             first_valid_frame = frame_idx
             initial_root_mask = root_mask
-            initial_skeleton = skeleton
             initial_skeleton_overlay = skeleton_overlay
             initial_graph = graph
             initial_rsml = rsml_tree

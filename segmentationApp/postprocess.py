@@ -82,7 +82,7 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
     
     # Set default alpha based on method
     if alpha is None:
-        alpha = 0.85 if method == "arabidopsis" else 0.99
+        alpha = 0.85 if method == "arabidopsis" else 0.50
     
     # Get image list from original folder
     images = loadPath(path, ext="*.png")
@@ -216,7 +216,7 @@ def main():
     parser.add_argument("--method", default="arabidopsis", choices=["arabidopsis", "tomato"],
                        help="Postprocessing method to use")
     parser.add_argument("--alpha", type=float, default=None,
-                       help="Temporal accumulation weight (default: 0.85 for arabidopsis, 0.99 for tomato)")
+                       help="Temporal accumulation weight (default: 0.85 for arabidopsis, 0.50 for tomato)")
     parser.add_argument("--num_classes", type=int, default=7,
                        help="Number of segmentation classes")
     parser.add_argument("--seg_path", default="Segmentation",
