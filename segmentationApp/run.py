@@ -219,7 +219,7 @@ class PostprocessWorker(QThread):
             
             alpha = self.alpha_parameter
             if not alpha:
-                alpha = 0.85 if self.species == "arabidopsis" else 0.99
+                alpha = 0.85 if self.species == "arabidopsis" else 0.50
             
             conda_prefix = f"conda run -n {self.conda_env}"
             
@@ -458,7 +458,7 @@ class nnUNetMonitorUI(QMainWindow):
             self.alpha_parameter = 0.85
             self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
         else:  # tomato
-            self.alpha_parameter = 0.99
+            self.alpha_parameter = 0.50
             self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
         self.save_settings()
         self.log_message(f"Species set to: {self.species}")
@@ -548,7 +548,7 @@ class nnUNetMonitorUI(QMainWindow):
         if info is None:
             return True  # No info file, might need re-processing
 
-        stored_alpha = info.get('alpha_parameter', 0.9)
+        stored_alpha = info.get('alpha_parameter', 0.85)
         # Handle case where stored_alpha might be string
         try:
             stored_alpha_float = float(stored_alpha)
