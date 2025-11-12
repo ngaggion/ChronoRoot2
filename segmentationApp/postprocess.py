@@ -82,7 +82,7 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
     
     # Set default alpha based on method
     if alpha is None:
-        alpha = 0.85 if method == "arabidopsis" else 0.50
+        alpha = 0.85 if method == "arabidopsis" else 0.60
     
     # Get image list from original folder
     images = loadPath(path, ext="*.png")
@@ -201,6 +201,8 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
         color_segmentation = colormap[segmentation]
         color_segmentation = color_segmentation[:, :, :3].astype(np.uint8)
         color_file = os.path.join(color_path, f"{os.path.splitext(image_name)[0]}.png")
+        
+        color_segmentation = cv2.cvtColor(color_segmentation, cv2.COLOR_RGB2BGR)
         cv2.imwrite(color_file, color_segmentation)
 
         if (image_idx + 1) % 10 == 0:
@@ -216,7 +218,7 @@ def main():
     parser.add_argument("--method", default="arabidopsis", choices=["arabidopsis", "tomato"],
                        help="Postprocessing method to use")
     parser.add_argument("--alpha", type=float, default=None,
-                       help="Temporal accumulation weight (default: 0.85 for arabidopsis, 0.50 for tomato)")
+                       help="Temporal accumulation weight (default: 0.85 for arabidopsis, 0.60 for tomato)")
     parser.add_argument("--num_classes", type=int, default=7,
                        help="Number of segmentation classes")
     parser.add_argument("--seg_path", default="Segmentation",
