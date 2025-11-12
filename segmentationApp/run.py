@@ -44,7 +44,6 @@ class SegmentationWorker(QThread):
             if self.info_file.exists():
                 with open(self.info_file, 'r') as f:
                     info_data = json.load(f)
-            
             info_data.update(data_to_update)
             
             with open(self.info_file, 'w') as f:
@@ -170,7 +169,7 @@ class PostprocessWorker(QThread):
             if self.info_file.exists():
                 with open(self.info_file, 'r') as f:
                     info_data = json.load(f)
-            
+                    
             info_data.update(data_to_update)
             
             with open(self.info_file, 'w') as f:
@@ -219,7 +218,7 @@ class PostprocessWorker(QThread):
             
             alpha = self.alpha_parameter
             if not alpha:
-                alpha = 0.85 if self.species == "arabidopsis" else 0.50
+                alpha = 0.85 if self.species == "arabidopsis" else 0.60
             
             conda_prefix = f"conda run -n {self.conda_env}"
             
@@ -269,6 +268,8 @@ class nnUNetMonitorUI(QMainWindow):
         self.init_ui()
         self.load_settings()
         self.setup_timer()
+        
+        self.table_cache = {} 
         
     def init_ui(self):
         self.setWindowTitle("nnUNet Segmentation Monitor")
@@ -387,6 +388,9 @@ class nnUNetMonitorUI(QMainWindow):
             "Postprocess %", "Status", "Alpha Used", "Actions", "Delete"
         ])
         
+        # Make table read-only
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        
         # Set column widths
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -412,13 +416,27 @@ class nnUNetMonitorUI(QMainWindow):
         layout.addWidget(self.log_text)
         
     def setup_timer(self):
-        """Setup single timer for auto-refresh and queue processing every 0.5 seconds"""
+        """Setup timer with less frequent updates when idle"""
         self.timer = QTimer()
         self.timer.timeout.connect(self.timer_update)
-        self.timer.start(500)  # 0.5 seconds
+        
+        # Use different intervals based on activity
+        if self.current_segmentation_worker or self.current_postprocess_worker or self.processing_queue:
+            self.timer.start(500)  # 0.5 seconds when active
+        else:
+            self.timer.start(2000)  # 2 seconds when idle
         
     def timer_update(self):
         """Handle both refresh and queue processing"""
+        # Adjust timer frequency based on activity
+        is_active = bool(self.current_segmentation_worker or self.current_postprocess_worker or self.processing_queue)
+        current_interval = self.timer.interval()
+        
+        if is_active and current_interval != 500:
+            self.timer.setInterval(500)
+        elif not is_active and current_interval != 2000:
+            self.timer.setInterval(2000)
+        
         if self.auto_refresh_enabled:
             self.refresh_data()
         self.process_queue()
@@ -458,7 +476,7 @@ class nnUNetMonitorUI(QMainWindow):
             self.alpha_parameter = 0.85
             self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
         else:  # tomato
-            self.alpha_parameter = 0.50
+            self.alpha_parameter = 0.60
             self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
         self.save_settings()
         self.log_message(f"Species set to: {self.species}")
@@ -539,23 +557,6 @@ class nnUNetMonitorUI(QMainWindow):
             pass
         return None
     
-    def needs_re_postprocess(self, folder_path, current_status):
-        """Check if folder needs re-postprocessing due to alpha change"""
-        if current_status != 'Complete':
-            return False
-            
-        info = self.load_postprocess_info(folder_path)
-        if info is None:
-            return True  # No info file, might need re-processing
-
-        stored_alpha = info.get('alpha_parameter', 0.85)
-        # Handle case where stored_alpha might be string
-        try:
-            stored_alpha_float = float(stored_alpha)
-            return abs(stored_alpha_float - self.alpha_parameter) > 0.001
-        except (ValueError, TypeError):
-            return True # If stored value is invalid, recommend re-processing
-    
     def delete_segmentation_folder(self, folder_path):
         """Delete the segmentation folder completely"""
         try:
@@ -619,130 +620,116 @@ class nnUNetMonitorUI(QMainWindow):
             self.log_message(f"Error scanning robot {robot_name}: {str(e)}")
     
     def analyze_folder(self, folder_path, robot_name):
-        """Analyze a folder to get image count and segmentation progress"""
         data = {
             'path': folder_path,
             'robot': robot_name,
             'total_images': 0,
             'segmentation_progress': 0,
-            'postprocess_progress': 0, 
+            'postprocess_progress': 0,
             'status': 'Not Started',
             'last_error': '',
             'stored_alpha': None,
-            'needs_re_postprocess': False, 
-            'is_actively_processing': False
+            'needs_re_postprocess': False,
         }
         
-        try:
-            # Count total images
-            image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.tiff', '*.tif']
-            total_images = 0
-            for ext in image_extensions:
-                total_images += len(glob.glob(os.path.join(folder_path, ext)))
-                total_images += len(glob.glob(os.path.join(folder_path, ext.upper())))
-            
-            data['total_images'] = total_images
-            
-            if total_images == 0:
-                data['status'] = 'No Images'
-                return data
-            
-            # Check if in queue
-            if any(item['path'] == folder_path for item in self.processing_queue):
-                data['status'] = 'Queued'
-                return data
-            
-            # Check if currently processing
-            is_currently_segmenting = self.current_segmentation_worker and self.current_segmentation_worker.input_path == Path(folder_path)
-            is_currently_postprocessing = self.current_postprocess_worker and self.current_postprocess_worker.input_path == Path(folder_path)
-            data['is_actively_processing'] = is_currently_segmenting or is_currently_postprocessing
-            
-            seg_info = self.load_segmentation_info(folder_path)
-            post_info = self.load_postprocess_info(folder_path)
-            
-            if post_info:
-                data['stored_alpha'] = post_info.get('alpha_parameter', 'Unknown')
-            
-            # Check segmentation progress
-            seg_folder = os.path.join(folder_path, 'Segmentation')
-            if os.path.exists(seg_folder):
-                # Check for error files (seg or postprocess)
-                error_files = (glob.glob(os.path.join(seg_folder, '*.error')) + 
-                               glob.glob(os.path.join(seg_folder, '*.error')))
-                if error_files:
-                    error_content = ""
-                    try:
-                        with open(error_files[0], 'r') as f:
-                            error_content = f.read()
-                    except:
-                        pass
-                    
-                    data['status'] = 'Error'
-                    data['last_error'] = error_content[:100]
-                    return data
-                
-                # Check if segmentation is officially completed
-                segmentation_officially_complete = (seg_info and 
-                                                  seg_info.get('segmentation_status') == 'completed')
-                
-                # Check 'Ensemble' folder (output of postprocess worker)
-                # Note: The folder name is still "Ensemble" as per PostprocessWorker
-                ensemble_folder = os.path.join(seg_folder, 'Ensemble')
-                if os.path.exists(ensemble_folder):
-                    postprocess_files = 0
-                    for ext in ['*.nii.gz', '*.nii', '*.npz', '*.png']:
-                        postprocess_files += len(glob.glob(os.path.join(ensemble_folder, ext)))
-                    
-                    if postprocess_files > 0:
-                        data['postprocess_progress'] = min(100, int((postprocess_files / total_images) * 100))
-                        
-                        postprocess_officially_complete = (post_info and 
-                                                         post_info.get('postprocess_status') == 'completed')
-                        
-                        if data['postprocess_progress'] >= 90 and postprocess_officially_complete:
-                            data['segmentation_progress'] = 100
-                            data['status'] = 'Complete'
-                            data['needs_re_postprocess'] = self.needs_re_postprocess(folder_path, 'Complete')
-                            return data
-                        else:
-                            data['segmentation_progress'] = 100 if segmentation_officially_complete else min(100, data['postprocess_progress'])
-                            data['status'] = 'Postprocessing' if is_currently_postprocessing else 'Processing'
-                
-                # Check Fold_0 for segmentation files
-                fold_0_path = os.path.join(seg_folder, 'Fold_0')
-                if os.path.exists(fold_0_path):
-                    seg_files = 0
-                    for ext in ['*.nii.gz', '*.nii', '*.npz', '*.png']:
-                        seg_files += len(glob.glob(os.path.join(fold_0_path, ext)))
-                    
-                    if seg_files > 0:
-                        data['segmentation_progress'] = min(100, int((seg_files / total_images) * 100))
-                        
-                        # Only mark as "Segmented" if seg is complete and postprocess hasn't started
-                        if segmentation_officially_complete and data['postprocess_progress'] == 0:
-                            data['status'] = 'Segmented'
-                        elif data['segmentation_progress'] > 0:
-                            data['status'] = 'Segmenting' if is_currently_segmenting else 'Processing'
-                
-                # If seg folder exists but no clear progress
-                if data['segmentation_progress'] == 0 and data['postprocess_progress'] == 0:
-                    if is_currently_segmenting:
-                        data['status'] = 'Segmenting'
-                    elif is_currently_postprocessing: 
-                        data['status'] = 'Postprocessing' 
-                    else:
-                        data['status'] = 'Processing'
-            
-            # Override status if currently processing
-            if is_currently_segmenting:
-                data['status'] = 'Segmenting'
-            elif is_currently_postprocessing: 
-                data['status'] = 'Postprocessing' 
+        # Count source images (what needs to be segmented)
+        image_extensions = ['*.png']
+        total_images = sum(
+            len(glob.glob(os.path.join(folder_path, ext))) + 
+            len(glob.glob(os.path.join(folder_path, ext.upper())))
+            for ext in image_extensions
+        )
+        data['total_images'] = total_images
         
-        except Exception as e:
+        if total_images == 0:
+            data['status'] = 'No Images'
+            return data
+        
+        # Check if in queue (highest priority)
+        if any(item['path'] == folder_path for item in self.processing_queue):
+            data['status'] = 'Queued'
+            return data
+        
+        # Check filesystem state
+        seg_folder = os.path.join(folder_path, 'Segmentation')
+        
+        if not os.path.exists(seg_folder):
+            data['status'] = 'Not Started'
+            return data
+        
+        # Check for errors
+        error_files = glob.glob(os.path.join(seg_folder, '*.error'))
+        if error_files:
             data['status'] = 'Error'
-            data['last_error'] = str(e)[:100]
+            try:
+                with open(error_files[0], 'r') as f:
+                    data['last_error'] = f.read()
+            except:
+                data['last_error'] = 'Unknown error'
+            return data
         
+        # Try to load postprocess info if it exists
+        try:
+            postprocess_info_file = os.path.join(seg_folder, 'postprocess_info.json')
+            if os.path.exists(postprocess_info_file):
+                with open(postprocess_info_file, 'r') as f:
+                    post_info = json.load(f)
+                    data['stored_alpha'] = post_info.get('alpha_parameter')
+        except Exception as e:
+            pass  # No postprocess info yet
+        
+        # Count segmentation outputs
+        fold_0_path = os.path.join(seg_folder, 'Fold_0')
+        seg_files = len(glob.glob(os.path.join(fold_0_path, "*.png")))
+        data['segmentation_progress'] = min(100, int((seg_files / data['total_images']) * 100)) if data['total_images'] > 0 else 0
+        
+        # Check if currently segmenting
+        flag = self.current_segmentation_worker and str(self.current_segmentation_worker.input_path) == folder_path
+        if flag or (seg_files < data['total_images']):
+            data['status'] = 'Segmenting'
+            return data
+        
+        # Count postprocess outputs
+        ensemble_path = os.path.join(seg_folder, 'Ensemble')
+        post_files = 0
+        if os.path.exists(ensemble_path):
+            post_files = len(glob.glob(os.path.join(ensemble_path, "*.png")))
+            data['postprocess_progress'] = min(100, int((post_files / data['total_images']) * 100)) if data['total_images'] > 0 else 0
+
+        flag = self.current_postprocess_worker and str(self.current_postprocess_worker.input_path) == folder_path
+        if flag or (post_files < data['total_images'] and post_files > 0):
+            data['status'] = 'Postprocessing'
+            return data
+                
+        # Determine if needs re-processing based on alpha
+        if post_files > 0:
+            if data['postprocess_progress'] == 100:
+                data['status'] = 'Complete'
+                
+                # Check if needs re-processing:
+                # 1. No stored alpha = needs reprocessing (old version or failed save)
+                # 2. Different alpha = needs reprocessing
+                if data['stored_alpha'] is None:
+                    data['needs_re_postprocess'] = True  # No record of what alpha was used
+                else:
+                    try:
+                        stored_alpha_float = float(data['stored_alpha'])
+                        if abs(stored_alpha_float - self.alpha_parameter) > 0.001:
+                            data['needs_re_postprocess'] = True
+                    except (ValueError, TypeError):
+                        data['needs_re_postprocess'] = True  # Invalid stored value
+            else:
+                data['status'] = 'Postprocessing'
+        elif seg_files > 0:
+            if data['segmentation_progress'] == 100:
+                data['status'] = 'Segmented'
+            else:
+                data['status'] = 'Segmenting'
+            data['needs_re_postprocess'] = False
+        else:
+            data['status'] = 'Not Started'
+            data['needs_re_postprocess'] = False
+            
         return data
     
     def update_robot_filter(self):
@@ -761,101 +748,156 @@ class nnUNetMonitorUI(QMainWindow):
         self.robot_count_label.setText(f"Robots: {len(self.robots)}")
     
     def update_table(self):
-        """Update the table with current folder data"""
         robot_filter = self.robot_filter.currentText()
         status_filter = self.status_filter.currentText()
         
-        filtered_data = {}
+        # Filter data
+        filtered_data = []
         for key, data in self.folder_data.items():
             if robot_filter != "All Robots" and data['robot'] != robot_filter:
                 continue
             if status_filter != "All Status" and data['status'] != status_filter:
                 continue
-            filtered_data[key] = data
+            filtered_data.append((key, data))
         
-        self.table.setRowCount(len(filtered_data))
+        # Only resize if row count changed
+        if self.table.rowCount() != len(filtered_data):
+            self.table.setRowCount(len(filtered_data))
+            self.table_cache.clear()  # Clear cache on resize
         
-        for row, (folder_key, data) in enumerate(filtered_data.items()):
+        # Define color scheme
+        status_colors = {
+            'Complete': QColor(144, 238, 144),
+            'Segmented': QColor(255, 255, 0),
+            'Segmenting': QColor(173, 216, 230),
+            'Postprocessing': QColor(173, 216, 230),
+            'Queued': QColor(255, 255, 0),
+            'Error': QColor(255, 182, 193),
+            'Not Started': QColor(211, 211, 211),
+            'No Images': QColor(245, 245, 245)
+        }
+        
+        for row, (folder_key, data) in enumerate(filtered_data):
+            # Create cache key
+            cache_key = f"{row}_{folder_key}"
+            cached_data = self.table_cache.get(cache_key, {})
+            
+            # Only update cells that have changed
             folder_path = data['path']
             folder_name = os.path.basename(folder_path)
             
-            self.table.setItem(row, 0, QTableWidgetItem(data['robot']))
-            self.table.setItem(row, 1, QTableWidgetItem(folder_name))
-            self.table.setItem(row, 2, QTableWidgetItem(str(data['total_images'])))
+            # Update text cells only if changed
+            if cached_data.get('robot') != data['robot']:
+                self.table.setItem(row, 0, QTableWidgetItem(data['robot']))
+                
+            if cached_data.get('folder_name') != folder_name:
+                self.table.setItem(row, 1, QTableWidgetItem(folder_name))
+                
+            if cached_data.get('total_images') != data['total_images']:
+                self.table.setItem(row, 2, QTableWidgetItem(str(data['total_images'])))
             
-            seg_progress = QProgressBar()
-            seg_progress.setValue(data['segmentation_progress'])
-            seg_progress.setFormat(f"{data['segmentation_progress']}%")
-            self.table.setCellWidget(row, 3, seg_progress)
+            # Update progress bars only if values changed
+            if cached_data.get('segmentation_progress') != data['segmentation_progress']:
+                seg_progress = self.table.cellWidget(row, 3)
+                if not seg_progress or not isinstance(seg_progress, QProgressBar):
+                    seg_progress = QProgressBar()
+                    self.table.setCellWidget(row, 3, seg_progress)
+                seg_progress.setValue(data['segmentation_progress'])
             
-            post_progress = QProgressBar()
-            post_progress.setValue(data['postprocess_progress'])
-            post_progress.setFormat(f"{data['postprocess_progress']}%")
-            self.table.setCellWidget(row, 4, post_progress)
+            if cached_data.get('postprocess_progress') != data['postprocess_progress']:
+                post_progress = self.table.cellWidget(row, 4)
+                if not post_progress or not isinstance(post_progress, QProgressBar):
+                    post_progress = QProgressBar()
+                    self.table.setCellWidget(row, 4, post_progress)
+                post_progress.setValue(data['postprocess_progress'])
             
-            # Status with colors
-            status_item = QTableWidgetItem(data['status'])
-            if data['status'] == 'Complete':
-                status_item.setBackground(QColor(144, 238, 144))  # Light green
-            elif data['status'] == 'Segmented':
-                status_item.setBackground(QColor(255, 255, 0))    # Yellow
-            elif data['status'] in ['Segmenting', 'Postprocessing']:
-                status_item.setBackground(QColor(173, 216, 230))  # Light blue
-            elif data['status'] == 'Queued':
-                status_item.setBackground(QColor(255, 255, 0))    # Yellow
-            elif data['status'] == 'Error':
-                status_item.setBackground(QColor(255, 182, 193))  # Light red
-            elif data['status'] == 'Not Started':
-                status_item.setBackground(QColor(211, 211, 211))  # Light gray
+            # Update status only if changed
+            if cached_data.get('status') != data['status']:
+                status_item = QTableWidgetItem(data['status'])
+                status_item.setBackground(status_colors.get(data['status'], QColor(255, 255, 255)))
+                if data['last_error']:
+                    status_item.setToolTip(data['last_error'])
+                self.table.setItem(row, 5, status_item)
             
-            if data['last_error']:
-                status_item.setToolTip(data['last_error'])
-            self.table.setItem(row, 5, status_item)
+            # Alpha column - show different states clearly
+            alpha_value = data.get('stored_alpha')
+            if alpha_value is not None:
+                try:
+                    alpha_text = f"{float(alpha_value):.2f}"
+                except (ValueError, TypeError):
+                    alpha_text = "Invalid"
+            else:
+                # Show different text based on status
+                if data['status'] == 'Complete':
+                    alpha_text = "Unknown"  # Was processed but no alpha recorded
+                elif data['status'] == 'Segmented':
+                    alpha_text = "—"  # Not yet processed
+                else:
+                    alpha_text = "—"
             
-            # Alpha used
-            alpha_text = str(data.get('stored_alpha', '—'))
             alpha_item = QTableWidgetItem(alpha_text)
+            
+            # Highlight cases that need attention
             if data.get('needs_re_postprocess', False):
                 alpha_item.setBackground(QColor(255, 255, 0))  # Yellow
-                alpha_item.setToolTip(f"Current alpha: {self.alpha_parameter}, Stored alpha: {alpha_text}")
+                if alpha_value is None:
+                    alpha_item.setToolTip(f"No alpha recorded. Current setting: {self.alpha_parameter:.2f}")
+                else:
+                    alpha_item.setToolTip(f"Current setting: {self.alpha_parameter:.2f}, Used: {alpha_text}")
+            
             self.table.setItem(row, 6, alpha_item)
             
-            # Action button
-            if data['status'] in ['Not Started', 'Error']:
-                action_button = QPushButton("Add to Queue")
-                action_button.clicked.connect(lambda checked, path=folder_path, robot=data['robot']: self.add_to_queue(path, robot, 'both'))
-                self.table.setCellWidget(row, 7, action_button)
-            elif data['status'] == 'Segmented':
-                postprocess_button = QPushButton("Postprocess")
-                postprocess_button.setStyleSheet("background-color: #ff9800; color: white;")
-                postprocess_button.clicked.connect(lambda checked, path=folder_path, robot=data['robot']: self.add_to_queue(path, robot, 'postprocess'))
-                self.table.setCellWidget(row, 7, postprocess_button)
-            elif data['status'] == 'Complete' and data.get('needs_re_postprocess', False):
-                re_process_button = QPushButton("Re-process")
-                re_process_button.setStyleSheet("background-color: #ff9800; color: white;")
-                re_process_button.clicked.connect(lambda checked, path=folder_path, robot=data['robot']: self.add_to_queue(path, robot, 'postprocess'))
-                self.table.setCellWidget(row, 7, re_process_button)
-            elif data['status'] == 'Queued':
-                remove_button = QPushButton("Remove")
-                remove_button.clicked.connect(lambda checked, path=folder_path: self.remove_from_queue(path))
-                self.table.setCellWidget(row, 7, remove_button)
-            elif data['status'] in ['Segmenting', 'Postprocessing']:
-                if data.get('is_actively_processing', False):
-                    processing_label = QLabel("Running...")
-                    processing_label.setStyleSheet("color: #2196F3; font-weight: bold;")
-                    self.table.setCellWidget(row, 7, processing_label)
-                else:
-                    action_button = QPushButton("Add to Queue")
-                    action_button.clicked.connect(lambda checked, path=folder_path, robot=data['robot']: self.add_to_queue(path, robot, 'both'))
-                    self.table.setCellWidget(row, 7, action_button)
-            else:
-                self.table.setCellWidget(row, 7, QLabel("—"))
+            # Update action button only if status changed
+            if cached_data.get('status') != data['status'] or cached_data.get('needs_re_postprocess') != data.get('needs_re_postprocess'):
+                self._update_action_button(row, data, folder_path)
             
-            # Delete button
-            delete_button = QPushButton("Delete Seg")
-            delete_button.setStyleSheet("background-color: #f44336; color: white; font-size: 10px;")
-            delete_button.clicked.connect(lambda checked, path=folder_path: self.confirm_delete_segmentation(path))
-            self.table.setCellWidget(row, 8, delete_button)
+            # Delete button rarely changes, only create if not exists
+            if not self.table.cellWidget(row, 8):
+                delete_button = QPushButton("Delete")
+                delete_button.setStyleSheet("background-color: #f44336; color: white;")
+                delete_button.clicked.connect(
+                    lambda checked, p=folder_path: self.confirm_delete_segmentation(p)
+                )
+                self.table.setCellWidget(row, 8, delete_button)
+            
+            # Update cache
+            self.table_cache[cache_key] = data.copy()
+    
+    def _update_action_button(self, row, data, folder_path):
+        status = data['status']
+        
+        if status in ['Not Started', 'Error']:
+            action_widget = QPushButton("Add to Queue")
+            action_widget.clicked.connect(
+                lambda checked, p=folder_path, r=data['robot']: 
+                self.add_to_queue(p, r, 'both')
+            )
+        elif status == 'Segmented':
+            action_widget = QPushButton("Postprocess")
+            action_widget.setStyleSheet("background-color: #ff9800; color: white;")
+            action_widget.clicked.connect(
+                lambda checked, p=folder_path, r=data['robot']: 
+                self.add_to_queue(p, r, 'postprocess')
+            )
+        elif status == 'Complete' and data.get('needs_re_postprocess'):
+            action_widget = QPushButton("Re-process")
+            action_widget.setStyleSheet("background-color: #ff9800; color: white;")
+            action_widget.clicked.connect(
+                lambda checked, p=folder_path, r=data['robot']: 
+                self.add_to_queue(p, r, 'postprocess')
+            )
+        elif status == 'Queued':
+            action_widget = QPushButton("Remove")
+            action_widget.clicked.connect(
+                lambda checked, p=folder_path: self.remove_from_queue(p)
+            )
+        elif status in ['Segmenting', 'Postprocessing']:
+            action_widget = QLabel("Processing...")
+            action_widget.setStyleSheet("color: #2196F3; font-weight: bold;")
+        else:
+            action_widget = QLabel("—")
+        
+        self.table.setCellWidget(row, 7, action_widget)
     
     def confirm_delete_segmentation(self, folder_path):
         """Confirm and delete segmentation folder"""

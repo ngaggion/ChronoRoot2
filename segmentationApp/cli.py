@@ -37,8 +37,6 @@ def main():
                        help='Enable verbose output')
     
     # Postprocessing options
-    parser.add_argument('--postprocess', action='store_true',
-                       help='Run postprocessing after segmentation')
     parser.add_argument('--postprocess-only', action='store_true',
                        help='Only run postprocessing (skip segmentation)')
     parser.add_argument('--alpha', type=float,
@@ -92,23 +90,22 @@ def main():
             print(f"✗ Segmentation failed: {e}")
             sys.exit(1)
     
-    # Run postprocessing if requested
-    if args.postprocess or args.postprocess_only:
-        print(f"\n=== Postprocessing ===")
-        print(f"Method: {args.species}")
-        print(f"Alpha: {args.alpha if args.alpha else 'default'}")
-        
-        try:
-            postprocess(
-                path=str(input_path),
-                method=args.species,
-                alpha=args.alpha,
-                seg_path='Segmentation'
-            )
-            print(f"✓ Postprocessing complete")
-        except Exception as e:
-            print(f"✗ Postprocessing failed: {e}")
-            sys.exit(1)
+    # Run postprocessing
+    print(f"\n=== Postprocessing ===")
+    print(f"Method: {args.species}")
+    print(f"Alpha: {args.alpha if args.alpha else 'default'}")
+    
+    try:
+        postprocess(
+            path=str(input_path),
+            method=args.species,
+            alpha=args.alpha,
+            seg_path='Segmentation'
+        )
+        print(f"✓ Postprocessing complete")
+    except Exception as e:
+        print(f"✗ Postprocessing failed: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
