@@ -1,6 +1,5 @@
 import sys
 import os
-import cv2
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QPushButton, QLabel, QMessageBox,
@@ -8,6 +7,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor
 import argparse
+import PIL.Image
 
 from typing import List, Tuple
 
@@ -273,8 +273,8 @@ class CalibrationHelper(QMainWindow):
             return
             
         # Load first frame of first video
-        frame = cv2.imread(images[0], 0)
-        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+        frame = PIL.Image.open(images[0]).convert("RGB")
+        frame = np.array(frame)
         self.frame_widget.set_frame(frame)
             
     def on_point_selected(self, point):
