@@ -28,23 +28,18 @@ def analyze_experiment(exp):
     conf = json.load(open(exp))
 
     # New main folder for rerun analysis
-    conf['MainFolder'] = "/media/apoloml/DATOS_1/Datos/Arabidopsis/FlorR/AnalysisMar_2"
-
-    if "rpi" not in str(conf['rpi']):
-        rpi = "rpi" + str(conf['rpi'])
-    else:
-        rpi = str(conf['rpi'])
-
+    conf['MainFolder'] = "/DATA/tomatest_2"
+    os.makedirs(conf['MainFolder'], exist_ok=True)
     conf['fileKey'] = conf['identifier']
     conf['sequenceLabel'] = str(conf['identifier']) + '/' + str(conf['rpi']) + '/' + str(conf['cam']) + '/' + str(conf['plant'])
-    conf['Plant'] = 'Arabidopsis thaliana'
+    conf['Plant'] = 'Tomato'
 
-    conf["processingLimit"] = 8
+    conf["processingLimit"] = 6
     conf['timeStep'] = 15
     conf['Limit'] = int(conf['processingLimit'] * 24 * 60 / conf['timeStep'])
 
     # Perform the analysis
-    plantAnalysis(conf, True, False)
+    plantAnalysis(conf, True)
 
 
 if __name__ == "__main__":
@@ -54,7 +49,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Old main folder
-    mainFolder = "/media/apoloml/DATOS_1/Datos/Arabidopsis/FlorR/AnalysisMar"
+    mainFolder = "/DATA/tomatest"
     analysis = os.path.join(mainFolder, 'Analysis')
     experiments = loadPath(analysis, '*/*/*/*/*/metadata.json')
 
