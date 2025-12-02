@@ -113,7 +113,7 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     # Beginning of the data processing
     mainRoot = data['MainRootLength'].to_numpy().astype('float')
     lateralRoots = data['LateralRootsLength'].to_numpy().astype('float')
-    numlateralRoots = data['NumberOfLateralRoots'].to_numpy().astype('float')
+    numlateralRoots = data['NumberOfLateralRoots'].to_numpy().astype('int')
 
     # Check for NaN or invalid values
     if np.any(np.isnan(mainRoot)):
@@ -134,8 +134,8 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     for t in range(space, min(N//2, len(numlateralRoots))):
         if t-space >= 0 and t < len(numlateralRoots):
             if numlateralRoots[t-space] == 0 and numlateralRoots[t] == 0:
-                lateralRoots[t-space:t] = 0
-                numlateralRoots[t-space:t] = 0
+                lateralRoots[:t] = 0
+                numlateralRoots[:t] = 0
     
     # Smooth
     mainRoot = signal.medfilt(mainRoot, 9) 
