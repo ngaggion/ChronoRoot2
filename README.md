@@ -45,29 +45,50 @@ PDF usage tutorials were incorporated in Documents for easy access. These make u
 - [Screening Interface Tutorial](Documents/ScreeningTutorial.pdf)
 - [Segmentation Tutorial](Documents/SegmentationTutorial.pdf)
 
+## System Requirements
+
+### Minimum Requirements
+- **OS**: Ubuntu 20.04+ (Linux), Windows 10+ with WSL2, macOS 11+ (Docker)
+- **RAM**: 8 GB (16 GB recommended)
+- **Disk Space**: ~15 GB for Singularity image, ~5 GB for application files
+- **GPU**: Optional but recommended (NVIDIA with CUDA support for faster segmentation)
+- **Display**: X11 server for GUI (included in Linux, requires VcXsrv/XMing for Windows)
+
+### For GPU Acceleration
+- NVIDIA GPU with CUDA 11.0+
+- nvidia-docker2 (for Docker installations)
+- GPU drivers properly installed
+
 ## Getting Started
 
 ### Installation Options
 
 ChronoRoot 2.0 can be installed and used in three ways:
 
-1. **Docker Container (Recommended)**: Complete environment with all dependencies pre-configured
-2. **Local Installation**: Quick conda-based setup for Ubuntu/macOS systems
-3. **Singularity Container**: Alternative for HPC environments without Docker access
+1. **Apptainer - Singularity Container**: Creates executable files in the application menu for Linux-based systems.
+2. **Docker Container**: Complete environment with all dependencies pre-configured for multi-platform support.
+3. **Local Installation**: Conda-based setup to install the required dependencies.
 
+### Apptainer - Singularity
 
+```bash
+git clone https://github.com/ngaggion/ChronoRoot2.git
+cd ChronoRoot2
+bash apptainerInstaller/install.sh
+```
+See [apptainerInstaller/README.md](install/README.md) for detailed instructions.
 
-## Docker Installation (Recommended)
+### Docker Installation - Recommended for Windows and Mac-OS Systems
 
 Docker provides the most reliable installation method across all platforms, ensuring an identical environment regardless of your operating system.
 
-### Pull the Docker Image
+#### Pull the Docker Image
 
 ```bash
 docker pull ngaggion/chronoroot:latest
 ```
 
-### Running on Linux
+#### Running on Linux
 
 For Linux systems, enable X11 forwarding for the graphical user interface:
 
@@ -94,7 +115,7 @@ After use, restrict X server access:
 xhost -local:docker
 ```
 
-### Running on Windows (WSL2)
+#### Running on Windows (WSL2)
 
 ChronoRoot has been tested under Windows Subsystem for Linux, version 2. Please refer to [this link](https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers) for information on how to set up Docker with WSL2.
 
@@ -117,8 +138,7 @@ docker run -it --gpus all \
 
 > **Note**: If you don't have a GPU, remove the `--gpus all` flag from the command above. For GPU support, you need to install nvidia-docker2. See the [Docker documentation](Docker/README.md) for detailed instructions.
 
-
-### Convenient Aliases (Docker)
+#### Convenient Aliases (Docker)
 
 To simplify usage, these aliases are pre-configured in the Docker container:
 
@@ -130,18 +150,18 @@ alias screening='conda activate ChronoRoot; cd /app/chronoRootScreeningApp; pyth
 
 With these aliases, you can simply use `segmentation`, `chronoroot`, or `screening` commands instead of the full activation and navigation commands.
 
-## Local Installation
+### Local Installation
 
 **Platform Compatibility**: Local installation has been thoroughly tested on Ubuntu. **For other systems, we strongly recommend using Docker** to avoid potential compatibility issues.
 
-### Quick Installation (Ubuntu)
+#### Quick Installation (Ubuntu)
 
 Clone the repository and run the automated installer:
 
 ```bash
 git clone https://github.com/ngaggion/ChronoRoot2.git
 cd ChronoRoot2
-bash install.sh
+bash install_environment.sh
 conda activate ChronoRoot
 ```
 
@@ -150,7 +170,7 @@ The installer will:
 2. Create a conda environment with all necessary packages
 3. Install Python dependencies via pip
 
-### Manual Conda Installation
+#### Manual Conda Installation
 
 If you prefer to install manually or need to customize the installation:
 
@@ -175,16 +195,6 @@ pip install opencv-python lapx==0.9.2 nnunetv2==2.6.2
 
 > **Note**: This single environment handles all functionality including segmentation, analysis, and FPCA. No separate environments are needed.
 
-## Singularity Installation
-
-For high-performance computing environments where Docker is not available:
-
-```bash
-singularity build ChronoRoot.simg docker://ngaggion/chronoroot
-```
-
-This creates a Singularity container from the Docker image, providing the same functionality in HPC environments.
-
 ## Hardware and Module Controller
 
 ChronoRoot 2.0 is designed to work with an affordable custom hardware setup that includes:
@@ -197,8 +207,6 @@ ChronoRoot 2.0 is designed to work with an affordable custom hardware setup that
 For detailed hardware specifications and assembly instructions, see the [ChronoRootModuleHardware repository](https://github.com/ThomasBlein/ChronoRootModuleHardware).
 
 For the controller software for the Raspberry Pi 3B, see the [ChronoRoot Module Controller repository](https://github.com/ThomasBlein/ChronoRootControl).
-
-
 
 ## Usage
 
@@ -276,6 +284,18 @@ A typical ChronoRoot 2.0 workflow involves:
 
 4. **Report Generation**: Generate comprehensive reports with statistical analysis, visualizations, and comparisons between experimental groups.
 
+## Demo Data
+
+A demo dataset is included in the Docker image for testing and learning:
+- Located at `/app/Demo/` (Docker) 
+- Includes sample time-lapse sequences
+- Pre-segmented data for testing analysis workflows
+- Referenced in the PDF tutorials
+
+**Download demo data separately:**
+
+Available at Google Drive for now: https://drive.google.com/drive/folders/1PJCn_MMHcM9KPgz8dYe1F2Cvdt43FS3Z?usp=sharing
+
 ## Citation
 
 If you use ChronoRoot 2.0 in your research, please cite our paper:
@@ -288,7 +308,6 @@ If you use ChronoRoot 2.0 in your research, please cite our paper:
   year={2025}
 }
 ```
-
 ## License
 
 ChronoRoot 2.0 is released under the [GNU General Public License v3.0](LICENSE).
