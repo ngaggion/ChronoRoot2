@@ -147,4 +147,25 @@ def performFPCA(conf_path):
             plt.close()
             plt.cla()
             plt.clf()
-    
+            
+        # Create FPC scatter plots if there are 2 or more components
+        if number_of_components >= 2:
+            for i in range(1, number_of_components + 1):
+                for j in range(i + 1, number_of_components + 1):
+                    plt.figure(figsize=(8, 6))
+                    fpc_i = f"FPC{i}{'_IRN' if inverse_rank_normalize else ''}"
+                    fpc_j = f"FPC{j}{'_IRN' if inverse_rank_normalize else ''}"
+                    
+                    sns.scatterplot(data=fpc_df, x=fpc_i, y=fpc_j, hue="Experiment", palette="tab10", s=100)
+                    plt.title(f'{magnitude} - FPC{i} vs FPC{j}', fontsize=14)
+                    plt.xlabel(f'FPC{i}', fontsize=12)
+                    plt.ylabel(f'FPC{j}', fontsize=12)
+                    plt.legend(title='Experiment', bbox_to_anchor=(1.05, 1), loc='upper left')
+                    plt.tight_layout()
+                    
+                    plt.savefig(os.path.join(report, f"{name}_FPC{i}_vs_FPC{j}.png"), dpi=300, bbox_inches='tight')
+                    plt.savefig(os.path.join(report, f"{name}_FPC{i}_vs_FPC{j}.svg"), dpi=300, bbox_inches='tight')
+                    plt.close()
+                    plt.cla()
+                    plt.clf()
+

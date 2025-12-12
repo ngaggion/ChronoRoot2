@@ -220,6 +220,27 @@ def run_fpca_analysis(args):
         plt.cla()
         plt.clf()
         
+        # Create FPC scatter plots if there are 2 or more components
+        if args.components >= 2:
+            for i in range(1, args.components + 1):
+                for j in range(i + 1, args.components + 1):
+                    plt.figure(figsize=(8, 6))
+                    fpc_i = f"FPC{i}{'_IRN' if args.normalize else ''}"
+                    fpc_j = f"FPC{j}{'_IRN' if args.normalize else ''}"
+                    
+                    sns.scatterplot(data=fpc_df, x=fpc_i, y=fpc_j, hue=args.groupby, palette="tab10", s=100)
+                    plt.title(f'{magnitude} - FPC{i} vs FPC{j}', fontsize=14)
+                    plt.xlabel(f'FPC{i}', fontsize=12)
+                    plt.ylabel(f'FPC{j}', fontsize=12)
+                    plt.legend(title=args.groupby, bbox_to_anchor=(1.05, 1), loc='upper left')
+                    plt.tight_layout()
+                    
+                    plt.savefig(os.path.join(args.output, f"{name}_FPC{i}_vs_FPC{j}.png"), dpi=300, bbox_inches='tight')
+                    plt.savefig(os.path.join(args.output, f"{name}_FPC{i}_vs_FPC{j}.svg"), dpi=300, bbox_inches='tight')
+                    plt.close()
+                    plt.cla()
+                    plt.clf()
+        
         print(f"Saved plots for {magnitude} to {args.output}")
 
 if __name__ == "__main__":
