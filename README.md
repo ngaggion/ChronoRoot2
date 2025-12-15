@@ -153,25 +153,15 @@ With these aliases, you can simply use `segmentation`, `chronoroot`, or `screeni
 
 **Platform Compatibility**: Local installation has been thoroughly tested on Ubuntu. **For other systems, we strongly recommend using Docker** to avoid potential compatibility issues.
 
-#### Quick Installation (Ubuntu)
-
-Clone the repository and run the automated installer:
-
-```bash
-git clone https://github.com/ngaggion/ChronoRoot2.git
-cd ChronoRoot2
-bash install_environment.sh
-conda activate ChronoRoot
-```
-
-The installer will:
-1. Install required system dependencies (zbar library)
-2. Create a conda environment with all necessary packages
-3. Install Python dependencies via pip
-
 #### Manual Conda Installation
 
-If you prefer to install manually or need to customize the installation:
+Run: 
+
+```bash
+conda env create -f environment.yml
+```
+
+Or if you prefer to install manually or need to customize the installation (for example you don't need nnUNet), use the following:
 
 ```bash
 conda create -y -n ChronoRoot python=3.13.9 \
@@ -191,8 +181,6 @@ conda create -y -n ChronoRoot python=3.13.9 \
 conda activate ChronoRoot
 pip install opencv-python lapx==0.9.2 nnunetv2==2.6.2
 ```
-
-> **Note**: This single environment handles all functionality including segmentation, analysis, and FPCA. No separate environments are needed.
 
 ## Hardware and Module Controller
 
