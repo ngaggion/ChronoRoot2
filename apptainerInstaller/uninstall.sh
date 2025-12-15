@@ -26,31 +26,23 @@ main() {
     echo "============================================"
     echo ""
 
-    # Check if configuration exists
-    if [ ! -f "$CONFIG_FILE" ]; then
-        print_error "ChronoRoot configuration not found!"
-        print_error "Cannot determine installation location."
-        echo ""
-        echo "Manual removal:"
-        echo "  1. Remove installation directory (typically ~/.local/chronoroot)"
-        echo "  2. Remove desktop files from $DESKTOP_DIR"
-        echo "  3. Remove config: $CONFIG_FILE"
-        exit 1
+    # Try to read config
+    if [ -f "$CONFIG_FILE" ]; then
+        INSTALL_DIR=$(grep -o '"install_dir": *"[^"]*"' "$CONFIG_FILE" | cut -d'"' -f4)
     fi
-
-    # Read configuration
-    INSTALL_DIR=$(grep -o '"install_dir": *"[^"]*"' "$CONFIG_FILE" | cut -d'"' -f4)
     
+    # If no config or couldn't read, try to detect from script location
     if [ -z "$INSTALL_DIR" ]; then
-        print_error "Could not read installation directory from config!"
-        exit 1
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        INSTALL_DIR="$SCRIPT_DIR"
+        print_warning "Config file not found, using script location: $INSTALL_DIR"
+    else
+        print_info "Found installation at: $INSTALL_DIR"
     fi
-
-    print_info "Found installation at: $INSTALL_DIR"
-    echo ""
     
+    echo ""
     print_warning "This will remove:"
-    echo "  - Application files: $INSTALL_DIR"
+    echo "  - Installation directory: $INSTALL_DIR"
     echo "  - Desktop entries: $DESKTOP_DIR/ChronoRoot*.desktop"
     echo "  - Configuration: $CONFIG_FILE"
     echo ""
@@ -63,7 +55,7 @@ main() {
     fi
 
     echo ""
-    print_info "Removing application files..."
+    print_info "Removing installation directory..."
     if [ -d "$INSTALL_DIR" ]; then
         rm -rf "$INSTALL_DIR"
         print_success "Removed: $INSTALL_DIR"

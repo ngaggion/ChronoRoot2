@@ -72,9 +72,8 @@ ChronoRoot 2.0 can be installed and used in three ways:
 ### Apptainer - Singularity
 
 ```bash
-git clone https://github.com/ngaggion/ChronoRoot2.git
-cd ChronoRoot2
-bash apptainerInstaller/install.sh
+wget https://raw.githubusercontent.com/ngaggion/ChronoRoot2/main/apptainerInstaller/install.sh
+bash install.sh
 ```
 See [apptainerInstaller/README.md](install/README.md) for detailed instructions.
 

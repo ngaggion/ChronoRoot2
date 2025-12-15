@@ -1,6 +1,9 @@
 #!/bin/bash
 
 # ChronoRoot Installation Script
+# Can be downloaded and run standalone via:
+# wget https://raw.githubusercontent.com/ngaggion/ChronoRoot2/main/apptainerInstaller/install.sh
+# bash install.sh
 
 set -e
 
@@ -17,6 +20,7 @@ print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Configuration
+REPO_URL="https://github.com/ngaggion/ChronoRoot2.git"
 DOCKER_IMAGE="ngaggion/chronorootbase:latest"
 DEFAULT_INSTALL_DIR="$HOME/.local/chronoroot"
 DESKTOP_DIR="$HOME/.local/share/applications"
@@ -34,11 +38,6 @@ detect_container_runtime() {
     else
         echo ""
     fi
-}
-
-get_repo_root() {
-    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    echo "$(dirname "$script_dir")"
 }
 
 main() {
@@ -60,9 +59,40 @@ main() {
     print_success "Found: $CONTAINER_CMD"
     echo ""
 
-    # Get repository root
-    REPO_ROOT=$(get_repo_root)
-    print_info "Repository location: $REPO_ROOT"
+    # Check for git
+    if ! command_exists git; then
+        print_error "Git not found!"
+        print_error "Please install git: sudo apt install git"
+        exit 1
+    fi
+
+    # Check for git-lfs
+    print_info "Checking for Git LFS..."
+    if ! command_exists git-lfs; then
+        print_warning "Git LFS not found!"
+        echo "Git LFS is required to download large files from the repository."
+        read -p "Install Git LFS now? [Y/n]: " install_lfs
+        
+        if [[ ! "$install_lfs" =~ ^[Nn]$ ]]; then
+            print_info "Installing Git LFS..."
+            if sudo apt install -y git-lfs; then
+                git lfs install
+                print_success "Git LFS installed!"
+            else
+                print_error "Failed to install Git LFS. Please install manually:"
+                print_error "  sudo apt install git-lfs"
+                print_error "  git lfs install"
+                exit 1
+            fi
+        else
+            print_error "Git LFS is required. Installation cancelled."
+            exit 1
+        fi
+    else
+        print_success "Git LFS found"
+        # Make sure it's initialized for this user
+        git lfs install 2>/dev/null || true
+    fi
     echo ""
 
     # Ask for installation directory
@@ -79,18 +109,13 @@ main() {
         print_warning "Installation directory already exists!"
         echo "Options:"
         echo "  1) Remove and reinstall"
-        echo "  2) Update existing installation"
-        echo "  3) Cancel"
-        read -p "Choose [1-3]: " choice
+        echo "  2) Cancel"
+        read -p "Choose [1-2]: " choice
         
         case $choice in
             1)
                 print_info "Removing existing installation..."
                 rm -rf "$INSTALL_DIR"
-                ;;
-            2)
-                print_info "Updating existing installation..."
-                UPDATE_MODE=true
                 ;;
             *)
                 print_info "Installation cancelled."
@@ -101,76 +126,59 @@ main() {
 
     mkdir -p "$INSTALL_DIR"
     
+    # Clone repository
+    print_info "Cloning ChronoRoot repository..."
+    REPO_DIR="$INSTALL_DIR/ChronoRoot2"
+    
+    if git clone "$REPO_URL" "$REPO_DIR"; then
+        print_success "Repository cloned successfully!"
+    else
+        print_error "Failed to clone repository!"
+        exit 1
+    fi
+    echo ""
+    
     # Handle Singularity image
     IMAGE_PATH="$INSTALL_DIR/Image_ChronoRoot.sif"
     
-    if [ -f "$IMAGE_PATH" ] && [ "$UPDATE_MODE" = true ]; then
-        print_info "Using existing Singularity image: $IMAGE_PATH"
-        print_warning "To rebuild the image, remove it first or choose 'Remove and reinstall'"
-        echo ""
-    else
-        echo ""
-        echo "Singularity Image Options:"
-        echo "  1) Build from Docker Hub (ngaggion/chronorootbase:latest) - ~13.5 GB"
-        echo "  2) Provide path to existing .sif file"
-        read -p "Choose [1-2]: " image_choice
-        
-        case $image_choice in
-            1)
-                print_info "Building Singularity image from Docker Hub..."
-                print_warning "This will download ~13.5 GB and may take some time..."
-                echo ""
-                
-                if $CONTAINER_CMD build --remote "$IMAGE_PATH" "docker://$DOCKER_IMAGE"; then
-                    print_success "Image built successfully!"
-                else
-                    print_error "Failed to build image!"
-                    exit 1
-                fi
-                ;;
-            2)
-                read -p "Enter path to existing .sif file: " existing_image
-                existing_image="${existing_image/#\~/$HOME}"
-                
-                if [ ! -f "$existing_image" ]; then
-                    print_error "File not found: $existing_image"
-                    exit 1
-                fi
-                
-                print_info "Copying image to installation directory..."
-                cp "$existing_image" "$IMAGE_PATH"
-                print_success "Image copied successfully!"
-                ;;
-            *)
-                print_error "Invalid choice"
+    echo "Singularity Image Options:"
+    echo "  1) Build from Docker Hub (ngaggion/chronorootbase:latest) - ~13.5 GB"
+    echo "  2) Provide path to existing .sif file"
+    read -p "Choose [1-2]: " image_choice
+    
+    case $image_choice in
+        1)
+            print_info "Building Singularity image from Docker Hub..."
+            print_warning "This will download ~13.5 GB and may take some time..."
+            echo ""
+            
+            if $CONTAINER_CMD build --remote "$IMAGE_PATH" "docker://$DOCKER_IMAGE"; then
+                print_success "Image built successfully!"
+            else
+                print_error "Failed to build image!"
                 exit 1
-                ;;
-        esac
-    fi
+            fi
+            ;;
+        2)
+            read -p "Enter path to existing .sif file: " existing_image
+            existing_image="${existing_image/#\~/$HOME}"
+            
+            if [ ! -f "$existing_image" ]; then
+                print_error "File not found: $existing_image"
+                exit 1
+            fi
+            
+            print_info "Copying image to installation directory..."
+            cp "$existing_image" "$IMAGE_PATH"
+            print_success "Image copied successfully!"
+            ;;
+        *)
+            print_error "Invalid choice"
+            exit 1
+            ;;
+    esac
     
     echo ""
-    print_info "Copying application files..."
-    
-    cp -r "$REPO_ROOT/chronoRootApp" "$INSTALL_DIR/"
-    cp -r "$REPO_ROOT/chronoRootScreeningApp" "$INSTALL_DIR/"
-    cp -r "$REPO_ROOT/segmentationApp" "$INSTALL_DIR/"
-    
-    # Copy logos to assets
-    mkdir -p "$INSTALL_DIR/assets"
-    [ -f "$REPO_ROOT/logo.jpg" ] && cp "$REPO_ROOT/logo.jpg" "$INSTALL_DIR/assets/"
-    [ -f "$REPO_ROOT/logo_screening.jpg" ] && cp "$REPO_ROOT/logo_screening.jpg" "$INSTALL_DIR/assets/"
-    [ -f "$REPO_ROOT/logo_seg.jpg" ] && cp "$REPO_ROOT/logo_seg.jpg" "$INSTALL_DIR/assets/"
-    
-    # Copy installer scripts
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    cp "$SCRIPT_DIR/update.sh" "$INSTALL_DIR/"
-    cp "$SCRIPT_DIR/uninstall.sh" "$INSTALL_DIR/"
-    chmod +x "$INSTALL_DIR/update.sh" "$INSTALL_DIR/uninstall.sh"
-    
-    print_success "Application files copied!"
-    echo ""
-    
-    # Create launcher scripts
     print_info "Creating launcher scripts..."
     
     create_launcher() {
@@ -183,7 +191,7 @@ main() {
 xhost +local: > /dev/null 2>&1
 ImagePath="$IMAGE_PATH"
 $CONTAINER_CMD exec --bind /tmp/.X11-unix --env DISPLAY=\$DISPLAY \$ImagePath \\
-  bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate ChronoRoot && cd $INSTALL_DIR/$app_dir/ && python run.py"
+  bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate ChronoRoot && cd $REPO_DIR/$app_dir/ && python run.py"
 xhost -local: > /dev/null 2>&1
 EOF
         
@@ -204,7 +212,7 @@ EOF
         local exec_name=$2
         local icon_file=$3
         local desktop_file="$DESKTOP_DIR/ChronoRoot${name}.desktop"
-        local icon_path="$INSTALL_DIR/assets/$icon_file"
+        local icon_path="$REPO_DIR/$icon_file"
         
         cat > "$desktop_file" << EOF
 [Desktop Entry]
@@ -225,6 +233,15 @@ EOF
     create_desktop_entry "Screening" "ChronoRootScreeningApp" "logo_screening.jpg"
     create_desktop_entry "Segmentation" "ChronoRootSegmentationApp" "logo_seg.jpg"
     
+    # Copy uninstall script
+    echo ""
+    print_info "Installing uninstall script..."
+    if [ -f "$REPO_DIR/apptainerInstaller/uninstall.sh" ]; then
+        cp "$REPO_DIR/apptainerInstaller/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
+        chmod +x "$INSTALL_DIR/uninstall.sh"
+        print_success "Uninstall script installed"
+    fi
+    
     echo ""
     print_info "Saving configuration..."
     mkdir -p "$(dirname "$CONFIG_FILE")"
@@ -232,11 +249,11 @@ EOF
     cat > "$CONFIG_FILE" << EOF
 {
   "install_dir": "$INSTALL_DIR",
+  "repo_dir": "$REPO_DIR",
   "image_path": "$IMAGE_PATH",
   "container_cmd": "$CONTAINER_CMD",
   "install_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "docker_image": "$DOCKER_IMAGE",
-  "repo_root": "$REPO_ROOT"
+  "docker_image": "$DOCKER_IMAGE"
 }
 EOF
     
@@ -248,16 +265,21 @@ EOF
     echo "============================================"
     echo ""
     echo "ChronoRoot has been installed to: $INSTALL_DIR"
+    echo "Repository location: $REPO_DIR"
     echo ""
-    echo "You can now launch the applications:"
+    echo "Launch applications:"
     echo "  - From your application menu (search for 'ChronoRoot')"
-    echo "  - Or run directly:"
+    echo "  - Or run:"
     echo "    $INSTALL_DIR/ChronoRootApp.sh"
     echo "    $INSTALL_DIR/ChronoRootScreeningApp.sh"
     echo "    $INSTALL_DIR/ChronoRootSegmentationApp.sh"
     echo ""
-    echo "To update: bash $INSTALL_DIR/update.sh"
-    echo "To uninstall: bash $INSTALL_DIR/uninstall.sh"
+    echo "To update:"
+    echo "  cd $REPO_DIR"
+    echo "  git pull"
+    echo ""
+    echo "To uninstall:"
+    echo "  bash $INSTALL_DIR/uninstall.sh"
     echo ""
 }
 
