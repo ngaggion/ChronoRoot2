@@ -27,7 +27,7 @@ git lfs install
 Download and run the installer:
 
 ```bash
-wget https://raw.githubusercontent.com/ngaggion/ChronoRoot2/main/apptainerInstaller/install.sh
+wget https://raw.githubusercontent.com/ngaggion/ChronoRoot2/master/apptainerInstaller/install.sh
 bash install.sh
 ```
 
