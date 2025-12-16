@@ -152,7 +152,7 @@ main() {
             print_warning "This will download ~13.5 GB and may take some time..."
             echo ""
             
-            if $CONTAINER_CMD build --remote "$IMAGE_PATH" "docker://$DOCKER_IMAGE"; then
+            if $CONTAINER_CMD build "$IMAGE_PATH" "docker://$DOCKER_IMAGE"; then
                 print_success "Image built successfully!"
             else
                 print_error "Failed to build image!"
