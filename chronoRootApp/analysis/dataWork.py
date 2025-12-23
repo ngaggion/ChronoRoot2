@@ -128,19 +128,21 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     lateralRoots = np.nan_to_num(lateralRoots, nan=0.0)
     numlateralRoots = np.nan_to_num(numlateralRoots, nan=0.0)
 
-    # Remove spurious values at the beginning (with bounds checking)
-    space = 32
+    # Remove spurious lateral roots at the beginning
+    # The space are eight hours (32 timepoints with 15 min timeStep)
+    space = int((8 * 60) / timeStep)  # 8 hours worth of timeSteps
 
-    for t in range(space, min(N//2, len(numlateralRoots))):
+    for t in range(space, len(numlateralRoots)):
         if t-space >= 0 and t < len(numlateralRoots):
             if numlateralRoots[t-space] == 0 and numlateralRoots[t] == 0:
                 lateralRoots[:t] = 0
                 numlateralRoots[:t] = 0
+            if mainRoot[t-space] == 0 and mainRoot[t] == 0:
+                mainRoot[:t] = 0
     
     # Smooth
     mainRoot = signal.medfilt(mainRoot, 9) 
     lateralRoots = signal.medfilt(lateralRoots, 9) 
-    numlateralRoots = signal.medfilt(numlateralRoots, 9)
 
     # Check that the values never decrease (with improved thresholds)
     for i in range(1, len(mainRoot)):
@@ -148,12 +150,10 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
         if dif:
             mainRoot[i] = mainRoot[i-1]
         
-        # Fixed: Changed from > 1 to > 0
         dif = numlateralRoots[i] < numlateralRoots[i-1]
         if dif and numlateralRoots[i-1] > 0:
             numlateralRoots[i] = numlateralRoots[i-1]
 
-        # Fixed: Changed from > 10 to > 0
         dif = lateralRoots[i] < lateralRoots[i-1]
         if dif and lateralRoots[i-1] > 0:
             lateralRoots[i] = lateralRoots[i-1]

@@ -21,108 +21,328 @@ from datetime import datetime
 import getpass
 import re
 import numpy as np
-from ..imageUtils.seg import skeleton_nodes
 import os
+from ..imageUtils.seg import skeleton_nodes
 
+# Global counter for RSML points
 n_points = 0
 
 def createTree(conf, frame_idx, images, graph, skeleton, skeleton_overlay):
     """
-    Create RSML tree structure from graph for export.
-    
-    RSML (Root System Markup Language) is an XML format for storing root architecture.
-    This function converts the NetworkX graph into RSML format.
-    
-    Args:
-        conf: Configuration dictionary
-        frame_idx: Current frame index
-        images: List of image paths
-        graph: NetworkX graph with node attributes (pos, type, age) 
-               and edge attributes (weight, color, root_type)
-        skeleton: Binary skeleton image
-        skeleton_overlay: Skeleton with color-coded segments
-        
-    Returns:
-        tree: XML tree in RSML format
-        number_lateral_roots: Count of first-order lateral roots
-        
-    Raises:
-        Exception: If RSML file is incomplete (missing significant portion of skeleton)
+    Main entry point to generate the RSML tree from the graph/skeleton.
     """
     global n_points
     n_points = 0
     
-    # Create RSML header
+    # 1. Create RSML Header
     tree = createHeader(conf, frame_idx, images)
     root = tree.getroot()
     
-    # Extract endpoint positions from skeleton
+    # 2. Extract endpoints for checking termination
     _, end_points = skeleton_nodes(skeleton)
     end_points = np.array(end_points)
     
-    # ----------------------------------------------------------------
-    # Find the seed (Ini) node in the graph
-    # ----------------------------------------------------------------
+    # 3. Find the Seed (Start) Node
     seed_nodes = [node for node in graph.nodes() if graph.nodes[node]['type'] == "Ini"]
     
     if len(seed_nodes) == 0:
-        raise Exception("No seed node (Ini) found in graph")
-    
-    seed_node = seed_nodes[0]
+        # Fallback: Find node with degree 1 that is highest (lowest Y)
+        possible_seeds = [n for n in graph.nodes() if graph.degree(n) == 1]
+        if not possible_seeds: 
+             # If no endpoints, just pick top-most node
+             all_nodes = list(graph.nodes())
+             if not all_nodes: raise Exception("Graph is empty")
+             seed_node = sorted(all_nodes, key=lambda p: p[1])[0]
+        else:
+            seed_node = sorted(possible_seeds, key=lambda p: p[1])[0]
+    else:
+        seed_node = seed_nodes[0]
+
     seed_position = np.array(graph.nodes[seed_node]['pos'], dtype='int')
     
-    # Verify seed is at a skeleton endpoint (or find nearest if not)
-    # This can happen if trimming moved the node slightly
-    seed_is_endpoint = np.any(np.all(end_points == seed_position, axis=1))
-    
-    if not seed_is_endpoint:
-        # Seed not exactly at an endpoint - find nearest endpoint
+    # Snap seed to nearest skeleton endpoint (in case of trimming offset)
+    if len(end_points) > 0:
         distances = np.linalg.norm(end_points - seed_position, axis=1)
-        nearest_idx = np.argmin(distances)
-        seed_position = end_points[nearest_idx]
+        if np.min(distances) < 10.0:
+            nearest_idx = np.argmin(distances)
+            seed_position = end_points[nearest_idx]
     
-    # ----------------------------------------------------------------
-    # Extract main root edge colors
-    # ----------------------------------------------------------------
+    # 4. Identify Main Root colors from the graph
+    # (These are the edge colors assigned during createGraph traversal)
     main_root_colors = []
-    
     for u, v, data in graph.edges(data=True):
-        edge_type = data.get('root_type', 0)
-        edge_color = data.get('color', 0)
-        
-        if edge_type == 10:
-            # This edge is part of the main root
-            main_root_colors.append(edge_color)
+        if data.get('root_type') == 10:
+            main_root_colors.append(data.get('color', 0))
     
-    # ----------------------------------------------------------------
-    # Build RSML structure recursively from skeleton
-    # ----------------------------------------------------------------
-    # This function traverses the skeleton and builds the RSML tree
-    # Returns the number of first-order lateral roots
+    # 5. Build the RSML
+    # We pass a COPY of the skeleton overlay because we will erase pixels as we visit them
     _, number_lateral_roots = completeRSML(
         skeleton_overlay.copy(), 
         seed_position, 
-        end_points, 
         root, 
         main_root_colors
     )
     
-    # ----------------------------------------------------------------
-    # Validate completeness of RSML
-    # ----------------------------------------------------------------
-    # Count total skeleton pixels
-    total_skeleton_points = np.sum(skeleton > 0)
+    plant = tree.find(".//plant")
+    main_root = plant.find("./root[@label='mainRoot']")
     
-    # Check if we captured at least 50% of the skeleton in RSML
-    if n_points < total_skeleton_points / 2:
-        raise Exception(
-            f'RSML file incomplete: captured {n_points}/{total_skeleton_points} points '
-            f'({100*n_points/total_skeleton_points:.1f}%)'
-        )
+    # 1. Get all direct children of the main root
+    direct_children = main_root.findall("./root")
+    
+    # 2. Filter them to ensure they are explicitly labeled as Order 1
+    # This ignores any potential malformed tags that don't match your naming convention
+    xml_o1_count = 0
+    for child in direct_children:
+        label = child.get('label', '')
+        if label.startswith('lat_o1'):
+            xml_o1_count += 1
+
+    if number_lateral_roots != xml_o1_count:
+        print(f"Warning: Calculated {number_lateral_roots} laterals, but XML contains {xml_o1_count} 'lat_o1' tags.")
+    
+    # 6. Safety check
+    total_skeleton_points = np.sum(skeleton > 0)
+    if total_skeleton_points > 0 and n_points < total_skeleton_points * 0.7:
+        raise Exception("RSML generation incomplete: less than 70% skeleton points captured.")
     
     return tree, number_lateral_roots
 
-## Load configuration values for the experiment
+def completeRSML(ske2, seed, rsml, mainRoot):
+    """
+    Main traversal logic. Uses a queue and explicit marking to avoid loops.
+    """
+    global n_points
+
+    plant = rsml.find(".//plant")
+    if plant is None: plant = rsml.find('scene').find('plant')
+
+    # Create main root element
+    raiz = ET.SubElement(plant, 'root', {'id': 'p', 'label': 'mainRoot'})
+    raiz.text, raiz.tail = '\n\t\t\t', '\n\t\t'
+    geo = ET.SubElement(raiz, 'geometry')
+    geo.text, geo.tail = '\n\t\t\t', '\n\t\t'
+    polyline = ET.SubElement(geo, 'polyline')
+    polyline.text, polyline.tail = '\n\t\t\t\t', '\n\t\t\t'
+    
+    # Add Seed
+    add_point(polyline, seed)
+    n_points += 1
+    
+    # Get neighbors before zeroing seed
+    all_neighbors = vecinos(ske2, seed)
+    ske2[seed[1], seed[0]] = 0
+    
+    if not all_neighbors:
+        return rsml, 0
+
+    # Sort Neighbors (Main vs Lateral)
+    main_start = None
+    lateral_starts = []
+    
+    main_candidates = [n for n in all_neighbors if ske2[n[1], n[0]] in mainRoot]
+    
+    if main_candidates:
+        main_start = main_candidates[0]
+        lateral_starts = [n for n in all_neighbors if n != main_start]
+    else:
+        main_start = all_neighbors[0]
+        lateral_starts = all_neighbors[1:]
+
+    # Init Queue 
+    lateral_queue = []
+    for ls in lateral_starts:
+        lateral_queue.append({
+            'start': ls, 'parent': seed, 'order': 1, 'elem': raiz  
+        })
+
+    # Trace Main Root
+    if main_start:
+        continue_mainRoot(ske2, main_start, seed, rsml, mainRoot, lateral_queue, raiz)
+
+    # Process Laterals
+    processed_count = 0
+    counters = {}
+    
+    # SAFETY: Prevent infinite loops with a max iteration guard
+    safety_counter = 0
+    MAX_ITERATIONS = 20000 
+
+    while lateral_queue:
+        safety_counter += 1
+        if safety_counter > MAX_ITERATIONS:
+            print("Warning: Max iterations reached in RSML generation. Breaking loop.")
+            raise Exception("Max iterations reached in RSML generation.")
+
+        task = lateral_queue.pop(0)
+        start, parent, order, p_elem = task['start'], task['parent'], task['order'], task['elem']
+        
+        # Vital check: has this pixel been eaten by another path?
+        if ske2[start[1], start[0]] == 0:
+            continue
+            
+        if order == 1: processed_count += 1
+        
+        # XML
+        idx = counters.get(order, 0)
+        counters[order] = idx + 1
+        lat_id = f"lat_o{order}_{idx}"
+        
+        lr = ET.SubElement(p_elem, 'root', {'id': lat_id, 'label': lat_id})
+        lr.text, lr.tail = '\n\t\t\t', '\n\t\t'
+        geo = ET.SubElement(lr, 'geometry')
+        geo.text, geo.tail = '\n\t\t\t', '\n\t\t'
+        poly = ET.SubElement(geo, 'polyline')
+        poly.text, poly.tail = '\n\t\t\t\t', '\n\t\t\t'
+        
+        # Connect to parent
+        add_point(poly, parent)
+        
+        # Trace
+        ske2, stop_node, poly = get_next_node_rsml(ske2, start, parent, poly)
+        
+        # At stop_node. It might be a junction.
+        # 1. Get neighbors
+        nbs = vecinos(ske2, stop_node)
+        
+        # 2. Queue valid neighbors
+        for n in nbs:
+            # Check if neighbor is unvisited
+            if ske2[n[1], n[0]] != 0:
+                lateral_queue.append({
+                    'start': n, 'parent': stop_node, 'order': order + 1, 'elem': lr
+                })
+        
+        # Zero the stop node now that we've queued its children.
+        # This prevents other branches from looping back to this node.
+        ske2[stop_node[1], stop_node[0]] = 0
+
+    return rsml, processed_count
+            
+def continue_mainRoot(ske2, current, previous, rsml, mainRoot, lat_queue, main_root_elem):
+    # Retrieve the polyline element for the main root
+    polyline = main_root_elem.findall(".//geometry/polyline")[-1]
+    
+    safety = 0
+    while True:
+        if safety > 10000: 
+            raise Exception("Max iterations reached in RSML generation.")
+        safety += 1
+        
+        # Trace segment until a junction or endpoint
+        ske2, stop_node, polyline = get_next_node_rsml(ske2, current, previous, polyline)
+        
+        # Scan neighbors at the stopping point
+        nbs = vecinos(ske2, stop_node)
+        
+        if not nbs:
+            # End of main root. Zero the tip.
+            ske2[stop_node[1], stop_node[0]] = 0
+            break
+            
+        next_main = None
+        
+        for n in nbs:
+            # Skip if visited
+            if ske2[n[1], n[0]] == 0: continue
+            
+            val = ske2[n[1], n[0]]
+            
+            # Simple check: Is it Main Root or Lateral?
+            if val in mainRoot:
+                # By construction, there is only one of these.
+                next_main = n
+            else:
+                # Everything else is a lateral root
+                lat_queue.append({
+                    'start': n, 
+                    'parent': stop_node, 
+                    'order': 1, 
+                    'elem': main_root_elem
+                })
+        
+        # Zero the junction node
+        ske2[stop_node[1], stop_node[0]] = 0
+        
+        # Continue the main loop if a main root path exists
+        if next_main:
+            previous = stop_node
+            current = next_main
+        else:
+            break
+
+def get_next_node_rsml(ske, start, previous, polyline):
+    """
+    Traces edge. Returns [ske, stop_node, dist, poly].
+    Does NOT zero the stop_node (the caller does that after checking neighbors).
+    Does zero the path intermediate pixels.
+    """
+    global n_points
+    
+    current = start
+    prev = previous
+    
+    # Zero the start pixel immediately to prevent immediate loops
+    # (Because 'start' is the first pixel of the NEW edge)
+    ske[current[1], current[0]] = 0
+    add_point(polyline, current)
+    n_points += 1
+    
+    while True:
+        # Get neighbors of current (which is already 0, but that's fine for finding next)
+        # Wait - vecinos needs to find neighbors. 
+        # Neighbors of 'current' are 1. 'current' is 0.
+        
+        all_nbs = vecinos(ske, current)
+        
+        # Filter: Don't go back to prev (though prev is likely 0 now too)
+        # We just need any non-zero neighbor
+        valid = [n for n in all_nbs if not np.array_equal(n, prev)]
+        
+        if len(valid) == 0:
+            # Endpoint
+            return ske, current, polyline
+        
+        if len(valid) > 1:
+            # Junction
+            return ske, current, polyline
+            
+        # Single valid neighbor -> Step forward
+        nxt = valid[0]
+        
+        add_point(polyline, nxt)
+        n_points += 1
+        
+        # Zero the pixel we are LEAVING (Wait, we move to nxt, so zero nxt?)
+        # Standard: Zero the pixel as we visit it.
+        ske[nxt[1], nxt[0]] = 0
+        
+        prev = current
+        current = nxt
+
+
+def vecinos(ske, seed): 
+    """
+    Finds 8-connected neighbors of a pixel that are non-zero.
+    """
+    x, y = int(seed[0]), int(seed[1])
+    h, w = ske.shape
+    neighbors = []
+    
+    # Optimized bounds to prevent index errors
+    y_min, y_max = max(0, y-1), min(h, y+2)
+    x_min, x_max = max(0, x-1), min(w, x+2)
+    
+    for i in range(y_min, y_max):
+        for j in range(x_min, x_max):
+            if i == y and j == x: continue
+            if ske[i, j] != 0:
+                neighbors.append([j, i])
+    return neighbors
+
+
+def add_point(polyline, point):
+    """Helper to add an XML point"""
+    ET.SubElement(polyline, 'point', {'x': str(point[0]), 'y': str(point[1])}).tail = '\n\t\t\t\t'
 
 def createHeader(conf, i, images):
     rsml_file = "analysis/default.rsml"
@@ -134,311 +354,41 @@ def createHeader(conf, i, images):
     for elemento in metadata:
         if elemento.tag == 'user':
             elemento.text = getpass.getuser()
-    
         if elemento.tag == 'file-key':
-            elemento.text = conf['fileKey']
-    
+            elemento.text = conf.get('fileKey', 'unknown')
         if elemento.tag == 'last-modified':
             now = datetime.now()
-            dt_string = now.strftime("%Y-%m-%dT%H:%M:%S")
-            elemento.text = dt_string
+            elemento.text = now.strftime("%Y-%m-%dT%H:%M:%S")
             
         if elemento.tag == 'image':
             for sub in elemento:
                 if sub.tag == 'name':
-                    sub.text = images[i].replace(conf['ImagePath'],'').replace('/','')
+                    sub.text = os.path.basename(images[i])
                 if sub.tag == 'captured':
-                    time = images[i].replace(conf['ImagePath'],'').replace('/','').replace('.png','')
-                    year,month,day,hour,mins,secs = re.findall(r'\d+', time)[0:6]
-                    text = "%s-%s-%sT%s:%s:%s" %(year, month, day, hour, mins, secs)
-                    sub.text = text
+                    # Simplified regex for robustness
+                    try:
+                        time_str = os.path.basename(images[i]).replace('.png','')
+                        nums = re.findall(r'\d+', time_str)
+                        if len(nums) >= 6:
+                            text = f"{nums[0]}-{nums[1]}-{nums[2]}T{nums[3]}:{nums[4]}:{nums[5]}"
+                            sub.text = text
+                    except:
+                        pass
     
         if elemento.tag == 'time-sequence':
             for sub in elemento:
                 if sub.tag == 'index':
                     sub.text = str(i)
                 if sub.tag == 'label':
-                    sub.text = conf['sequenceLabel']
-    
-    ##Adds the analyzed root to the scene
+                    sub.text = conf.get('sequenceLabel', 'default')
                     
     tag = 'plant'
-    attrib = {}
-    attrib['id'] = str(1)
-    attrib['label'] = conf['Plant']
-    
+    attrib = {'id': '1', 'label': conf.get('Plant', 'plant1')}
     plant = ET.Element(tag,attrib)
-    plant.text = "\n\t\t"
-    plant.tail = "\n\t"
-    
+    plant.text, plant.tail = "\n\t\t", "\n\t"
     scene.append(plant)
 
     return tree
-
-
-def completeRSML(ske2, seed, enodes, rsml, mainRoot):
-    global n_points
-
-    hijos = vecinos(ske2, seed)
-    
-    ## Adds the main root to the plant
-    
-    plant = rsml[1][0]
-    tag = 'root'
-    attrib = {}
-    attrib['id'] = 'p'
-    attrib['label'] = 'mainRoot'
-    raiz = ET.Element(tag, attrib)
-    raiz.text = '\n\t\t\t'
-    raiz.tail = '\n\t\t'
-    plant.append(raiz)
-    geometry = ET.Element('geometry')
-    geometry.text = '\n\t\t\t'
-    geometry.tail = '\n\t\t'
-    raiz.append(geometry)
-    polyline = ET.Element('polyline')
-    polyline.text = '\n\t\t\t\t'
-    polyline.tail = '\n\t\t\t'
-    
-    tag = 'point'
-    attrib = {}
-    attrib['x'] = str(seed[0])
-    attrib['y'] = str(seed[1])
-    node = ET.Element(tag, attrib)
-    node.tail = '\n\t\t\t\t'
-    polyline.append(node)
-    n_points+=1
-    
-    ## Gets the next node point
-    ske2[seed[1], seed[0]] = 0
-    
-    ske2, nodo, largo_arista, polyline = get_next_node_rsml(ske2, hijos[0], seed, [], 0, polyline)
-    ske2[nodo[1], nodo[0]] = 0
-    geometry.append(polyline)
-    
-    lista = []
-        
-    ## Completes the main Root First, adding every non main root start point to a list
-    if largo_arista != 0:
-        if nodo not in enodes.tolist():
-            rsml, lista = continue_mainRoot(ske2, nodo, enodes, rsml, mainRoot, [])
-        
-    plant = rsml[1][0][0]
-    
-    listab = []
-    lista_r = []
-    num_raices_laterales = 0
-    
-    largo_lista = len(lista)
-    ## 1ST ORDER LATERAL ROOTS
-    j = 0
-    while j != largo_lista:
-        hijos = vecinos(ske2, lista[j])
-        
-        for i in range(0, len(hijos)):
-            if hijos[i] not in lista:
-
-                polyline = ET.Element('polyline')
-                polyline.text = '\n\t\t\t\t'
-                polyline.tail = '\n\t\t\t'
-                
-                ske2, nodo, largo_arista, polyline = get_next_node_rsml(ske2, hijos[i], lista[j], hijos, 0, polyline)
-                ske2[nodo[1], nodo[0]] = 0
-
-                if largo_arista != 0:
-                    num_raices_laterales += 1
-                    
-                    tag = 'root'
-                    attrib = {}
-                    attrib['id'] = str(j)
-                    attrib['label'] = 'raiz lateral' + str(j)
-                    raiz = ET.Element(tag, attrib)
-                    raiz.text = '\n\t\t\t'
-                    raiz.tail = '\n\t\t'
-                    plant.append(raiz)
-                    geometry = ET.Element('geometry')
-                    geometry.text = '\n\t\t\t'
-                    geometry.tail = '\n\t\t'
-                    raiz.append(geometry)
-                    geometry.append(polyline)
-                    
-                    if nodo not in enodes.tolist() and nodo not in lista:
-                        listab.append(nodo)
-                        lista_r.append(raiz)
-                else:
-                    vec = vecinos(ske2, nodo)
-                    for k in range(0, len(vec)):
-                        if vec[k] not in lista:
-                            lista.append(vec[k])    
-                            largo_lista += 1
-        j += 1
-    
-    ## 2ND ORDER (AND HIGHER) LATERAL ROOTS
-    c = 0
-    while(listab != []):
-        c = c + 1
-        lista = listab
-        plants = lista_r
-        listab = []
-        lista_r = []
-        
-        for j in range(0,len(lista)):
-            hijos = vecinos(ske2, lista[j])
-            
-            for i in range(0, len(hijos)):
-                if hijos[i] not in lista:
-                    polyline = ET.Element('polyline')
-                    polyline.text = '\n\t\t\t\t'
-                    polyline.tail = '\n\t\t\t'
-                    
-                    ske2, nodo, largo_arista, polyline = get_next_node_rsml(ske2, hijos[i], lista[j], hijos, 0, polyline)
-                    ske2[nodo[1], nodo[0]] = 0
-                    
-                    if largo_arista != 0:
-                        tag = 'root'
-                        attrib = {}
-                        attrib['id'] = str(j)
-                        attrib['label'] = 'raiz lateral' + str(j) + '_' + str(c)
-                        raiz = ET.Element(tag, attrib)
-                        raiz.text = '\n\t\t\t'
-                        raiz.tail = '\n\t\t'
-                        geometry = ET.Element('geometry')
-                        geometry.text = '\n\t\t\t'
-                        geometry.tail = '\n\t\t'
-                        raiz.append(geometry)
-                        geometry.append(polyline)
-                        
-                        plants[j].append(raiz)
-                    
-                        if nodo not in enodes.tolist() and nodo not in lista:
-                            listab.append(nodo)
-                            lista_r.append(plants[j])
-                    else:
-                        vec = vecinos(ske2, nodo)
-                        for k in range(0, len(vec)):
-                            if vec[k] not in lista:
-                                listab.append(vec[k])
-                                lista_r.append(plants[j])
-                        
-    return rsml, num_raices_laterales
-
-
-def continue_mainRoot(ske2, actual, enodes, rsml, mainRoot, lista):
-    global n_points
-    hijos = vecinos(ske2, actual)
-        
-    ## Primero me fijo si no me sobró un pixel del color que venia
-    for i in range(0, len(hijos)):
-        x = hijos[i][0]
-        y = hijos[i][1]
-        color = ske2[y,x]
-        if color == ske2[actual[1], actual[0]]:
-            ske2[actual[1], actual[0]] = 0
-            actual = hijos[i]
-            hijos = vecinos(ske2, actual)
-            break
-    
-    ## Guardo en una lista los que no pertenezcan a la main root para visitarlos luego
-    for i in range(0, len(hijos)):
-        x = hijos[i][0]
-        y = hijos[i][1]
-        color = ske2[y,x]
-        if color not in mainRoot:
-            if actual not in lista:
-                lista.append(actual)
-    
-    ## Continuo la raíz principal
-    for i in range(0, len(hijos)):
-        x = hijos[i][0]
-        y = hijos[i][1]
-        color = ske2[y,x]
-        
-        if color in mainRoot:
-            # print(color)
-            polyline = ET.Element('polyline')
-            polyline.text = '\n\t\t\t\t'
-            polyline.tail = '\n\t\t\t'
-            
-            tag = 'point'
-            attrib = {}
-            attrib['x'] = str(actual[0])
-            attrib['y'] = str(actual[1])
-            node = ET.Element(tag, attrib)
-            node.tail = '\n\t\t\t\t'
-            polyline.append(node)
-            n_points += 1
-
-            ske2, nodo, largo_arista, polyline = get_next_node_rsml(ske2, hijos[i], actual, hijos, 0, polyline)
-            ske2[nodo[1], nodo[0]] = 0
-            
-            if largo_arista != 0:
-                main_p = rsml[1][0][0][0][0]
-                for punto in polyline:
-                    main_p.append(punto)
-                if nodo not in enodes.tolist():
-                    rsml, lista = continue_mainRoot(ske2, nodo, enodes, rsml, mainRoot, lista)
-            else:
-                vec = hijos.copy()
-                vec.pop(i)
-                
-                lista = lista + vec
-                
-                ske2, nodo, largo_arista, polyline = get_next_node_rsml(ske2, nodo, hijos[i], hijos, 0, polyline)
-                ske2[nodo[1], nodo[0]] = 0
-                
-                if nodo not in enodes.tolist():
-                    rsml, lista = continue_mainRoot(ske2, nodo, enodes, rsml, mainRoot, lista)
-                
-            
-    return rsml, lista
-
-
-## EXTRA FUNCTIONS
-def vecinos(ske, seed): #NEIGHBOURS OF A PIXEL
-    lista = []
-    x = int(seed[0])
-    y = int(seed[1])
-    
-    ymax = ske.shape[0]
-    xmax = ske.shape[1]
-    
-    for i in range (y+1,y-2,-1):
-        for j in range(x-1,x+2):
-            if i < ymax and j < xmax:
-                if ske[i,j] != 0:
-                    if x!=j or y!=i:
-                        lista.append([j,i])
-    return lista
-
-## WALK A BRANCH TO FIND A NODE
-def get_next_node_rsml(ske, actual, padre, hermanos, d, polyline):
-    global n_points
-    
-    hijos = vecinos(ske, actual)
-    sons = []
-
-    tag = 'point'
-    attrib = {}
-    attrib['x'] = str(actual[0])
-    attrib['y'] = str(actual[1])
-    node = ET.Element(tag, attrib)
-    node.tail = '\n\t\t\t\t'
-    polyline.append(node)
-    n_points+=1
-    
-    for j in hijos:
-        if not np.array_equal(j, padre) and not(j in hermanos):
-            sons.append(j)
-
-    if len(sons) != 1:
-        return [ske, actual, d, polyline]
-    
-    ske[actual[1], actual[0]] = 0
-    hijo = sons[0]
-    dist = np.linalg.norm(np.array(actual) - np.array(hijo)) + d
-        
-    return get_next_node_rsml(ske, hijo, actual, hijos, dist, polyline)
-
 
 def saveRSML(rsmlTree, conf, image_name):
     path = os.path.join(conf['folders']['rsml'], image_name.replace('.png','.rsml'))

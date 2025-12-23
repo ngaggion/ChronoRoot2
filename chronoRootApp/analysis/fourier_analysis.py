@@ -7,11 +7,6 @@ import numpy as np
 from scipy import signal
 import scipy.stats as stats
 from typing import Dict, List, Tuple, Optional
-import logging
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 class MetricConfig:
     """Configuration class for different metrics"""
@@ -61,19 +56,34 @@ class DataProcessor:
             N = len(time) if N is None else N
             
             # Adjust for new day
-            if not np.isscalar(newDay[N0]) or newDay[N0] != 0:  # Handle both scalar and array cases
+            if not np.isscalar(newDay[N0]) or newDay[N0] != 0:
                 begin_indices = np.where(newDay == 0)[0]
                 if len(begin_indices) > 0:
                     begin = begin_indices[0]
                     if begin > N0:
+                        # Shift start point
                         N0 = begin
-                        N = N + begin
+                        # We do NOT shift N here because we are limited by file length
                     else:
                         N0 = N0 + (24 - time[N0])
-                        N = N + (24 - time[N0])
             
-            N = min(N, len(time))
-            N = N - N%24
+            # Ensure we don't go past the end of the file
+            max_len = len(time)
+            if N > max_len:
+                N = max_len
+
+            # 1. Calculate available duration
+            current_duration = N - N0
+            
+            # 2. Ensure duration is non-negative
+            if current_duration < 0:
+                current_duration = 0
+                
+            # 3. Make the DURATION a multiple of 24, not the index
+            valid_duration = current_duration - (current_duration % 24)
+            
+            # 4. Set new end index based on start + valid duration
+            N = N0 + valid_duration
 
             # Extract and process speed data
             mSpeed = data[root].to_numpy()
@@ -94,19 +104,16 @@ class DataProcessor:
             return mSpeed[N0:N], time[N0:N] - N0, newDay[N0:N]
         
         except Exception as e:
-            logger.error(f"Error processing file {filepath}: {str(e)}")
-            raise
+            raise Exception(f"Error processing file {filepath}: {str(e)}")
 
     def read_and_process_data(self, experiments: List[str], root: str = 'MainRootLengthGrad (mm/h)',
                              normalize: bool = False, detrend: bool = False, 
                              medfilt: bool = False) -> pd.DataFrame:
         """Read and process data from multiple experiments"""
         all_data = []
-        all_dataframes = []
-        all_Ns = []
-        time_series = None
-
-        # First, collect all dataframes and their lengths
+        valid_datasets = [] # Store tuple (exp_name, processed_signal, processed_time)
+        
+        # 1. Collect all valid processed data first
         for exp in experiments:
             try:
                 # Get list of plant data files
@@ -120,77 +127,85 @@ class DataProcessor:
                         results = results[-1]
                         speeds.append(os.path.join(results, "PostProcess_Hour.csv"))
 
-                # Read all files for this experiment
                 for speed_file in speeds:
                     try:
-                        data = pd.read_csv(speed_file)
-                        time = data['ElapsedTime (h)'].to_numpy().astype('int')
-                        all_Ns.append(len(time))
-                        all_dataframes.append((exp, speed_file, data))
+                        # Process individual file without forcing a length yet
+                        # This allows process_single_file to find the natural "aligned" length
+                        signal, time, _ = self.process_single_file(
+                            speed_file, 
+                            root=root,
+                            normalize=normalize,
+                            detrend=detrend,
+                            medfilt=medfilt
+                        )
+                        
+                        valid_datasets.append({
+                            'exp': exp,
+                            'file': speed_file,
+                            'signal': signal,
+                            'time': time
+                        })
+                        
                     except Exception as e:
-                        logger.warning(f"Skipping file {speed_file}: {str(e)}")
+                        print(f"Skipping file {speed_file}: {str(e)}")
                         continue
 
             except Exception as e:
-                logger.error(f"Error processing experiment {exp}: {str(e)}")
+                print(f"Error processing experiment {exp}: {str(e)}")
                 continue
 
-        if not all_dataframes:
+        if not valid_datasets:
             raise ValueError("No valid data processed from any experiment")
 
-        # Find minimum length
-        N_min = min(all_Ns)
-
-        # Now process all files with the same length
-        for exp, speed_file, data in all_dataframes:
-            try:
-                signal, time, _ = self.process_single_file(
-                    speed_file, 
-                    root=root,
-                    normalize=normalize,
-                    detrend=detrend,
-                    medfilt=medfilt,
-                    N=N_min
-                )
-                
-                if time_series is None:
-                    time_series = time
-
-                # Create DataFrame for this experiment
-                df = pd.DataFrame({
-                    'Time': time_series[:len(signal)],
-                    'Signal': signal,
-                    'Type': os.path.basename(exp),
-                    'i': len(all_data)  # Use the count as index
-                })
-                all_data.append(df)
-
-            except Exception as e:
-                logger.warning(f"Error processing data from {speed_file}: {str(e)}")
-                continue
+        # 2. Find the Common Denominator Length
+        # We look at the lengths of all successfully aligned signals
+        lengths = [len(d['signal']) for d in valid_datasets]
+        min_common_length = min(lengths)
+        
+        # Ensure it's still a multiple of 24
+        min_common_length = min_common_length - (min_common_length % 24)
+        
+        # 3. Truncate all datasets to the minimum common length
+        time_series = None
+        
+        for item in valid_datasets:
+            # Slice to common length
+            sig = item['signal'][:min_common_length]
+            t = item['time'][:min_common_length]
+            
+            if time_series is None:
+                time_series = t
+            
+            # Create DataFrame
+            df = pd.DataFrame({
+                'Time': time_series, # Use uniform time vector
+                'Signal': sig,
+                'Type': os.path.basename(item['exp']),
+                'i': len(all_data)
+            })
+            all_data.append(df)
 
         if not all_data:
-            raise ValueError("No valid processed data")
+            raise ValueError("No valid processed data after truncation")
 
-        # Combine all data and calculate FFT
         combined_df = pd.concat(all_data, ignore_index=True)
-        
-        # Calculate FFT for each signal
-        time_length = len(time_series)
+
+        # 4. Calculate FFT (Now safe because lengths are identical)
+        time_length = min_common_length
         freqs = np.fft.fftfreq(time_length, d=1)
         
         fft_data = []
         for (exp_type, i), group in combined_df.groupby(['Type', 'i']):
-            if len(group) >= time_length:  # Only process if we have enough data points
-                signal_data = group['Signal'].values[:time_length]
-                fft_vals = np.abs(np.fft.fft(signal_data))
-                fft_df = pd.DataFrame({
-                    'Freqs': freqs,
-                    'FFT': fft_vals,
-                    'Type': exp_type,
-                    'i': i
-                })
-                fft_data.append(fft_df)
+             # No check needed here anymore, we guaranteed length above
+            signal_data = group['Signal'].values
+            fft_vals = np.abs(np.fft.fft(signal_data))
+            fft_df = pd.DataFrame({
+                'Freqs': freqs,
+                'FFT': fft_vals,
+                'Type': exp_type,
+                'i': i
+            })
+            fft_data.append(fft_df)
         
         if fft_data:
             fft_combined = pd.concat(fft_data, ignore_index=True)
@@ -228,7 +243,7 @@ class DataProcessor:
                                                        unique_experiments[j])
 
         except Exception as e:
-            logger.error(f"Error in statistical analysis: {str(e)}")
+            print(f"Error in statistical analysis: {str(e)}")
             raise
 
     def _write_comparison_stats(self, f, subdata: pd.DataFrame, exp1_name: str, exp2_name: str):
@@ -493,7 +508,7 @@ def makeFourierPlots(conf: dict):
         # Process each metric
         for metric_type in MetricConfig.METRICS.keys():
             try:
-                logger.info(f"Processing {metric_type}")
+                print(f"Processing {metric_type}")
                 metric_config = MetricConfig.get_config(metric_type)
                 
                 # Get data paths
@@ -539,11 +554,11 @@ def makeFourierPlots(conf: dict):
                 )
                 
             except Exception as e:
-                logger.error(f"Error processing {metric_type}: {str(e)}")
+                print(f"Skipping metric {metric_type} due to error: {str(e)}")
                 continue
                 
     except Exception as e:
-        logger.error(f"Error in makeFourierPlots: {str(e)}")
+        print(f"Error in makeFourierPlots: {str(e)}")
         raise
 
 if __name__ == "__main__":
