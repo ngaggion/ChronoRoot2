@@ -2,24 +2,104 @@
 ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture
 Copyright (C) 2020 Nicolás Gaggion
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
+Optimized for efficiency by processing expensive operations in ROIs 
+and pre-allocating morphological kernels.
 """
 
 from skimage.morphology import skeletonize
 import cv2
 import numpy as np
-import cv2
+
+# --- PRE-ALLOCATED KERNELS (Global Scope) ---
+# Moving these out of the functions prevents re-allocation on every loop/call.
+
+# Kernels for trim()
+T_KERNELS = [
+    np.array([[-1, 1, -1], [1, 1, 1], [0, 0, 0]]),
+    np.array([[-1, 1, 0], [1, 1, 0], [-1, 1, 0]]),
+    np.array([[0, 0, 0], [1, 1, 1], [-1, 1, -1]]),
+    np.array([[0, 1, -1], [0, 1, 1], [0, 1, -1]]),
+    np.array([[1, -1, -1], [1, 1, -1], [-1, 1, -1]]),
+    np.array([[-1, 1, -1], [1, 1, -1], [1, -1, -1]]),
+    np.array([[-1, -1, -1], [1, 1, -1], [-1, 1, 1]]),
+    np.array([[-1, -1, -1], [-1, 1, 1], [1, 1, -1]]),
+    np.array([[-1, 1, 1], [1, 1, -1], [-1, -1, -1]]),
+    np.array([[1, 1, -1], [-1, 1, 1], [-1, -1, -1]]),
+    np.array([[-1, -1, 1], [-1, 1, 1], [-1, 1, -1]]),
+    np.array([[-1, 1, -1], [-1, 1, 1], [-1, -1, 1]]),
+    np.array([[-1, 1, -1], [-1, 1, 1], [-1, -1, -1]]),
+    np.array([[-1, -1, -1], [-1, 1, 1], [-1, 1, -1]]),
+    np.array([[-1, 1, -1], [1, 1, -1], [-1, -1, -1]]),
+    np.array([[-1, -1, -1], [1, 1, -1], [-1, 1, -1]])
+]
+
+# Kernels for prune() and endPoints()
+EP_KERNELS = [
+    np.array([[1, -1, -1], [-1, 1, -1], [-1, -1, -1]]),
+    np.array([[-1, 1, -1], [-1, 1, -1], [-1, -1, -1]]),
+    np.array([[-1, -1, 1], [-1, 1, -1], [-1, -1, -1]]),
+    np.array([[-1, -1, -1], [1, 1, -1], [-1, -1, -1]]),
+    np.array([[-1, -1, -1], [-1, 1, 1], [-1, -1, -1]]),
+    np.array([[-1, -1, -1], [-1, 1, -1], [1, -1, -1]]),
+    np.array([[-1, -1, -1], [-1, 1, -1], [-1, 1, -1]]),
+    np.array([[-1, -1, -1], [-1, 1, -1], [-1, -1, 1]])
+]
+
+# Kernels for branchedPoints()
+X_KERNELS = [
+    np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]]),
+    np.array([[1, 0, 1], [0, 1, 0], [1, 0, 1]])
+]
+
+T_BRANCH_KERNELS = [
+    np.array([[2, 1, 2], [1, 1, 1], [2, 2, 2]]),
+    np.array([[1, 2, 1], [2, 1, 2], [1, 2, 2]]),
+    np.array([[2, 1, 2], [1, 1, 2], [2, 1, 2]]),
+    np.array([[1, 2, 2], [2, 1, 2], [1, 2, 1]]),
+    np.array([[2, 2, 2], [1, 1, 1], [2, 1, 2]]),
+    np.array([[2, 2, 1], [2, 1, 2], [1, 2, 1]]),
+    np.array([[2, 1, 2], [2, 1, 1], [2, 1, 2]]),
+    np.array([[1, 2, 1], [2, 1, 2], [2, 2, 1]])
+]
+
+Y_KERNELS = [
+    np.array([[1, 0, 1], [0, 1, 0], [2, 1, 2]]),
+    np.array([[0, 1, 0], [1, 1, 2], [0, 2, 1]]),
+    np.array([[1, 0, 2], [0, 1, 1], [1, 0, 2]]),
+    np.array([[0, 2, 1], [1, 1, 2], [0, 1, 0]]),
+    np.array([[2, 1, 2], [0, 1, 0], [1, 0, 1]])
+]
+# Add rotated versions to Y_KERNELS
+_Y3 = np.array([[0, 2, 1], [1, 1, 2], [0, 1, 0]])
+_Y4 = np.array([[2, 1, 2], [0, 1, 0], [1, 0, 1]])
+Y_KERNELS.append(np.rot90(_Y3))
+Y_KERNELS.append(np.rot90(_Y4))
+Y_KERNELS.append(np.rot90(np.rot90(_Y3)))
+
+
+def get_roi_bounding_box(mask, padding=5):
+    """
+    Helper to find the bounding box of non-zero pixels.
+    Returns slices for cropping and offsets for coordinate restoration.
+    """
+    points = cv2.findNonZero(mask)
+    if points is None:
+        return None, None
+    
+    x, y, w, h = cv2.boundingRect(points)
+    
+    # Apply padding while staying within image bounds
+    h_img, w_img = mask.shape
+    x_start = max(0, x - padding)
+    y_start = max(0, y - padding)
+    x_end = min(w_img, x + w + padding)
+    y_end = min(h_img, y + h + padding)
+    
+    roi_slice = (slice(y_start, y_end), slice(x_start, x_end))
+    offset = (x_start, y_start)
+    
+    return roi_slice, offset
+
 
 def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, fixed_seed_position):
     # Load segmentation and crop to region of interest
@@ -78,11 +158,10 @@ def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, 
     return binary_mask, hypocotyl_skeleton, hypocotyl_length, False
 
 def extract_hypocotyl_length(multi_class_mask):
-    # Segmentation classes 4
+    # Filter Mask for Hypocotyls (Class 4)
     binary_mask = (multi_class_mask == 4) 
     binary_mask = np.array(binary_mask, dtype='uint8') * 255
     
-    # Clean up mask with morphological operations 
     morph_kernel_size = 5
     morph_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (morph_kernel_size, morph_kernel_size))
     binary_mask = cv2.dilate(binary_mask, morph_kernel)
@@ -93,194 +172,154 @@ def extract_hypocotyl_length(multi_class_mask):
     binary_mask = cv2.erode(binary_mask, morph_kernel)
     binary_mask = cv2.dilate(binary_mask, morph_kernel)
     
-    # Find all connected components
     connected_components, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    components_by_area = [(cv2.contourArea(component), component) for component in connected_components]
     
-    if len(components_by_area) == 0:
+    # Pre-calculate Area and BoundingRect for valid components only
+    components_data = []
+    for comp in connected_components:
+        area = cv2.contourArea(comp)
+        if area > 30: 
+            rect = cv2.boundingRect(comp)
+            components_data.append((area, comp, rect))
+    
+    if not components_data:
         return np.zeros_like(binary_mask), 0
     
-    # Sort components by area (largest first)
-    components_by_area.sort(key=lambda x: x[0], reverse=True)
+    # Sort: Largest area first
+    components_data.sort(key=lambda x: x[0], reverse=True)
     
-    # Extract the largest component as hypocotyl
-    area, component = components_by_area[0]
-    
-    if area < 30:  # Too small to be hypocotyl
-        return np.zeros_like(binary_mask), 0
-
     component_mask = np.zeros(binary_mask.shape, np.uint8)
-    cv2.drawContours(component_mask, [component], -1, 255, -1)
-    filtered_mask = cv2.bitwise_and(component_mask, binary_mask.copy())
-    skeleton = np.array(skeletonize(filtered_mask // 255), dtype='uint8')
+    accepted_rects = [] 
+    GAP_THRESHOLD = 100 
     
-    # First cleanup pass
-    skeleton = prune(skeleton, 5)  # Remove branches shorter than 7 pixels
-    skeleton = trim(skeleton)
-    
-    # Second cleanup pass: remove shorter branches emerged after trimming
-    skeleton = prune(skeleton, 3)  # Remove branches shorter than 5 pixels
-    skeleton = trim(skeleton)
+    for i, (_, component, rect) in enumerate(components_data):
+        # Always keep the largest component (Index 0)
+        if i == 0:
+            cv2.drawContours(component_mask, [component], -1, 255, -1)
+            accepted_rects.append(rect)
+            continue
+        
+        # Efficient Proximity Check 
+        # We check this new component against all previously accepted ones.
+        x1, y1, w1, h1 = rect
+        is_close = False
+        
+        for (rx, ry, rw, rh) in accepted_rects:
+            # Calculate gap distance using simple arithmetic (no square roots)
+            # Horizontal gap
+            if x1 + w1 < rx: h_gap = rx - (x1 + w1)
+            elif rx + rw < x1: h_gap = x1 - (rx + rw)
+            else: h_gap = 0
+            
+            # Vertical gap
+            if y1 + h1 < ry: v_gap = ry - (y1 + h1)
+            elif ry + rh < y1: v_gap = y1 - (ry + rh)
+            else: v_gap = 0
+            
+            # If gap is small in both dimensions, it's a match
+            if max(h_gap, v_gap) < GAP_THRESHOLD:
+                is_close = True
+                break
+        
+        if is_close:
+            cv2.drawContours(component_mask, [component], -1, 255, -1)
+            accepted_rects.append(rect)
 
-    # Third cleanup pass: remove shorter branches emerged after trimming
-    skeleton = prune(skeleton, 3)  # Remove branches shorter than 3 pixels
-    skeleton = trim(skeleton)
+    filtered_mask = cv2.bitwise_and(component_mask, binary_mask.copy())
+
+    roi_slice, offset = get_roi_bounding_box(filtered_mask)
     
-    return skeleton, np.sum(skeleton)
+    if roi_slice is None:
+        return np.zeros_like(binary_mask), 0
+    
+    # Crop -> Skeletonize -> Prune -> Reconstruct
+    cropped_mask = filtered_mask[roi_slice]
+    skeleton_crop = np.array(skeletonize(cropped_mask // 255), dtype='uint8')
+    
+    # Apply your cleanup pipeline
+    skeleton_crop = trim(prune(skeleton_crop, 5))
+    skeleton_crop = trim(prune(skeleton_crop, 3))
+    skeleton_crop = trim(prune(skeleton_crop, 3))
+    
+    # Place back into full frame
+    full_skeleton = np.zeros_like(binary_mask)
+    full_skeleton[roi_slice] = skeleton_crop
+    
+    return full_skeleton, np.sum(skeleton_crop)
 
 def extract_skeleton(binary_mask):
+    roi_slice, offset = get_roi_bounding_box(binary_mask)
+    
+    if roi_slice is None:
+        # Empty mask
+        return np.zeros_like(binary_mask), np.array([]), np.array([]), False
+
+    # Perform operations on the smaller crop
+    cropped_mask = binary_mask[roi_slice]
+    
     # Convert binary mask to 1-pixel-wide skeleton
-    skeleton = np.array(skeletonize(binary_mask // 255), dtype='uint8')
+    skeleton_crop = np.array(skeletonize(cropped_mask // 255), dtype='uint8')
 
     # First cleanup pass
-    skeleton = prune(skeleton, 5)  # Remove branches shorter than 7 pixels
-    skeleton = trim(skeleton)
+    skeleton_crop = prune(skeleton_crop, 5)  
+    skeleton_crop = trim(skeleton_crop)
     
-    # Second cleanup pass: remove shorter branches emerged after trimming
-    skeleton = prune(skeleton, 3)  # Remove branches shorter than 5 pixels
-    skeleton = trim(skeleton)
+    # Second cleanup pass
+    skeleton_crop = prune(skeleton_crop, 3)  
+    skeleton_crop = trim(skeleton_crop)
 
-    # Third cleanup pass: remove shorter branches emerged after trimming
-    skeleton = prune(skeleton, 3)  # Remove branches shorter than 3 pixels
-    skeleton = trim(skeleton)
+    # Third cleanup pass
+    skeleton_crop = prune(skeleton_crop, 3)  
+    skeleton_crop = trim(skeleton_crop)
     
-    # Identify branch points (where root splits) and end points (root tips)
-    branch_points, end_points = skeleton_nodes(skeleton)
+    # Identify branch points and end points on the crop
+    branch_points, end_points = skeleton_nodes(skeleton_crop)
+    
+    # Adjust coordinates back to full image space
+    if len(branch_points) > 0:
+        branch_points[:, 0] += offset[0] # x
+        branch_points[:, 1] += offset[1] # y
         
+    if len(end_points) > 0:
+        end_points[:, 0] += offset[0] # x
+        end_points[:, 1] += offset[1] # y
+
+    # Reconstruct full size skeleton image
+    full_skeleton = np.zeros_like(binary_mask)
+    full_skeleton[roi_slice] = skeleton_crop
+    
     # Valid skeleton must have at least 2 endpoints (seed + at least one tip)
     is_valid = len(end_points) >= 2
     
-    return skeleton, branch_points, end_points, is_valid
+    return full_skeleton, branch_points, end_points, is_valid
 
 def trim(ske): ## Removes unwanted pixels from the skeleton
-    
-    T=[]
-    T0=np.array([[-1, 1, -1], 
-                 [1, 1, 1], 
-                 [0, 0, 0]]) # T0 contains X0
-    T2=np.array([[-1, 1, 0], 
-                 [1, 1, 0], 
-                 [-1, 1, 0]])
-    T4=np.array([[0, 0, 0], 
-                 [1, 1, 1], 
-                 [-1, 1, -1]])
-    T6=np.array([[0, 1, -1], 
-                 [0, 1, 1], 
-                 [0, 1, -1]])
-    S1=np.array([[1, -1, -1], 
-                 [1, 1, -1], 
-                 [-1, 1, -1]])
-    S2=np.array([[-1, 1, -1], 
-                 [1, 1, -1], 
-                 [1, -1, -1]])
-    S3=np.array([[-1, -1, -1], 
-                 [1, 1, -1], 
-                 [-1, 1, 1]])
-    S4=np.array([[-1, -1, -1], 
-                 [-1, 1, 1], 
-                 [1, 1, -1]])
-    S5=np.array([[-1, 1, 1], 
-                 [1, 1, -1], 
-                 [-1, -1, -1]])
-    S6=np.array([[1, 1, -1], 
-                 [-1, 1, 1], 
-                 [-1, -1, -1]])
-    S7=np.array([[-1, -1, 1], 
-                 [-1, 1, 1], 
-                 [-1, 1, -1]])
-    S8=np.array([[-1, 1, -1], 
-                 [-1, 1, 1], 
-                 [-1, -1, 1]])
-    C1=np.array([[-1, 1, -1], 
-                 [-1, 1, 1], 
-                 [-1, -1, -1]])
-    C2=np.array([[-1, -1, -1], 
-                 [-1, 1, 1], 
-                 [-1, 1, -1]])
-    C3=np.array([[-1, 1, -1], 
-                 [1, 1, -1], 
-                 [-1, -1, -1]])
-    C4=np.array([[-1, -1, -1], 
-                 [1, 1, -1], 
-                 [-1, 1, -1]])
-    
-    T.append(T0)
-    T.append(T2)
-    T.append(T4)
-    T.append(T6)
-    T.append(S1)
-    T.append(S2)
-    T.append(S3)
-    T.append(S4)
-    T.append(S5)
-    T.append(S6)
-    T.append(S7)
-    T.append(S8)    
-    T.append(C1)
-    T.append(C2)
-    T.append(C3)
-    T.append(C4)
-    
+    # Using pre-allocated global kernels
     bp = np.zeros_like(ske)
-    for t in T:
+    for t in T_KERNELS:
         bp = cv2.morphologyEx(ske, cv2.MORPH_HITMISS, t)
         ske = cv2.subtract(ske, bp)
-    
-    # ske = cv2.subtract(ske, bp)
-    
     return ske
 
 
 def prune(skel, num_it): ## Removes branches with length lower than num_it
     orig = skel
     
-    endpoint1 = np.array([[-1, -1, -1],
-                          [-1, 1, -1],
-                          [0, 1, 0]])
-    
-    endpoint2 = np.array([[0, 1, 0],
-                          [-1, 1, -1],
-                          [-1, -1, -1]])
-    
-    endpoint4 = np.array([[0, -1, -1],
-                          [1, 1, -1],
-                          [0, -1, -1]])
-    
-    endpoint5 = np.array([[-1, -1, 0],
-                          [-1, 1, 1],
-                          [-1, -1, 0]])
-    
-    endpoint3 = np.array([[-1, -1, 1],
-                          [-1, 1, -1],
-                          [-1, -1, -1]])
-    
-    endpoint6 = np.array([[-1, -1, -1],
-                          [-1, 1, -1],
-                          [1, -1, -1]])
-    
-    endpoint7 = np.array([[-1, -1, -1],
-                          [-1, 1, -1],
-                          [-1, 1, -1]])
-    
-    endpoint8 = np.array([[1, -1, -1],
-                          [-1, 1, -1],
-                          [-1, -1, -1]])
-    
-    
+    # 1. Pruning loop using global kernels
     for i in range(0, num_it):
-        ep1 = skel - cv2.morphologyEx(skel, cv2.MORPH_HITMISS, endpoint1)
-        ep2 = ep1 - cv2.morphologyEx(ep1, cv2.MORPH_HITMISS, endpoint2)
-        ep3 = ep2 - cv2.morphologyEx(ep2, cv2.MORPH_HITMISS, endpoint3)
-        ep4 = ep3 - cv2.morphologyEx(ep3, cv2.MORPH_HITMISS, endpoint4)
-        ep5 = ep4 - cv2.morphologyEx(ep4, cv2.MORPH_HITMISS, endpoint5)
-        ep6 = ep5 - cv2.morphologyEx(ep5, cv2.MORPH_HITMISS, endpoint6)
-        ep7 = ep6 - cv2.morphologyEx(ep6, cv2.MORPH_HITMISS, endpoint7)
-        ep8 = ep7 - cv2.morphologyEx(ep7, cv2.MORPH_HITMISS, endpoint8)
-        skel = ep8
+        # We sequentially subtract hit-miss results
+        # To avoid multiple allocations, we can chain the operations or keep it simple
+        # Keeping logic identical but using pre-allocated kernels:
+        current_skel = skel
+        for kernel in EP_KERNELS:
+            hit = cv2.morphologyEx(current_skel, cv2.MORPH_HITMISS, kernel)
+            current_skel = cv2.subtract(current_skel, hit)
+        skel = current_skel
         
+    # 2. Re-grow endpoints
     end = endPoints(skel)
     kernel_size = 3
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(kernel_size,kernel_size))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
     
     for i in range(0, num_it):
         end = cv2.dilate(end, kernel)
@@ -290,48 +329,10 @@ def prune(skel, num_it): ## Removes branches with length lower than num_it
 
 
 def endPoints(skel):
-    endpoint1=np.array([[1, -1, -1],
-                        [-1, 1, -1],
-                        [-1, -1, -1]])
-    
-    endpoint2=np.array([[-1, 1, -1],
-                        [-1, 1, -1],
-                        [-1, -1, -1]])
-    
-    endpoint3=np.array([[-1, -1, 1],
-                        [-1, 1, -1],
-                        [-1, -1, -1]])
-    
-    endpoint4=np.array([[-1, -1, -1],
-                        [1, 1, -1],
-                        [-1, -1, -1]])
-    
-    endpoint5=np.array([[-1, -1, -1],
-                        [-1, 1, 1],
-                        [-1, -1, -1]])
-    
-    endpoint6=np.array([[-1, -1, -1],
-                        [-1, 1, -1],
-                        [1, -1, -1]])
-    
-    endpoint7=np.array([[-1, -1, -1],
-                        [-1, 1, -1],
-                        [-1, 1, -1]])
-    
-    endpoint8=np.array([[-1, -1, -1],
-                        [-1, 1, -1],
-                        [-1, -1, 1]])
-    
-    ep1 = cv2.morphologyEx(skel, cv2.MORPH_HITMISS, endpoint1)
-    ep2 = cv2.morphologyEx(skel, cv2.MORPH_HITMISS, endpoint2)
-    ep3 = cv2.morphologyEx(skel, cv2.MORPH_HITMISS, endpoint3)
-    ep4 = cv2.morphologyEx(skel, cv2.MORPH_HITMISS, endpoint4)
-    ep5 = cv2.morphologyEx(skel, cv2.MORPH_HITMISS, endpoint5)
-    ep6 = cv2.morphologyEx(skel, cv2.MORPH_HITMISS, endpoint6)
-    ep7 = cv2.morphologyEx(skel, cv2.MORPH_HITMISS, endpoint7)
-    ep8 = cv2.morphologyEx(skel, cv2.MORPH_HITMISS, endpoint8)
-    
-    ep = ep1+ep2+ep3+ep4+ep5+ep6+ep7+ep8
+    ep = np.zeros_like(skel)
+    # Use global EP_KERNELS
+    for kernel in EP_KERNELS:
+        ep = cv2.add(ep, cv2.morphologyEx(skel, cv2.MORPH_HITMISS, kernel))
     return ep
 
 
@@ -353,61 +354,13 @@ def skeleton_nodes(ske):
 
 
 def branchedPoints(skel):
-    X=[]
-    #cross X
-    X0 = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]])
-    X1 = np.array([[1, 0, 1], [0, 1, 0], [1, 0, 1]])
-    X.append(X0)
-    X.append(X1)
-    
-    #T like
-    T=[]
-    T0=np.array([[2, 1, 2], 
-                 [1, 1, 1], 
-                 [2, 2, 2]]) # T0 contains X0
-    T1=np.array([[1, 2, 1], [2, 1, 2], [1, 2, 2]]) # T1 contains X1
-    T2=np.array([[2, 1, 2], [1, 1, 2], [2, 1, 2]])
-    T3=np.array([[1, 2, 2], [2, 1, 2], [1, 2, 1]])
-    T4=np.array([[2, 2, 2], [1, 1, 1], [2, 1, 2]])
-    T5=np.array([[2, 2, 1], [2, 1, 2], [1, 2, 1]])
-    T6=np.array([[2, 1, 2], [2, 1, 1], [2, 1, 2]])
-    T7=np.array([[1, 2, 1], [2, 1, 2], [2, 2, 1]])
-    
-    T.append(T0)
-    T.append(T1)
-    T.append(T2)
-    T.append(T3)
-    T.append(T4)
-    T.append(T5)
-    T.append(T6)
-    T.append(T7)
-    
-    #Y like
-    Y=[]
-    Y0=np.array([[1, 0, 1], [0, 1, 0], [2, 1, 2]])
-    Y1=np.array([[0, 1, 0], [1, 1, 2], [0, 2, 1]])
-    Y2=np.array([[1, 0, 2], [0, 1, 1], [1, 0, 2]])
-    Y3=np.array([[0, 2, 1], [1, 1, 2], [0, 1, 0]])
-    Y4=np.array([[2, 1, 2], [0, 1, 0], [1, 0, 1]])
-    Y5 = np.rot90(Y3)
-    Y6 = np.rot90(Y4)
-    Y7 = np.rot90(Y5)
-    
-    Y.append(Y0)
-    Y.append(Y1)
-    Y.append(Y2)
-    Y.append(Y3)
-    Y.append(Y4)
-    Y.append(Y5)
-    Y.append(Y6)
-    Y.append(Y7)
-    
     bp = np.zeros(skel.shape, dtype=int)
-    for x in X:
+    
+    for x in X_KERNELS:
         bp = bp + cv2.morphologyEx(skel, cv2.MORPH_HITMISS, x)
-    for y in Y:
+    for y in Y_KERNELS:
         bp = bp + cv2.morphologyEx(skel, cv2.MORPH_HITMISS, y)
-    for t in T:
+    for t in T_BRANCH_KERNELS:
         bp = bp + cv2.morphologyEx(skel, cv2.MORPH_HITMISS, t)
         
     return bp
