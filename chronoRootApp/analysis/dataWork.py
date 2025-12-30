@@ -35,6 +35,10 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
     
+    # If there is no HypocotylLength column, add it with zeros
+    if 'HypocotylLength' not in data.columns:
+        data['HypocotylLength'] = 0.0
+    
     # Read info from the filename
     dates = []
     for i in range(0,N):
@@ -114,6 +118,7 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     mainRoot = data['MainRootLength'].to_numpy().astype('float')
     lateralRoots = data['LateralRootsLength'].to_numpy().astype('float')
     numlateralRoots = data['NumberOfLateralRoots'].to_numpy().astype('int')
+    hypocotylLength = data['HypocotylLength'].to_numpy().astype('float') 
 
     # Check for NaN or invalid values
     if np.any(np.isnan(mainRoot)):
@@ -122,11 +127,14 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
         warnings.warn(f"NaN values found in LateralRootsLength at indices: {np.where(np.isnan(lateralRoots))[0]}")
     if np.any(np.isnan(numlateralRoots)):
         warnings.warn(f"NaN values found in NumberOfLateralRoots at indices: {np.where(np.isnan(numlateralRoots))[0]}")
-
+    if np.any(np.isnan(hypocotylLength)):
+        warnings.warn(f"NaN values found in HypocotylLength at indices: {np.where(np.isnan(hypocotylLength))[0]}")
+        
     # Replace NaN with 0 for processing
     mainRoot = np.nan_to_num(mainRoot, nan=0.0)
     lateralRoots = np.nan_to_num(lateralRoots, nan=0.0)
     numlateralRoots = np.nan_to_num(numlateralRoots, nan=0.0)
+    hypocotylLength = np.nan_to_num(hypocotylLength, nan=0.0)
 
     # Remove spurious lateral roots at the beginning
     # The space are eight hours (32 timepoints with 15 min timeStep)
@@ -139,12 +147,15 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
                 numlateralRoots[:t] = 0
             if mainRoot[t-space] == 0 and mainRoot[t] == 0:
                 mainRoot[:t] = 0
+            if hypocotylLength[t-space] == 0 and hypocotylLength[t] == 0:
+                hypocotylLength[:t] = 0
     
     # Smooth
     mainRoot = signal.medfilt(mainRoot, 9) 
     lateralRoots = signal.medfilt(lateralRoots, 9) 
+    hypocotylLength = signal.medfilt(hypocotylLength, 9)
 
-    # Check that the values never decrease (with improved thresholds)
+    # Check that the values never decrease
     for i in range(1, len(mainRoot)):
         dif = mainRoot[i] < mainRoot[i-1]
         if dif:
@@ -157,15 +168,21 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
         dif = lateralRoots[i] < lateralRoots[i-1]
         if dif and lateralRoots[i-1] > 0:
             lateralRoots[i] = lateralRoots[i-1]
+        
+        dif = hypocotylLength[i] < hypocotylLength[i-1]
+        if dif and hypocotylLength[i-1] > 0:
+            hypocotylLength[i] = hypocotylLength[i-1]
 
     # Multiply by pixel size
     mainRoot_mm = mainRoot.copy() * pixel_size
     lateralRoots_mm = lateralRoots.copy() * pixel_size
+    hypocotyl_mm = hypocotylLength.copy() * pixel_size
     
     data['MainRootLength (mm)'] = mainRoot_mm
     data['LateralRootsLength (mm)'] = lateralRoots_mm
     data['NumberOfLateralRoots'] = numlateralRoots
     data['TotalLength (mm)'] = mainRoot_mm + lateralRoots_mm
+    data['HypocotylLength (mm)'] = hypocotyl_mm
 
     # Save file names (excluding interpolated ones if desired)
     original_files = data[~data['FileName'].str.contains('INTERPOLATED', na=False)]['FileName']
@@ -173,12 +190,9 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
 
     # Remove original columns
     try:
-        data = data.drop(columns=['FileName', 'Frame', 'MainRootLength', 'LateralRootsLength', 'TotalLength'])
+        data = data.drop(columns=['FileName', 'Frame', 'MainRootLength', 'LateralRootsLength', 'TotalLength', 'HypocotylLength'])
     except:
-        data = data.drop(columns=['FileName', 'MainRootLength', 'LateralRootsLength', 'TotalLength'])
-        
-    # Reorder columns
-    data = data[['Date', 'MainRootLength (mm)', 'LateralRootsLength (mm)', 'TotalLength (mm)', 'NumberOfLateralRoots']]
+        data = data.drop(columns=['FileName', 'MainRootLength', 'LateralRootsLength', 'TotalLength', 'HypocotylLength'])
     
     # Create elapsed time column, in hours
     data['ElapsedTime (h)'] = ((data['Date'] - data['Date'][0]).dt.total_seconds() / 3600).round(2)
@@ -189,7 +203,6 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     data.to_csv(os.path.abspath(os.path.join(folder, 'PostProcess_Original.csv')), index=False)
 
     # Downsample to hourly data
-    data_copy = data.copy()
     data = data.set_index('Date')
     data.index.name = 'Date'
     
@@ -225,6 +238,7 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     mainRootGrad = np.gradient(data['MainRootLength (mm)'].to_numpy(), edge_order=2)
     lateralRootsGrad = np.gradient(data['LateralRootsLength (mm)'].to_numpy(), edge_order=2)
     totalRootsGrad = np.gradient(data['TotalLength (mm)'].to_numpy(), edge_order=2)
+    hypocotylGrad = np.gradient(data['HypocotylLength (mm)'].to_numpy(), edge_order=2) 
     
     # Calculate ratios with proper division handling
     total_length = data['TotalLength (mm)'].to_numpy()
@@ -252,6 +266,7 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     data['MainRootLengthGrad (mm/h)'] = mainRootGrad
     data['LateralRootsLengthGrad (mm/h)'] = lateralRootsGrad
     data['TotalLengthGrad (mm/h)'] = totalRootsGrad
+    data['HypocotylLengthGrad (mm/h)'] = hypocotylGrad
     data['MainOverTotal (%)'] = mainOverTotal
     data['LateralDensity (mm/mm)'] = lateralDensity
     data['DiscreteLateralDensity (LR/cm)'] = discreteLateralDensity

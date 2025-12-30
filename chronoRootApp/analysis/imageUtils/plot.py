@@ -26,7 +26,7 @@ def getImgName(image, conf):
     return image.replace(conf['ImagePath'], '').replace('/', '')
 
 
-def plot_segmentation_overlay(graph, skeleton_overlay):
+def plot_segmentation_overlay(graph, skeleton_overlay, hypocotyl_skeleton):
     """
     Create a color-coded visualization of the root system.
     
@@ -42,6 +42,7 @@ def plot_segmentation_overlay(graph, skeleton_overlay):
     # Create separate masks for main root and lateral roots
     main_root_mask = np.zeros_like(skeleton_overlay).astype('uint8')
     lateral_root_mask = np.zeros_like(skeleton_overlay).astype('uint8')
+    hypocotyl_mask = np.zeros_like(hypocotyl_skeleton).astype('uint8')
     
     # Iterate through all edges and mark pixels by root type
     for u, v, data in graph.edges(data=True):
@@ -58,15 +59,23 @@ def plot_segmentation_overlay(graph, skeleton_overlay):
             # Lateral root edge
             lateral_root_mask[pixel_positions] = 255
     
+    # Add hypocotyl skeleton to main root mask
+    hypocotyl_mask[np.where(hypocotyl_skeleton > 0)] = 255
+    
     # Dilate masks to make roots more visible
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
     main_root_mask = cv2.dilate(main_root_mask, kernel)
     lateral_root_mask = cv2.dilate(lateral_root_mask, kernel)
+    hypocotyl_mask = cv2.dilate(hypocotyl_mask, kernel)
     
     # Create 3-channel color image (BGR format for OpenCV)
     colored_overlay = np.zeros(list(skeleton_overlay.shape) + [3], dtype='uint8')
     colored_overlay[:, :, 1] = main_root_mask      # Green channel = main root
     colored_overlay[:, :, 0] = lateral_root_mask   # Blue channel = lateral roots
+    
+    # Hypocotyl should be yellow (Red + Green)
+    colored_overlay[:, :, 1] = np.maximum(colored_overlay[:, :, 1], hypocotyl_mask)  # Green channel
+    colored_overlay[:, :, 2] = np.maximum(colored_overlay[:, :, 2], hypocotyl_mask)  # Red channel
     
     # Draw Ini and FTip nodes in green and blue dots
     nodes = list(graph.nodes())
@@ -75,14 +84,14 @@ def plot_segmentation_overlay(graph, skeleton_overlay):
         node_type = node["type"]
         x, y = np.array(node["pos"])
         if node_type == 'Ini':
-            cv2.circle(colored_overlay, (x, y), 5, (0, 0, 255), -1)  # Red dot
+            cv2.circle(colored_overlay, (x, y), 8, (0, 0, 255), -1)  # Red dot
         elif node_type == 'FTip':
-            cv2.circle(colored_overlay, (x, y), 5, (255, 255, 0), -1)  # Yellow dot
+            cv2.circle(colored_overlay, (x, y), 8, (255, 255, 0), -1)  # Yellow dot
 
     return colored_overlay
 
 
-def saveImages(conf, images, frame_idx, segmentation_mask, graph=None, skeleton_overlay=None):
+def saveImages(conf, images, frame_idx, segmentation_mask, graph=None, skeleton_overlay=None, hypocotyl_skeleton=None):
     """
     Save visualization images for a frame.
     
@@ -133,7 +142,7 @@ def saveImages(conf, images, frame_idx, segmentation_mask, graph=None, skeleton_
         colored_image = np.stack([colored_image] * 3, axis=-1)
     else:
         # Create color visualization from graph
-        colored_image = plot_segmentation_overlay(graph, skeleton_overlay)
+        colored_image = plot_segmentation_overlay(graph, skeleton_overlay, hypocotyl_skeleton)
     
     segmulti_folder = os.path.join(output_folder, "SegMulti")
     segmulti_path = os.path.join(segmulti_folder, image_name)

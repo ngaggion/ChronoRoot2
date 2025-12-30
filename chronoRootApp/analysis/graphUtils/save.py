@@ -58,7 +58,7 @@ def saveGraph(graph, conf, image_name):
     return
 
 
-def saveProps(image_name, frame_number, graph, csv_writer, number_lateral_roots):
+def saveProps(image_name, frame_number, graph, csv_writer, number_lateral_roots, hypocotyl_length):
     """
     Extract and save measurements from the graph to CSV.
     
@@ -94,11 +94,12 @@ def saveProps(image_name, frame_number, graph, csv_writer, number_lateral_roots)
             main_root_length, 
             lateral_roots_length, 
             number_lateral_roots, 
-            total_length
+            total_length,
+            hypocotyl_length
         ]
     else:
         # No valid graph - write zeros
-        row = [image_name, frame_number, 0, 0, 0, 0]
+        row = [image_name, frame_number, 0, 0, 0, 0, 0]
     
     csv_writer.writerow(row)
     return

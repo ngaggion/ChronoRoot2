@@ -72,6 +72,7 @@ def plot_individual_plant(savepath, dataframe, name):
     # Adding distinct labels for the legend
     dataframe.plot(x='ElapsedTime (h)', y='MainRootLength (mm)', ax=ax1, color='g', label='Main Root Length')
     dataframe.plot(x='ElapsedTime (h)', y='LateralRootsLength (mm)', ax=ax1, color='b', label='Lateral Roots Length')
+    dataframe.plot(x='ElapsedTime (h)', y='HypocotylLength (mm)', ax=ax1, color='r', label='Hypocotyl Length')
     
     # Increase title padding to make room for the top "Days" axis ticks
     ax1.set_title('%s' % name, pad=40, fontsize=TITLE_SIZE)
@@ -217,7 +218,8 @@ def generateTableTemporal(conf, data):
                                                       'TotalLength (mm)': ['mean', 'std'], 
                                                       'NumberOfLateralRoots': ['mean', 'std'], 
                                                       'DiscreteLateralDensity (LR/cm)': ['mean', 'std'], 
-                                                      'MainOverTotal (%)': ['mean', 'std']})
+                                                      'MainOverTotal (%)': ['mean', 'std'],
+                                                      'HypocotylLength (mm)': ['mean', 'std']})
         
         subdata.columns = [' '.join(col).strip() for col in subdata.columns.values]
         subdata = subdata.reset_index()
@@ -298,6 +300,42 @@ def plot_info_all(savepath, dataframe):
     plt.cla()
     plt.clf()
     plt.close('all')
+    
+    # List of metrics to plot individually
+    metrics = [
+        ('MainRootLength (mm)', 'Main Root Length'),
+        ('LateralRootsLength (mm)', 'Lateral Roots Length'),
+        ('TotalLength (mm)', 'Total Length'),
+        ('NumberOfLateralRoots', 'Number of Lateral Roots'),
+        ('DiscreteLateralDensity (LR/cm)', 'Discrete Lateral Density'),
+        ('MainOverTotal (%)', 'Main Root over Total Length'),
+        ('HypocotylLength (mm)', 'Hypocotyl Length')
+    ]
+
+    for column, title in metrics:
+        plt.ioff()
+        plt.figure(figsize=(8, 6))
+        
+        sns.lineplot(
+            x='ElapsedTime (h)', 
+            y=column, 
+            data=dataframe, 
+            hue='Experiment', 
+            errorbar='se'
+        )
+        
+        plt.title(f'{title} Over Time', fontsize=16)
+        plt.ylabel(column, fontsize=12)
+        plt.xlabel('Elapsed Time (h)', fontsize=12)
+        plt.legend(loc='best')
+        
+        # Create a filename-friendly string (removing special characters)
+        filename = column.replace(' ', '_').replace('/', '_').replace('(', '').replace(')', '').replace('%', 'Pct')
+        
+        plt.savefig(os.path.join(savepath, f'{filename}_Temporal.png'), dpi=300, bbox_inches='tight')
+        
+        # Clean up memory after each plot
+        plt.close()
 
 def mkdir(path):
     try:
