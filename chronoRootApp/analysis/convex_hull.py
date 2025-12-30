@@ -39,15 +39,8 @@ def calculate_atlas_geometry(experiment_paths: List[str]) -> Tuple[Tuple[int, in
         # Load all results folders
         result_paths = utils.load_paths(exp_path, '*/*/*/Results*')
         
-        for r_path in result_paths:
-            # 1. Load Metadata
-            meta_path = os.path.join(r_path, 'metadata.json')
-            if not os.path.exists(meta_path): continue
-            
-            with open(meta_path) as f: 
-                metadata = json.load(f)
-            
-            # 2. Load Last Segmentation Image
+        for r_path in result_paths:            
+            # 1. Load Last Segmentation Image
             seg_folder = os.path.join(r_path, 'Images/Seg/')
             seg_files = utils.load_paths(seg_folder, "*.png")
             if not seg_files: continue
@@ -57,10 +50,8 @@ def calculate_atlas_geometry(experiment_paths: List[str]) -> Tuple[Tuple[int, in
             
             # Apply standard padding for alignment
             img = np.pad(img, ((0,0), (PADDING_X, 0)))
-            seed = np.array(metadata['seed'])
-            seed[0] += PADDING_X 
             
-            # 3. Load Graph to find tips for rotation
+            # 2. Load Graph to find tips for rotation
             graph_folder = os.path.join(r_path, 'Graphs/')
             # Try to find corresponding graph file
             graph_filename = os.path.basename(seg_files[-1]).replace('png', 'xml.gz')
@@ -81,6 +72,9 @@ def calculate_atlas_geometry(experiment_paths: List[str]) -> Tuple[Tuple[int, in
             
             if end1 is None or end2 is None: continue
             
+            seed = end1 if end1[1] < end2[1] else end2
+            seed[0] += PADDING_X 
+            
             # Determine which is the bottom tip (highest Y value)
             root_tip = end1 if end1[1] > end2[1] else end2
             root_tip[0] += PADDING_X
@@ -100,7 +94,7 @@ def calculate_atlas_geometry(experiment_paths: List[str]) -> Tuple[Tuple[int, in
             result = cv2.warpAffine(img, rot_mat, img.shape[1::-1], flags=cv2.INTER_LINEAR)
             _, result = cv2.threshold(result, 10, 255, cv2.THRESH_BINARY)
             
-            # 4. Measure Size Relative to Seed
+            # 3. Measure Size Relative to Seed
             points = cv2.findNonZero(result)
             if points is None: continue
             
@@ -199,8 +193,6 @@ def generate_root_atlases(save_path, days, timestep, canvas_shape, center_coords
 
             # --- Pre-processing (Padding) ---
             img = np.pad(img, ((0,0), (PADDING_X, 0)))
-            seed = metadata['seed']
-            seed[0] += PADDING_X
             
             # Find endpoints
             end1 = end2 = None
@@ -209,6 +201,10 @@ def generate_root_atlases(save_path, days, timestep, canvas_shape, center_coords
                 if g.nodes[n]['type'] == 'Ini': end2 = np.array([g.nodes[n]["pos_x"], g.nodes[n]["pos_y"]])
             
             if end1 is None or end2 is None: continue
+            
+            # Determine seed
+            seed = end1 if end1[1] < end2[1] else end2
+            seed[0] += PADDING_X
             
             # Determine tip
             root_tip = end1 if end1[1] > end2[1] else end2

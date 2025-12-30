@@ -99,7 +99,7 @@ def plantAnalysis(conf, replicate=False):
     
     with open(measurements_file, 'w+') as csv_file:
         csv_writer = csv.writer(csv_file)
-        header = ['FileName', 'Frame', 'MainRootLength', 'LateralRootsLength', 'NumberOfLateralRoots', 'TotalLength']
+        header = ['FileName', 'Frame', 'MainRootLength', 'LateralRootsLength', 'NumberOfLateralRoots', 'TotalLength', 'HypocotylLength']
         csv_writer.writerow(header)
         
         # ====================================================================
@@ -109,18 +109,19 @@ def plantAnalysis(conf, replicate=False):
         
         first_valid_frame = None
         initial_root_mask = None
-        initial_skeleton = None
         initial_skeleton_overlay = None
         initial_graph = None
         initial_rsml = None
         initial_lateral_count = None
+        initial_hypocotyl_length = None
+        initial_hypocotyl_skeleton = None
         
         for frame_idx in range(total_frames):
             print(f'Checking frame {frame_idx + 1} of {total_frames}', end='\r')
             
             # Try to extract root segmentation
             try:
-                root_mask, found_root = extract_root_segmentation(
+                root_mask, hypocotyl_skeleton, hypocotyl_length, found_root = extract_root_segmentation(
                     segmentation_paths[frame_idx], 
                     roi_bounds, 
                     current_root_base,
@@ -129,8 +130,8 @@ def plantAnalysis(conf, replicate=False):
                 
                 if not found_root:
                     frame_name = getImgName(images[frame_idx], conf)
-                    saveProps(frame_name, frame_idx, False, csv_writer, 0)
-                    saveImages(conf, images, frame_idx, root_mask, None, None)
+                    saveProps(frame_name, frame_idx, False, csv_writer, 0, 0)
+                    saveImages(conf, images, frame_idx, root_mask, None, None, None)
                     frame_errors.append(0)
                     continue
                 
@@ -139,17 +140,16 @@ def plantAnalysis(conf, replicate=False):
                                 
                 if not is_valid_skeleton:
                     frame_name = getImgName(images[frame_idx], conf)
-                    saveProps(frame_name, frame_idx, False, csv_writer, 0)
-                    saveImages(conf, images, frame_idx, root_mask, None, None)
+                    saveProps(frame_name, frame_idx, False, csv_writer, 0, 0)
+                    saveImages(conf, images, frame_idx, root_mask, None, None, None)
                     frame_errors.append(0)
                     continue
             except Exception as e:
                 frame_name = getImgName(images[frame_idx], conf)
-                saveProps(frame_name, frame_idx, False, csv_writer, 0)
-                saveImages(conf, images, frame_idx, root_mask, None, None)
+                saveProps(frame_name, frame_idx, False, csv_writer, 0, 0)
+                saveImages(conf, images, frame_idx, root_mask, None, None, None)
                 frame_errors.append(0)
                 continue
-            
             
             # Try to create graph structure
             graph, updated_root_base, skeleton_overlay = createGraph(
@@ -164,8 +164,8 @@ def plantAnalysis(conf, replicate=False):
                 rsml_tree, lateral_root_count = createTree(conf, frame_idx, images, graph, skeleton, skeleton_overlay)
             except Exception as e:
                 frame_name = getImgName(images[frame_idx], conf)
-                saveProps(frame_name, frame_idx, False, csv_writer, 0)
-                saveImages(conf, images, frame_idx, root_mask, None, None)
+                saveProps(frame_name, frame_idx, False, csv_writer, 0, 0)
+                saveImages(conf, images, frame_idx, root_mask, None, None, None)
                 frame_errors.append(0)
                 continue
             
@@ -175,6 +175,8 @@ def plantAnalysis(conf, replicate=False):
             initial_skeleton_overlay = skeleton_overlay
             initial_graph = graph
             initial_rsml = rsml_tree
+            initial_hypocotyl_skeleton = hypocotyl_skeleton
+            initial_hypocotyl_length = hypocotyl_length
             initial_lateral_count = lateral_root_count
             current_root_base = updated_root_base
             
@@ -198,10 +200,10 @@ def plantAnalysis(conf, replicate=False):
         analysis_log.append(f'Frame {growth_start_frame}: Growth begins\n')
         
         frame_name = getImgName(images[growth_start_frame], conf)
-        saveImages(conf, images, growth_start_frame, initial_root_mask, initial_graph, initial_skeleton_overlay)
+        saveImages(conf, images, growth_start_frame, initial_root_mask, initial_graph, initial_skeleton_overlay, initial_hypocotyl_skeleton)
         saveGraph(initial_graph, conf, frame_name)
         saveRSML(initial_rsml, conf, frame_name)
-        saveProps(frame_name, growth_start_frame, initial_graph, csv_writer, initial_lateral_count)
+        saveProps(frame_name, growth_start_frame, initial_graph, csv_writer, initial_lateral_count, initial_hypocotyl_length)
         
         # ====================================================================
         # PHASE 2: Track growth over time
@@ -214,6 +216,8 @@ def plantAnalysis(conf, replicate=False):
         current_graph = initial_graph
         current_rsml = initial_rsml
         current_lateral_count = initial_lateral_count
+        current_hypocotyl_length = initial_hypocotyl_length
+        current_hypocotyl_skeleton = initial_hypocotyl_skeleton
         
         error_count = 0
         consecutive_errors = 0
@@ -223,7 +227,7 @@ def plantAnalysis(conf, replicate=False):
             
             frame_failed = False
             
-            new_root_mask, found_root = extract_root_segmentation(
+            new_root_mask, new_hypocotyl_skeleton, new_hypocotyl_length, found_root = extract_root_segmentation(
                 segmentation_paths[frame_idx],
                 roi_bounds,
                 current_root_base,
@@ -323,16 +327,18 @@ def plantAnalysis(conf, replicate=False):
                 current_graph = new_graph
                 current_rsml = new_rsml
                 current_lateral_count = new_lateral_count
+                current_hypocotyl_length = new_hypocotyl_length
+                current_hypocotyl_skeleton = new_hypocotyl_skeleton
                 current_root_base = updated_root_base
                 
                 consecutive_errors = 0  # Reset consecutive error counter
                 frame_errors.append(0)
             
             frame_name = getImgName(images[frame_idx], conf)
-            saveImages(conf, images, frame_idx, current_root_mask, current_graph, current_skeleton_overlay)
+            saveImages(conf, images, frame_idx, current_root_mask, current_graph, current_skeleton_overlay, current_hypocotyl_skeleton)
             saveGraph(current_graph, conf, frame_name)
             saveRSML(current_rsml, conf, frame_name)
-            saveProps(frame_name, frame_idx, current_graph, csv_writer, current_lateral_count)
+            saveProps(frame_name, frame_idx, current_graph, csv_writer, current_lateral_count, current_hypocotyl_length)
         
         print('\n\nGrowth tracking complete')
         print('Saving outputs...')

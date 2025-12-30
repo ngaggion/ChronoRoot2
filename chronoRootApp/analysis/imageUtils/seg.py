@@ -25,6 +25,9 @@ def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, 
     # Load segmentation and crop to region of interest
     multi_class_mask = cv2.imread(segmentation_path, 0)[roi_bounds[0]:roi_bounds[1], roi_bounds[2]:roi_bounds[3]]
     
+    # Extract hypocotyl length
+    hypocotyl_skeleton, hypocotyl_length = extract_hypocotyl_length(multi_class_mask)
+    
     # Remove anything above the original seed point (not part of root)
     multi_class_mask[0:fixed_seed_position[1], :] = 0
 
@@ -48,14 +51,14 @@ def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, 
     components_by_area = [(cv2.contourArea(component), component) for component in connected_components]
     
     if len(components_by_area) == 0:
-        return binary_mask, False
+        return binary_mask, hypocotyl_skeleton, hypocotyl_length, False
     
     # Sort components by area (largest first)
     components_by_area.sort(key=lambda x: x[0], reverse=True)
     
     # Find the component that contains or is near the root base
     for area, component in components_by_area:
-        if area < 40:  # Skip tiny components
+        if area < 30:  # Skip tiny components
             break
         
         # Check if this component contains the current root base position
@@ -68,11 +71,62 @@ def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, 
             component_mask = np.zeros(binary_mask.shape, np.uint8)
             cv2.drawContours(component_mask, [component], -1, 255, -1)
             filtered_mask = cv2.bitwise_and(component_mask, binary_mask.copy())
-            return filtered_mask, True
+            
+            return filtered_mask, hypocotyl_skeleton, hypocotyl_length, True
     
     # No component found near root base
-    return binary_mask, False
+    return binary_mask, hypocotyl_skeleton, hypocotyl_length, False
 
+def extract_hypocotyl_length(multi_class_mask):
+    # Segmentation classes 4
+    binary_mask = (multi_class_mask == 4) 
+    binary_mask = np.array(binary_mask, dtype='uint8') * 255
+    
+    # Clean up mask with morphological operations 
+    morph_kernel_size = 5
+    morph_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (morph_kernel_size, morph_kernel_size))
+    binary_mask = cv2.dilate(binary_mask, morph_kernel)
+    binary_mask = cv2.erode(binary_mask, morph_kernel)
+    
+    morph_kernel_size = 3
+    morph_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (morph_kernel_size, morph_kernel_size))
+    binary_mask = cv2.erode(binary_mask, morph_kernel)
+    binary_mask = cv2.dilate(binary_mask, morph_kernel)
+    
+    # Find all connected components
+    connected_components, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    components_by_area = [(cv2.contourArea(component), component) for component in connected_components]
+    
+    if len(components_by_area) == 0:
+        return np.zeros_like(binary_mask), 0
+    
+    # Sort components by area (largest first)
+    components_by_area.sort(key=lambda x: x[0], reverse=True)
+    
+    # Extract the largest component as hypocotyl
+    area, component = components_by_area[0]
+    
+    if area < 30:  # Too small to be hypocotyl
+        return np.zeros_like(binary_mask), 0
+
+    component_mask = np.zeros(binary_mask.shape, np.uint8)
+    cv2.drawContours(component_mask, [component], -1, 255, -1)
+    filtered_mask = cv2.bitwise_and(component_mask, binary_mask.copy())
+    skeleton = np.array(skeletonize(filtered_mask // 255), dtype='uint8')
+    
+    # First cleanup pass
+    skeleton = prune(skeleton, 5)  # Remove branches shorter than 7 pixels
+    skeleton = trim(skeleton)
+    
+    # Second cleanup pass: remove shorter branches emerged after trimming
+    skeleton = prune(skeleton, 3)  # Remove branches shorter than 5 pixels
+    skeleton = trim(skeleton)
+
+    # Third cleanup pass: remove shorter branches emerged after trimming
+    skeleton = prune(skeleton, 3)  # Remove branches shorter than 3 pixels
+    skeleton = trim(skeleton)
+    
+    return skeleton, np.sum(skeleton)
 
 def extract_skeleton(binary_mask):
     # Convert binary mask to 1-pixel-wide skeleton

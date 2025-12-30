@@ -25,7 +25,8 @@ def performFPCA(conf_path):
     'TotalLength (mm)',
     'NumberOfLateralRoots',
     'MainOverTotal (%)',
-    'DiscreteLateralDensity (LR/cm)'
+    'DiscreteLateralDensity (LR/cm)',
+    'HypocotylLength (mm)'
     ]
 
     with open(conf_path, 'r') as file:
