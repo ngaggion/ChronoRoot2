@@ -260,16 +260,18 @@ class GerminationAnalyzer:
         # Original group plots
         for group_name, group_data in self.data.groupby('Group'):
             self._plot_germination_curve(group_name, group_data)
+            self._plot_germination_curve(group_name, group_data, log_scale=True)
             
             # Add per-video plots for this group
             for video_name, video_data in group_data.groupby('Video'):
                 self._plot_germination_curve_per_video(group_name, video_name, video_data)
+                self._plot_germination_curve_per_video(group_name, video_name, video_data, log_scale=True)
         
         # Survival curves
         self._plot_survival_curves(pairwise=False)
         self._plot_survival_curves(pairwise=True)
 
-    def _plot_germination_curve(self, group_name, group_data):
+    def _plot_germination_curve(self, group_name, group_data, log_scale=False):
         """
         Create comprehensive germination curve plot using manual seed counts.
         """
@@ -373,6 +375,10 @@ class GerminationAnalyzer:
             ax2.set_ylim(0, total_seeds)
             ax1.set_xlim(0, max(time_points))
             
+            # put x axis in symlog scale
+            if log_scale:
+                ax1.set_xscale('symlog', linthresh=1)
+            
             # Add grid
             ax1.grid(True, alpha=0.3)
             
@@ -381,7 +387,8 @@ class GerminationAnalyzer:
             
             # Save plot
             plot_name = os.path.join(self.plot_dirs['germination'], 
-                                f'GerminationCurve_{group_name}')
+                                f'GerminationCurve_{group_name}' +
+                                ('_LogScale' if log_scale else ''))
             plt.tight_layout()
             self._save_plot(plot_name)
                         
@@ -476,7 +483,7 @@ class GerminationAnalyzer:
         # Adjust layout to prevent legend cutoff
         plt.tight_layout()
 
-    def _plot_germination_curve_per_video(self, group_name, video_name, video_data):
+    def _plot_germination_curve_per_video(self, group_name, video_name, video_data, log_scale=False):
         """
         Create germination curve plot for a specific video.
         
@@ -560,6 +567,9 @@ class GerminationAnalyzer:
             ax1.set_ylim(0, 100)
             ax2.set_ylim(0, total_seeds)
             ax1.set_xlim(0, max(time_points))
+            
+            if log_scale:
+                ax1.set_xscale('symlog', linthresh=1)
             
             # Add grid
             ax1.grid(True, alpha=0.3)
