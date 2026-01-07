@@ -4,13 +4,14 @@ Simple installation system for Linux using Apptainer or Singularity containers.
 
 ## Prerequisites
 
-- **Apptainer** or **Singularity** installed
-- **Git** installed
-- **Git LFS** installed (for large files in the repository)
-- Ubuntu 20.04+ or compatible Linux distribution
-- ~20 GB free disk space
+* **Apptainer** or **Singularity** installed
+* **Git** installed
+* **Git LFS** installed (for large files in the repository)
+* Ubuntu 20.04+ or compatible Linux distribution
+* **~20-30 GB** free disk space (depending on image choice)
 
 Install prerequisites:
+
 ```bash
 sudo apt update
 sudo apt install -y git git-lfs software-properties-common
@@ -18,6 +19,7 @@ sudo add-apt-repository -y ppa:apptainer/ppa
 sudo apt update
 sudo apt install -y apptainer
 git lfs install
+
 ```
 
 **Note:** Git LFS is required because the repository contains large model files. The installer will offer to install it automatically if not found.
@@ -29,11 +31,13 @@ Download and run the installer:
 ```bash
 wget https://raw.githubusercontent.com/ngaggion/ChronoRoot2/master/apptainerInstaller/install.sh
 bash install.sh
+
 ```
 
 The installer will:
+
 1. Clone the ChronoRoot2 repository to `~/.local/chronoroot/ChronoRoot2/`
-2. Build the Singularity image (~13.5 GB download)
+2. Build the Singularity image (~13.5 GB or ~23.5 GB for demo version)
 3. Create launcher scripts
 4. Add applications to your system menu
 
@@ -49,11 +53,12 @@ After installation:
 │   ├── segmentationApp/
 │   ├── logo.jpg
 │   └── ...
-├── Image_ChronoRoot.sif          # Singularity image (~13.5 GB)
+├── Image_ChronoRoot.sif          # Singularity image (~13.5 GB to ~23.5 GB)
 ├── ChronoRootApp.sh              # Launcher scripts
 ├── ChronoRootScreeningApp.sh
 ├── ChronoRootSegmentationApp.sh
 └── uninstall.sh                  # Removal script
+
 ```
 
 ## Launching Applications
@@ -62,11 +67,14 @@ After installation, launch from:
 
 1. **Application Menu**: Search for "ChronoRoot"
 2. **Command Line**:
-   ```bash
-   ~/.local/chronoroot/ChronoRootApp.sh
-   ~/.local/chronoroot/ChronoRootScreeningApp.sh
-   ~/.local/chronoroot/ChronoRootSegmentationApp.sh
-   ```
+```bash
+~/.local/chronoroot/ChronoRootApp.sh
+~/.local/chronoroot/ChronoRootScreeningApp.sh
+~/.local/chronoroot/ChronoRootSegmentationApp.sh
+
+```
+
+
 
 ## Updating
 
@@ -75,6 +83,7 @@ To update the application code (bug fixes, new features):
 ```bash
 cd ~/.local/chronoroot/ChronoRoot2
 git pull
+
 ```
 
 That's it! The launchers already point to the repository, so changes take effect immediately.
@@ -85,54 +94,73 @@ That's it! The launchers already point to the repository, so changes take effect
 
 ```bash
 bash ~/.local/chronoroot/uninstall.sh
+
 ```
 
 This removes everything: the repository, Singularity image, launchers, and desktop entries.
 
 ## Singularity Image Options
 
-During installation, you can choose:
+During installation, you can choose between two versions:
 
-### Option 1: Build from Docker Hub (Recommended)
+### Option 1: Build Standard Image (nodemo)
 
-Automatically builds from `docker://ngaggion/chronorootbase:latest`
-- Always gets the latest version
-- Requires ~13.5 GB download
-- Takes 10-30 minutes
+Builds from `docker://ngaggion/chronorootbase:nodemo`.
 
-### Option 2: Use Existing .sif File
+* Recommended for standard production use.
+* Requires ~13.5 GB download.
 
-If you already have the Singularity image (from a colleague or USB drive), provide the path when prompted.
+### Option 2: Build Image with Demo Data (full)
+
+Builds from `docker://ngaggion/chronorootbase:full`.
+
+* **Includes ~10 GB of demo imaging data** stored in `/Demo`.
+* Recommended for following tutorials and testing.
+* Requires ~23.5 GB download.
+
+### Option 3: Use Existing .sif File
+
+If you already have the Singularity image file locally (from a colleague or USB drive), provide the path when prompted.
 
 ## Troubleshooting
 
 ### GUI doesn't appear
+
 ```bash
 xhost +local:
 echo $DISPLAY  # Should show :0 or similar
+
 ```
 
 ### Image build fails
-- Check internet connection
-- Verify ~15 GB free disk space
-- Try building manually:
-  ```bash
-  apptainer build chronoroot.sif docker://ngaggion/chronorootbase:latest
-  ```
-- If the process is killed, check ram usage or try on a different machine.
-- This was tested on a 16 GB RAM machine as the minimum specs.
+
+* Check internet connection
+* Verify **~30 GB** free disk space (especially if choosing the demo version)
+* Try building manually:
+```bash
+apptainer build chronoroot.sif docker://ngaggion/chronorootbase:nodemo
+
+```
+
+
+* If the process is killed, check RAM usage or try on a different machine.
+* This was tested on a 16 GB RAM machine as the minimum specs.
 
 ### Desktop entries don't appear
+
 ```bash
 update-desktop-database ~/.local/share/applications
+
 ```
 
 ### Git pull fails
+
 ```bash
 cd ~/.local/chronoroot/ChronoRoot2
 git status  # Check for local changes
 git stash   # Stash changes if needed
 git pull
+
 ```
 
 ### Custom Installation Directory
@@ -142,8 +170,9 @@ When running `install.sh`, you can specify a different directory when prompted (
 ## Support
 
 For issues and questions:
-- [GitHub Issues](https://github.com/ngaggion/ChronoRoot2/issues)
-- [Main Documentation](https://github.com/ngaggion/ChronoRoot2)
+
+* [GitHub Issues](https://github.com/ngaggion/ChronoRoot2/issues)
+* [Main Documentation](https://github.com/ngaggion/ChronoRoot2)
 
 ## Technical Details
 
@@ -151,7 +180,7 @@ For issues and questions:
 
 1. Detects Apptainer/Singularity
 2. Clones `https://github.com/ngaggion/ChronoRoot2.git`
-3. Builds Singularity image from Docker Hub
+3. Builds Singularity image from Docker Hub 
 4. Creates launcher scripts pointing to cloned repo
 5. Creates desktop entries with icons from repo
 6. Copies uninstall script to installation directory
@@ -162,6 +191,7 @@ For issues and questions:
 Location: `~/.config/chronoroot/config.json`
 
 Example:
+
 ```json
 {
   "install_dir": "/home/user/.local/chronoroot",
@@ -169,16 +199,19 @@ Example:
   "image_path": "/home/user/.local/chronoroot/Image_ChronoRoot.sif",
   "container_cmd": "apptainer",
   "install_date": "2024-12-15T14:30:00Z",
-  "docker_image": "ngaggion/chronorootbase:latest"
+  "docker_image": "ngaggion/chronorootbase:nodemo"
 }
+
 ```
 
 ### Launcher Scripts
 
 Each launcher script runs:
+
 ```bash
 apptainer exec Image_ChronoRoot.sif \
   bash -c "conda activate ChronoRoot && cd /path/to/ChronoRoot2/app/ && python run.py"
+
 ```
 
 This means any changes in the repository take effect immediately - no reinstallation needed!

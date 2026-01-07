@@ -19,17 +19,40 @@ ChronoRoot 2.0 is designed as a two-step phenotyping solution: first, the segmen
 
 ![Figure](Documents/images/usage_diagram.png)
 
+## Workflow Overview
+
+A typical ChronoRoot 2.0 workflow involves:
+
+1. **Data Acquisition**: Collect temporal sequences of plant images using the ChronoRoot hardware setup. Images are captured at regular intervals (typically every 15 minutes) over several days.
+
+2. **Segmentation**: Process raw images to identify plant structures using the nnUNet models. This step requires the usage of GPU and deep learning to automatically detect and segment different plant organs. Run it via the `segmentation` command.
+
+3. **Analysis**: Analyze the segmented data with either:
+   - **Standard Interface** (`chronoroot` command): For detailed analysis of individual plants with manual quality control
+   - **Screening Interface** (`screening` command): For high-throughput automated analysis of multiple plants
+
+4. **Report Generation**: Generate comprehensive reports with statistical analysis, visualizations, and comparisons between experimental groups.
+
+## Demo Data
+
+A demo dataset of plant imaging is available for testing. Located inside of both the `ngaggion/chronoroot:latest` Docker container or inside the apptainer container if desired, the data is pre-loaded at `/Demo/`. You can also download it manually from [Google Drive](https://drive.google.com/drive/folders/1PJCn_MMHcM9KPgz8dYe1F2Cvdt43FS3Z?usp=sharing).
+
+Tutorials using the demo dataset are provided in PDF format within the `Documents/` folder of the repository and inside the Docker image at `/app/Documents/`.
+
 ## Repository Structure
 
 ```
 ChronoRoot2
+├── apptainerInstaller         # Apptainer/Singularity installation scripts
 ├── chronoRootApp              # Standard Root Phenotyping Interface
 ├── chronoRootScreeningApp     # High-throughput Screening Interface
+├── Docker                     # Dockerfile for containerized deployment
+├── Documents                  # User guides and technical documentation
 ├── segmentationApp            # AI-based segmentation tools (nnUNet)
 ├── environment.yml            # Conda environment specification
-├── install.sh                 # Automated installation script
-├── Docker                     # Dockerfile for containerized deployment
-└── Documents                  # User guides and technical documentation
+├── LICENSE                    # License information
+├── README.md                  # This README file
+└── logo_*.jpg                 # Logo images for executable applications
 ```
 
 Each component has its own dedicated documentation:
@@ -75,55 +98,56 @@ ChronoRoot 2.0 can be installed and used in three ways:
 wget https://raw.githubusercontent.com/ngaggion/ChronoRoot2/master/apptainerInstaller/install.sh
 bash install.sh
 ```
-See [apptainerInstaller/README.md](install/README.md) for detailed instructions.
+See [apptainerInstaller/README.md](apptainerInstaller/README.md) for detailed instructions.
 
-### Docker Installation - Recommended for Windows and Mac-OS Systems
+### Docker Installation - Recommended for Windows and macOS
 
-Docker provides the most reliable installation method across all platforms, ensuring an identical environment regardless of your operating system.
+Docker provides the most reliable installation method, ensuring an identical environment regardless of your OS. We recommend running the container with your current **User ID** to ensure that any data or results generated inside the container are owned by you (not the root user).
 
-#### Pull the Docker Image
+#### 1. Pull the Docker Image
 
 ```bash
 docker pull ngaggion/chronoroot:latest
+
 ```
 
-#### Running on Linux
+#### 2. Running on Linux
 
-For Linux systems, enable X11 forwarding for the graphical user interface:
+To enable the GUI and fix file permission issues, use the following command:
 
 ```bash
+# Allow Docker to access your X server
 xhost +local:docker
-```
 
-Run the container:
-
-```bash
+# Define your local data path
 MOUNT="YOUR_LOCAL_DATA_PATH"
 
 docker run -it --gpus all \
+    -u $(id -u):$(id -g) \
+    -v /etc/passwd:/etc/passwd:ro \
+    -v /etc/group:/etc/group:ro \
     -v $MOUNT:/DATA/ \
     -e DISPLAY=$DISPLAY \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
     --shm-size=8gb \
     ngaggion/chronoroot:latest
-```
 
-After use, restrict X server access:
-
-```bash
+# Restrict X server access when finished
 xhost -local:docker
+
 ```
 
-#### Running on Windows (WSL2)
+#### 3. Running on Windows (WSL2)
 
-ChronoRoot has been tested under Windows Subsystem for Linux, version 2. Please refer to [this link](https://learn.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers) for information on how to set up Docker with WSL2.
-
-Use the command below for WSL2:
+Use the command below to ensure proper display and user permissions in WSL2:
 
 ```bash
-MOUNT="YOUR_LOCAL_DATA_PATH"
+MOUNT="/mnt/c/path/to/your/data"
 
 docker run -it --gpus all \
+    -u $(id -u):$(id -g) \
+    -v /etc/passwd:/etc/passwd:ro \
+    -v /etc/group:/etc/group:ro \
     -v $MOUNT:/DATA/ \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
     -v /mnt/wslg:/mnt/wslg \
@@ -133,25 +157,25 @@ docker run -it --gpus all \
     -e PULSE_SERVER \
     --shm-size=8gb \
     ngaggion/chronoroot:latest
+
 ```
 
-> **Note**: If you don't have a GPU, remove the `--gpus all` flag from the command above. For GPU support, you need to install nvidia-docker2. See the [Docker documentation](Docker/README.md) for detailed instructions.
+> **Note**: If you don't have a GPU, remove the `--gpus all` flag from the command above. For GPU support, you need to install nvidia-docker2. See the [Docker documentation](https://www.google.com/search?q=Docker/README.md) for detailed instructions.
 
 #### Convenient Aliases (Docker)
 
-To simplify usage, these aliases are pre-configured in the Docker container:
+These are pre-configured in the container. When running with the user flag (`-u`) as shown above, you can simply use these commands to launch the interfaces:
 
 ```bash
-alias segmentation='conda activate ChronoRoot; cd /app/segmentationApp; python run.py'
-alias chronoroot='conda activate ChronoRoot; cd /app/chronoRootApp; python run.py'
-alias screening='conda activate ChronoRoot; cd /app/chronoRootScreeningApp; python run.py'
-```
+segmentation   # Launch AI-based segmentation tools
+chronoroot     # Launch Standard Phenotyping Interface
+screening      # Launch High-throughput Screening Interface
 
-With these aliases, you can simply use `segmentation`, `chronoroot`, or `screening` commands instead of the full activation and navigation commands.
+```
 
 ### Local Installation
 
-**Platform Compatibility**: Local installation has been thoroughly tested on Ubuntu. **For other systems, we strongly recommend using Docker** to avoid potential compatibility issues.
+**Platform Compatibility**: Local installation has been thoroughly tested on Ubuntu. **For other systems, we strongly recommend using Docker or apptainer** to avoid potential compatibility issues.
 
 #### Manual Conda Installation
 
@@ -256,32 +280,6 @@ python run.py
 ![Segmentation Interface](segmentationApp/screenshots/MainScreen.png)
 
 For detailed instructions on the segmentation process, see the [Segmentation documentation](segmentationApp/README.md).
-
-## Workflow Overview
-
-A typical ChronoRoot 2.0 workflow involves:
-
-1. **Data Acquisition**: Collect temporal sequences of plant images using the ChronoRoot hardware setup. Images are captured at regular intervals (typically every 15 minutes) over several days.
-
-2. **Segmentation**: Process raw images to identify plant structures using the nnUNet models. This step uses deep learning to automatically detect and segment different plant organs.
-
-3. **Analysis**: Analyze the segmented data with either:
-   - **Standard Interface** (`chronoroot` command): For detailed analysis of individual plants with manual quality control
-   - **Screening Interface** (`screening` command): For high-throughput automated analysis of multiple plants
-
-4. **Report Generation**: Generate comprehensive reports with statistical analysis, visualizations, and comparisons between experimental groups.
-
-## Demo Data
-
-A demo dataset is included in the Docker image for testing and learning:
-- Located at `/app/Demo/` (Docker) 
-- Includes sample time-lapse sequences
-- Pre-segmented data for testing analysis workflows
-- Referenced in the PDF tutorials
-
-**Download demo data separately:**
-
-Available at Google Drive for now: https://drive.google.com/drive/folders/1PJCn_MMHcM9KPgz8dYe1F2Cvdt43FS3Z?usp=sharing
 
 ## Citation
 

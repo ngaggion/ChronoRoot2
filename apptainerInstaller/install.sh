@@ -21,7 +21,6 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Configuration
 REPO_URL="https://github.com/ngaggion/ChronoRoot2.git"
-DOCKER_IMAGE="ngaggion/chronorootbase:latest"
 DEFAULT_INSTALL_DIR="$HOME/.local/chronoroot"
 DESKTOP_DIR="$HOME/.local/share/applications"
 CONFIG_FILE="$HOME/.config/chronoroot/config.json"
@@ -90,7 +89,6 @@ main() {
         fi
     else
         print_success "Git LFS found"
-        # Make sure it's initialized for this user
         git lfs install 2>/dev/null || true
     fi
     echo ""
@@ -142,41 +140,49 @@ main() {
     IMAGE_PATH="$INSTALL_DIR/Image_ChronoRoot.sif"
     
     echo "Singularity Image Options:"
-    echo "  1) Build from Docker Hub (ngaggion/chronorootbase:latest) - ~13.5 GB"
-    echo "  2) Provide path to existing .sif file"
-    read -p "Choose [1-2]: " image_choice
+    echo "  1) Build Standard Image (nodemo) - ~13.5 GB"
+    echo "  2) Build Image with Demo Data (full) - ~23.5 GB"
+    echo "  3) Provide path to existing .sif file"
+    read -p "Choose [1-3]: " image_choice
     
     case $image_choice in
         1)
-            print_info "Building Singularity image from Docker Hub..."
+            DOCKER_IMAGE="ngaggion/chronorootbase:nodemo"
+            print_info "Building Standard Singularity image..."
             print_warning "This will download ~13.5 GB and may take some time..."
-            echo ""
-            
-            if $CONTAINER_CMD build "$IMAGE_PATH" "docker://$DOCKER_IMAGE"; then
-                print_success "Image built successfully!"
-            else
-                print_error "Failed to build image!"
-                exit 1
-            fi
             ;;
         2)
+            DOCKER_IMAGE="ngaggion/chronorootbase:full"
+            print_info "Building Singularity image with Demo Data..."
+            print_warning "This will download ~23.5 GB (standard + 10 GB demo) and may take some time..."
+            ;;
+        3)
             read -p "Enter path to existing .sif file: " existing_image
             existing_image="${existing_image/#\~/$HOME}"
-            
             if [ ! -f "$existing_image" ]; then
                 print_error "File not found: $existing_image"
                 exit 1
             fi
-            
             print_info "Copying image to installation directory..."
             cp "$existing_image" "$IMAGE_PATH"
             print_success "Image copied successfully!"
+            IMAGE_COPIED=true
             ;;
         *)
             print_error "Invalid choice"
             exit 1
             ;;
     esac
+
+    if [ "$IMAGE_COPIED" != true ]; then
+        echo ""
+        if $CONTAINER_CMD build "$IMAGE_PATH" "docker://$DOCKER_IMAGE"; then
+            print_success "Image built successfully!"
+        else
+            print_error "Failed to build image!"
+            exit 1
+        fi
+    fi
     
     echo ""
     print_info "Creating launcher scripts..."
@@ -233,7 +239,6 @@ EOF
     create_desktop_entry "Screening" "ChronoRootScreeningApp" "logo_screening.jpg"
     create_desktop_entry "Segmentation" "ChronoRootSegmentationApp" "logo_seg.jpg"
     
-    # Copy uninstall script
     echo ""
     print_info "Installing uninstall script..."
     if [ -f "$REPO_DIR/apptainerInstaller/uninstall.sh" ]; then
