@@ -71,11 +71,14 @@ PDF usage tutorials were incorporated in Documents for easy access. These make u
 ## System Requirements
 
 ### Minimum Requirements
-- **OS**: Ubuntu 20.04+ (Linux), Windows 10+ with WSL2, macOS 11+ (Docker)
+- **OS**: 
+  - **Linux**: Ubuntu 20.04+ (Tested on Ubuntu 24.04)
+  - **Windows**: Windows 10/11 (Requires WSL2)
+  - **macOS**: **Not natively supported.** Must use Docker.
 - **RAM**: 8 GB (16 GB recommended)
 - **Disk Space**: ~15 GB for Singularity image, ~5 GB for application files
 - **GPU**: Optional but recommended (NVIDIA with CUDA support for faster segmentation)
-- **Display**: X11 server for GUI (included in Linux, requires VcXsrv/XMing for Windows)
+- **Display**: X11 server for GUI (included in Linux; Windows/WSL handles this automatically; macOS requires XQuartz)
 
 ### For GPU Acceleration
 - NVIDIA GPU with CUDA 11.0+
@@ -88,21 +91,42 @@ PDF usage tutorials were incorporated in Documents for easy access. These make u
 
 ChronoRoot 2.0 can be installed and used in three ways:
 
-1. **Apptainer - Singularity Container**: Creates executable files in the application menu for Linux-based systems.
-2. **Docker Container**: Complete environment with all dependencies pre-configured for multi-platform support.
-3. **Local Installation**: Conda-based setup to install the required dependencies.
+1. **Apptainer / Singularity (Recommended for Linux & Windows)**: A standalone installer that handles dependencies and creates Start Menu icons for easy launching.
+2. **Docker Container (Required for macOS)**: Complete environment with all dependencies pre-configured for multi-platform support.
+3. **Local Installation**: Manual Conda-based setup (Advanced users).
 
-### Apptainer - Singularity
+### Apptainer / Singularity Installation
+
+We provide automated installers for Linux and Windows. These scripts will check for dependencies (Apptainer, Git LFS) and install them if missing.
+
+#### Option A: Linux
+Run the following in your terminal:
+```bash
+wget [https://raw.githubusercontent.com/ngaggion/ChronoRoot2/master/apptainerInstaller/installer_linux.sh](https://raw.githubusercontent.com/ngaggion/ChronoRoot2/master/apptainerInstaller/installer_linux.sh)
+bash installer_linux.sh
+
+```
+
+#### Option B: Windows (via WSL)
+
+**Prerequisite:** You must have WSL2 installed with a Linux distribution (e.g., Ubuntu).
+Run the following **inside your WSL terminal**:
 
 ```bash
-wget https://raw.githubusercontent.com/ngaggion/ChronoRoot2/master/apptainerInstaller/install.sh
-bash install.sh
+wget [https://raw.githubusercontent.com/ngaggion/ChronoRoot2/master/apptainerInstaller/installer_windows.sh](https://raw.githubusercontent.com/ngaggion/ChronoRoot2/master/apptainerInstaller/installer_windows.sh)
+bash installer_windows.sh
+
 ```
-See [apptainerInstaller/README.md](apptainerInstaller/README.md) for detailed instructions.
 
-### Docker Installation - Recommended for Windows and macOS
+*This will create shortcuts in your Windows Start Menu that launch the software transparently.*
 
-Docker provides the most reliable installation method, ensuring an identical environment regardless of your OS. We recommend running the container with your current **User ID** to ensure that any data or results generated inside the container are owned by you (not the root user).
+See [apptainerInstaller/README.md](https://www.google.com/search?q=apptainerInstaller/README.md) for technical details.
+
+### Docker Installation
+
+Docker provides a consistent environment across all platforms. **This is the only supported method for macOS users.**
+
+We recommend running the container with your current **User ID** to ensure that any data or results generated inside the container are owned by you (not the root user).
 
 #### 1. Pull the Docker Image
 
@@ -160,7 +184,7 @@ docker run -it --gpus all \
 
 ```
 
-> **Note**: If you don't have a GPU, remove the `--gpus all` flag from the command above. For GPU support, you need to install nvidia-docker2. See the [Docker documentation](https://www.google.com/search?q=Docker/README.md) for detailed instructions.
+> **Note**: If you don't have a GPU, remove the `--gpus all` flag from the command above. For GPU support, you need to install nvidia-docker2.
 
 #### Convenient Aliases (Docker)
 
@@ -175,14 +199,15 @@ screening      # Launch High-throughput Screening Interface
 
 ### Local Installation
 
-**Platform Compatibility**: Local installation has been thoroughly tested on Ubuntu. **For other systems, we strongly recommend using Docker or apptainer** to avoid potential compatibility issues.
+**Platform Compatibility**: Local installation has been thoroughly tested on Ubuntu. **For Windows and macOS, we strongly recommend using the Docker or Apptainer methods** to avoid complex dependency issues.
 
 #### Manual Conda Installation
 
-Run: 
+Run:
 
 ```bash
 conda env create -f environment.yml
+
 ```
 
 Or if you prefer to install manually or need to customize the installation (for example you don't need nnUNet), use the following:
@@ -204,8 +229,8 @@ conda create -y -n ChronoRoot python=3.13.9 \
 
 conda activate ChronoRoot
 pip install opencv-python lapx==0.9.2 nnunetv2==2.6.2
-```
 
+```
 ## Hardware and Module Controller
 
 ChronoRoot 2.0 is designed to work with an affordable custom hardware setup that includes:
