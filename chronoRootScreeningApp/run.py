@@ -1,5 +1,7 @@
 import os
 import sys
+import platform
+import shutil
 
 # Suppress Qt and OpenGL warnings
 os.environ['QT_LOGGING_RULES'] = '*=false'
@@ -655,8 +657,43 @@ class ResultsTab(QWidget):
         
         if os.path.exists(folder_path):
             # Open folder in file explorer
-            os.startfile(folder_path) if os.name == 'nt' else os.system(f'xdg-open {folder_path}')
-            
+            try:
+                path = os.path.abspath(os.path.expanduser(folder_path))
+                is_container = any(k in os.environ for k in ['APPTAINER_CONTAINER', 'SINGULARITY_CONTAINER'])
+                
+                # --- STRATEGY 1: D-Bus ---
+                if is_container and shutil.which("dbus-send"):
+                    try:
+                        subprocess.run([
+                            "dbus-send", "--session", "--dest=org.freedesktop.FileManager1",
+                            "--type=method_call", "/org/freedesktop/FileManager1",
+                            "org.freedesktop.FileManager1.ShowItems", 
+                            f"array:string:file://{path}", "string:''"
+                        ], timeout=2, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                        return
+                    except:
+                        pass
+
+                # --- STRATEGY 2: Standard Openers ---
+                cmd = None
+                if platform.system() == "Darwin":
+                    cmd = "open"
+                elif platform.system() == "Windows":
+                    os.startfile(path)
+                    return
+                else:
+                    cmd = "xdg-open"
+                    
+                if cmd and shutil.which(cmd):
+                    subprocess.Popen([cmd, path], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                    return
+                else:
+                    print(f"Error opening folder: No suitable opener found for {path}")
+
+            except Exception as e:
+                # Final safety net to prevent app crash
+                print(f"Error opening folder: {e}")
+        
     def view_metadata(self, row):
         analysis_id = self.table.item(row, 0).text()
         metadata_path = os.path.join(self.project_dir, 'analysis', analysis_id, 'metadata.json')
@@ -666,7 +703,6 @@ class ResultsTab(QWidget):
                 with open(metadata_path, 'r') as f:
                     metadata = json.load(f)
                 # Show metadata in a message box
-                from PyQt5.QtWidgets import QMessageBox
                 msg = QMessageBox()
                 msg.setWindowTitle(f"Metadata - {analysis_id}")
                 msg.setText("\n".join([f"{k}: {v}" for k, v in metadata.items()]))
