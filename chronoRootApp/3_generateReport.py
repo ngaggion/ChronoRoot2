@@ -7,6 +7,7 @@ import shutil
 import pandas as pd
 import os
 import json
+import argparse
 
 from analysis.utils import report_utils as utils
 from analysis import convex_hull
@@ -22,7 +23,10 @@ from analysis.lateral_angles import makeLateralAnglesPlots, plotLateralAnglesOnT
 from analysis.fpca_analysis import performFPCA
 
 if __name__ == "__main__":
-    conf = json.load(open('config.json'))
+    parser = argparse.ArgumentParser(description='ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture')
+    parser.add_argument('--config', type=str, help='Path to the configuration file (default: config.json)')
+       
+    conf = json.load(open(parser.parse_args().config, 'r'))
     
     # Use utils.load_paths instead of load_path
     analysis_folder = os.path.join(conf['MainFolder'], 'Analysis')
@@ -169,7 +173,7 @@ if __name__ == "__main__":
     generateTableTemporal(conf, all_data)
     
     if conf['doFPCA']:
-        performFPCA(os.path.join(conf['MainFolder'], 'config.json'))
+        performFPCA(parser.parse_args().config)
     
     # --- 5. Convex Hull Stats & Plots ---
     if conf['doConvex'] and not convex_hull_df.empty:

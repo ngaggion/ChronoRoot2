@@ -24,9 +24,13 @@ from analysis.lateral_angles import getAngles
 import json
 import os 
 import pandas as pd
+import argparse
 
-if __name__ == "__main__":    
-    conf = json.load(open('config.json'))
+if __name__ == "__main__": 
+    parser = argparse.ArgumentParser(description='ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture')
+    parser.add_argument('--config', type=str, help='Path to the configuration file (default: config.json)')
+       
+    conf = json.load(open(parser.parse_args().config, 'r'))
     analysis = os.path.join(conf['MainFolder'],'Analysis')
 
     varieties = load_path(analysis, '*')

@@ -233,43 +233,78 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
     def universal_open(self, path):
         try:
             path = os.path.abspath(os.path.expanduser(path))
-            is_container = any(k in os.environ for k in ['APPTAINER_CONTAINER', 'SINGULARITY_CONTAINER'])
             
-            # --- STRATEGY 1: D-Bus ---
+            # 1. Detect Environment
+            is_container = any(k in os.environ for k in ['APPTAINER_CONTAINER', 'SINGULARITY_CONTAINER'])
+            is_wsl = False
+            if os.path.exists("/proc/version"):
+                with open("/proc/version", "r") as f:
+                    if "microsoft" in f.read().lower():
+                        is_wsl = True
+
+            # --- STRATEGY 1: WSL Interop (Hardcoded Path Logic) ---
+            if is_wsl:
+                # Inside Apptainer, 'explorer.exe' won't be in PATH. 
+                # We must use the absolute path via the bind.
+                explorer_cmd = "/mnt/c/Windows/explorer.exe"
+                                
+                if os.path.exists(explorer_cmd):
+                    try:
+                        # Attempt to translate path
+                        win_path = None
+                        print(f"Translating WSL path: {path}")
+                        
+                        if path.startswith("/mnt/c/"):
+                            print("Using manual path conversion for WSL")
+                            # Manual fallback for the bind you provided
+                            win_path = path.replace("/mnt/c/", "C:\\").replace("/", "\\")
+                        else:
+                            # Hardcode fallback for standard WSL distro paths
+                            wsl_path = "//wsl.localhost/ubuntu/".replace("/", "\\")  
+                            win_path = wsl_path + path.lstrip("/").replace("/", "\\")
+                            
+                        print(f"Converted WSL path to Windows path: {win_path}")
+                        if win_path:
+                            print(f"Opening path in Windows Explorer: {win_path}")
+                            print(f"Using explorer command: {explorer_cmd}")
+                            subprocess.Popen(["/bin/sh", "-c", f"{explorer_cmd} '{win_path}'"])
+                            return
+                    except Exception as e:
+                        print(f"WSL Explorer Bridge failed: {e}")
+
+            # --- STRATEGY 2: D-Bus (The "Native Linux" path) ---
+            # This works perfectly on Native Ubuntu/Apptainer-on-Ubuntu
             if is_container and shutil.which("dbus-send"):
                 try:
+                    # We add a timeout so it doesn't hang if no one is listening (like in WSL)
                     subprocess.run([
-                        "dbus-send", "--session", "--dest=org.freedesktop.FileManager1",
+                        "dbus-send", "--session", "--print-reply", "--dest=org.freedesktop.FileManager1",
                         "--type=method_call", "/org/freedesktop/FileManager1",
                         "org.freedesktop.FileManager1.ShowItems", 
                         f"array:string:file://{path}", "string:''"
-                    ], timeout=2, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                    ], timeout=1, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
                     return
                 except:
-                    pass
+                    pass # Fall through if D-Bus times out or fails
 
-            # --- STRATEGY 2: Standard Openers ---
-            cmd = None
+            # --- STRATEGY 3: Standard OS Openers (Final Fallback) ---
             if platform.system() == "Darwin":
-                cmd = "open"
+                subprocess.Popen(["open", path])
+                return
             elif platform.system() == "Windows":
                 os.startfile(path)
                 return
-            else:
-                cmd = "xdg-open"
-                
-            if cmd and shutil.which(cmd):
-                subprocess.Popen([cmd, path], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            
+            # Standard Linux xdg-open
+            if shutil.which("xdg-open"):
+                subprocess.Popen(["xdg-open", path], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
                 return
-            else:
-                print(f"Error opening folder: No suitable opener found for {path}")
 
         except Exception as e:
-            # Final safety net to prevent app crash
-            print(f"Error opening folder: {e}")
-        
-        # Ask the user to open manually if all methods fail
-        QtWidgets.QMessageBox.information(None, 'Info', f'Please open the folder manually:\n{path}')
+            print(f"Universal Open Error: {e}")
+
+        # UI Fallback if everything fails
+        QtWidgets.QMessageBox.information(None, 'Manual Action', f'Auto-open failed. Path:\n{path}')
         
     def open_report_folder(self):
         report_path = os.path.join(self.projectField.text(), "Report")
@@ -297,7 +332,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         # Removing the plant means moving it to a folder called "Removed"
         # This is done to avoid losing the data in case the user wants to recover it
         # Also keep the same folder structure, from the Analysis folder
-        removed_path = self.projectField.text() + "/Removed"
+        removed_path = removed_path = os.path.join(self.projectField.text(), "Removed")
         removed_path = os.path.join(removed_path, os.path.relpath(path, self.projectField.text() + "/Analysis"))
 
         if not os.path.exists(os.path.dirname(removed_path)):
@@ -484,7 +519,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         path = self.selected_plant
 
         removed_path = self.projectField.text() + "/Removed"
-        removed_path = os.path.join(removed_path, os.path.relpath(path, self.projectField.text() + "/Analysis"))
+        removed_path = os.path.join(removed_path, os.path.relpath(path, os.path.join(self.projectField.text(), "Analysis")))
 
         if not os.path.exists(os.path.dirname(removed_path)):
             os.makedirs(os.path.dirname(removed_path))
@@ -563,11 +598,11 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         
         # All validations passed, run analysis
         self.saveFieldsIntoJson()
-        subprocess.Popen(["python", "1_analysis.py"])
+        subprocess.Popen(["python", "1_analysis.py", "--config", os.path.join(self.projectField.text(), "project_config.json")])
         
     def getBBOX(self):
         self.saveFieldsIntoJson()
-        subprocess.Popen(["python", "1_analysis.py", "--getbbox"])
+        subprocess.Popen(["python", "1_analysis.py", "--config", os.path.join(self.projectField.text(), "project_config.json"), "--getbbox"])
 
     def rerunAnalysis(self):
         metadata_path = os.path.join(self.selected_plant, "metadata.json")
@@ -630,12 +665,11 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
     def PostProcess(self):
         self.saveFieldsIntoJson()
-        subprocess.Popen(["python", "2_postprocess.py"])
+        subprocess.Popen(["python", "2_postprocess.py", "--config", os.path.join(self.projectField.text(), "project_config.json")])
     
     def report(self):
         self.saveFieldsIntoJson()
-        subprocess.Popen(["python", "3_generateReport.py"])   
-
+        subprocess.Popen(["python", "3_generateReport.py", "--config", os.path.join(self.projectField.text(), "project_config.json")])   
     def reviewPlant(self):
         path = self.selected_plant
         subprocess.Popen(["python", "4_reviewPlant.py", "--path", path])
@@ -1445,4 +1479,5 @@ def main():
     sys.exit(app.exec_())
     
 if __name__ == "__main__":
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
     main()
