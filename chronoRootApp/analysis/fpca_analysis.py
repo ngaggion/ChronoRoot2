@@ -30,7 +30,7 @@ def performFPCA(conf_path):
     ]
 
     with open(conf_path, 'r') as file:
-            conf = json.load(file)
+        conf = json.load(file)
 
     path = conf['MainFolder']
     report = os.path.join(path, "Report", "FPCA")

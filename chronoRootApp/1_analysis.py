@@ -124,7 +124,7 @@ def preview(conf):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture')
     parser.add_argument('--preview', action='store_true', default=False, help='Previews the sequence of images')
-    parser.add_argument('--config', type=str, default='config.json', help='Path to the configuration file (default: config.json)')
+    parser.add_argument('--config', type=str, help='Path to the configuration file (default: config.json)')
     parser.add_argument('--rerun', action='store_true', default=False, help='Reruns the analysis, even if the results already exist')
 
     args = parser.parse_args()

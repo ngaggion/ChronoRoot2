@@ -119,7 +119,7 @@ main() {
 #!/bin/bash
 [ -z "\$DISPLAY" ] && export DISPLAY=:0
 echo "Starting $name..."
-apptainer exec $GPU_FLAG --bind /mnt:/mnt --env DISPLAY=\$DISPLAY --bind /run/user/$(id -u):/run/user/$(id -u) "$IMAGE_PATH" \\
+apptainer exec $GPU_FLAG --bind /mnt/c:/mnt/c --bind /home/\$USER:/home/\$USER --env DISPLAY=\$DISPLAY --bind /run/user/$(id -u):/run/user/$(id -u) --bind /init:/init --bind /run/WSL:/run/WSL --env WSL_INTEROP=$WSL_INTEROP "$IMAGE_PATH" \\
   bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate ChronoRoot && cd $REPO_DIR/$folder && python run.py"
 EOF
         chmod +x "$sh_file"
