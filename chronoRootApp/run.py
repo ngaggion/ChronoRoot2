@@ -62,7 +62,8 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         data = {}
 
         for field in [self.rpiField, self.cameraField, self.plantField, self.processingLimitField, 
-                      self.processingLimitField_3, self.emergenceDistanceField, self.captureIntervalField]:
+                      self.processingLimitField_3, self.emergenceDistanceField, self.captureIntervalField,
+                      self.everyXhourField, self.everyXhourFieldFourier, self.everyXhourFieldAngles, self.numComponentsFPCAField]:
             if field.text().isdigit():
                 data[field.objectName()] = int(field.text())
             
@@ -320,7 +321,11 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.processingLimitField_3.setText("0")
         self.captureIntervalField.setText("15")
         self.captureIntervalField_3.setText("15")
-        self.emergenceDistanceField_2.setText("2")  # New field in tab1
+        self.emergenceDistanceField_2.setText("2")
+        self.everyXhourField.setText("6")
+        self.everyXhourFieldFourier.setText("6")
+        self.everyXhourFieldAngles.setText("6")
+        self.numComponentsFPCAField.setText("2")
 
     def validate_numeric_input(self, field):
         """Validate numeric input fields"""
@@ -559,6 +564,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         # All validations passed, run analysis
         self.saveFieldsIntoJson()
         subprocess.Popen(["python", "1_analysis.py"])
+        
     def getBBOX(self):
         self.saveFieldsIntoJson()
         subprocess.Popen(["python", "1_analysis.py", "--getbbox"])
