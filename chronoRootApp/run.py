@@ -1,9 +1,19 @@
 import os
 import sys
-
+import platform
+        
 # Suppress Qt and OpenGL warnings
 os.environ['QT_LOGGING_RULES'] = '*=false'
 os.environ['LIBGL_ALWAYS_INDIRECT'] = '1'
+
+# --- CONFIGURATION CONSTANTS ---
+APP_NAME = "chronoroot"
+PROJECT_CONFIG_NAME = "project_config.json"
+GLOBAL_CONFIG_DIR = os.path.expanduser(f"~/.config/{APP_NAME}")
+GLOBAL_CONFIG_FILE = os.path.join(GLOBAL_CONFIG_DIR, "mainInterfaceConfig.json")
+
+# Ensure global config directory exists
+os.makedirs(GLOBAL_CONFIG_DIR, exist_ok=True)
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QPushButton
@@ -48,12 +58,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         options = QtWidgets.QFileDialog.Options() | QtWidgets.QFileDialog.DontUseNativeDialog
         return QtWidgets.QFileDialog.getExistingDirectory(None, "Select Directory", options=options)
 
-    def saveFieldsIntoJson(self):
-        json_path_1 = os.path.join(os.getcwd(), "config.json")
-        try:
-            json_path_2 = os.path.join(os.path.join(self.projectField.text(), "config.json"))
-        except:
-            pass
+    def saveFieldsIntoJson(self):            
         data = {}
 
         for field in [self.rpiField, self.cameraField, self.plantField, self.processingLimitField, 
@@ -97,45 +102,63 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         data['knownDistance'] = self.knownDistanceField.text()
         data['pixelDistance'] = self.pixelDistanceField.text()
 
-        with open(json_path_1, "w") as json_file:
-            json.dump(data, json_file)
+        # 1. Save to Global Config (User Preferences)
         try:
-            with open(json_path_2, "w") as json_file:
-                json.dump(data, json_file)
-        except:
-            pass
+            with open(GLOBAL_CONFIG_FILE, "w") as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"Error saving global config: {e}")
+
+        # 2. Save to Project Config (Reproducibility)
+        project_path = self.projectField.text()
+        if project_path and os.path.isdir(project_path):
+            try:
+                proj_cfg_path = os.path.join(project_path, PROJECT_CONFIG_NAME)
+                with open(proj_cfg_path, "w") as f:
+                    json.dump(data, f, indent=4)
+            except Exception as e:
+                print(f"Error saving project config: {e}")
 
     def loadJsonIntoFields(self):
-        json_path = os.path.join(os.getcwd(), "config.json")
-        try:
-            data = json.load(open(json_path, 'r'))
-        except:
-            return
+        # Determine which file to load
+        project_cfg = os.path.join(self.projectField.text(), PROJECT_CONFIG_NAME)
         
-        for field in [self.rpiField, self.cameraField, self.plantField, self.processingLimitField, 
+        # Hierarchy: Project File > Global File
+        if os.path.exists(project_cfg):
+            json_path = project_cfg
+        elif os.path.exists(GLOBAL_CONFIG_FILE):
+            json_path = GLOBAL_CONFIG_FILE
+        else:
+            return
+
+        try:
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+                for field in [self.rpiField, self.cameraField, self.plantField, self.processingLimitField, 
                       self.processingLimitField_3, self.emergenceDistanceField, self.captureIntervalField,
                       self.everyXhourField, self.everyXhourFieldFourier, self.everyXhourFieldAngles, self.numComponentsFPCAField]:
-            if field.objectName() in data:
-                field.setText(str(data[field.objectName()]))
+                    if field.objectName() in data:
+                        field.setText(str(data[field.objectName()]))
 
-        for field in [self.identifierField, self.videoField, self.projectField]:
-            if field.objectName() in data:
-                field.setText(data[field.objectName()])
+                for field in [self.identifierField, self.videoField, self.projectField]:
+                    if field.objectName() in data:
+                        field.setText(data[field.objectName()])
 
-        for field in [self.saveImagesButton, self.videoHasQRbutton,
-                      self.saveImagesConvex, self.doConvex, self.doFourier, self.doLateralAngles,
-                      self.doFPCA, self.normFPCA, self.averagePerPlantStats]:
-            if field.objectName() in data:
-                field.setChecked(data[field.objectName()])
+                for field in [self.saveImagesButton, self.videoHasQRbutton,
+                            self.saveImagesConvex, self.doConvex, self.doFourier, self.doLateralAngles,
+                            self.doFPCA, self.normFPCA, self.averagePerPlantStats]:
+                    if field.objectName() in data:
+                        field.setChecked(data[field.objectName()])
 
-        self.knownDistanceField.setText(str(data['knownDistance']))
-        self.pixelDistanceField.setText(str(data['pixelDistance']))
-    
-        if "daysConvexHull" in data:
-            self.daysConvexField.setText(str(data["daysConvexHull"]))
-        if "daysAngles" in data:
-            self.daysAnglesField.setText(str(data["daysAngles"]))
-
+                self.knownDistanceField.setText(str(data['knownDistance']))
+                self.pixelDistanceField.setText(str(data['pixelDistance']))
+            
+                if "daysConvexHull" in data:
+                    self.daysConvexField.setText(str(data["daysConvexHull"]))
+                if "daysAngles" in data:
+                    self.daysAnglesField.setText(str(data["daysAngles"]))
+        except Exception as e:
+            print(f"Error loading config: {e}")
 
     def refresh_table(self):
         # Store current sort order and column
@@ -206,35 +229,59 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
         return
 
+    def universal_open(self, path):
+        try:
+            path = os.path.abspath(os.path.expanduser(path))
+            is_container = any(k in os.environ for k in ['APPTAINER_CONTAINER', 'SINGULARITY_CONTAINER'])
+            
+            # --- STRATEGY 1: D-Bus ---
+            if is_container and shutil.which("dbus-send"):
+                try:
+                    subprocess.run([
+                        "dbus-send", "--session", "--dest=org.freedesktop.FileManager1",
+                        "--type=method_call", "/org/freedesktop/FileManager1",
+                        "org.freedesktop.FileManager1.ShowItems", 
+                        f"array:string:file://{path}", "string:''"
+                    ], timeout=2, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                    return
+                except:
+                    pass
 
+            # --- STRATEGY 2: Standard Openers ---
+            cmd = None
+            if platform.system() == "Darwin":
+                cmd = "open"
+            elif platform.system() == "Windows":
+                os.startfile(path)
+                return
+            else:
+                cmd = "xdg-open"
+                
+            if cmd and shutil.which(cmd):
+                subprocess.Popen([cmd, path], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                return
+            else:
+                print(f"Error opening folder: No suitable opener found for {path}")
+
+        except Exception as e:
+            # Final safety net to prevent app crash
+            print(f"Error opening folder: {e}")
+        
+        # Ask the user to open manually if all methods fail
+        QtWidgets.QMessageBox.information(None, 'Info', f'Please open the folder manually:\n{path}')
+        
+    def open_report_folder(self):
+        report_path = os.path.join(self.projectField.text(), "Report")
+        self.universal_open(report_path)
+        
+    def open_selected_path_tab3(self):
+        self.universal_open(self.selected_plant)
+        
     def open_selected_path(self):
         selected_rows = self.table.selectionModel().selectedRows()
-
-        if not selected_rows:
-            return
-       
-        selected_row = selected_rows[0].row()
-        item = self.table.item(selected_row, 0)
-        path = item.path
-        
-        # Open the directory in the file explorer
-        if os.name == 'nt':  # Windows
-            os.startfile(path)
-        elif sys.platform == 'darwin':  # macOS
-            os.system(f'open "{path}"')
-        else:  # Linux
-            os.system(f'xdg-open "{path}"')
-
-    def open_selected_path_tab3(self):
-        path = self.selected_plant
-            
-        # Open the directory in the file explorer
-        if os.name == 'nt':  # Windows
-            os.startfile(path)
-        elif sys.platform == 'darwin':  # macOS
-            os.system(f'open "{path}"')
-        else:  # Linux
-            os.system(f'xdg-open "{path}"')
+        if selected_rows:
+            item = self.table.item(selected_rows[0].row(), 0)
+            self.universal_open(item.path)
 
     def remove_selected_path(self):
         selected_rows = self.table.selectionModel().selectedRows()
@@ -1248,24 +1295,6 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.report_dropdown.clear()
         self.report_dropdown.addItems(self.report_figures)
     
-    def open_report_folder(self):
-        report_path = os.path.join(self.projectField.text(), "Report")
-        
-        # check if the report path exists
-        if report_path is None or not os.path.exists(report_path):
-            return
-        
-        path = os.path.realpath(report_path)
-            
-        # Open the directory in the file explorer
-        if os.name == 'nt':
-            os.startfile(path)
-        elif sys.platform == 'darwin':
-            os.system(f'open "{path}"')
-        else:
-            os.system(f'xdg-open "{path}"')
-            
-
     def setup_tab5_elements(self):
         self.tab5 = QtWidgets.QWidget()
         self.tab5.setObjectName("tab5")
