@@ -661,7 +661,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             return
         
         # Launch preview
-        subprocess.Popen(["python", "1_analysis.py", "--preview"])
+        subprocess.Popen(["python", "1_analysis.py", "--preview", "--config", os.path.join(self.projectField.text(), "project_config.json")])
 
     def PostProcess(self):
         self.saveFieldsIntoJson()
