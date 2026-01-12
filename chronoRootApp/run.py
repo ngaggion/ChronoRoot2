@@ -230,6 +230,25 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
         return
 
+    def handle_tab_change(self, index):
+        # index 0: Plant Analysis (usually no auto-refresh needed)
+        # index 1: Analysis Overview
+        if index == 1:
+            self.refresh_table()
+            
+        # index 2: Plant Overlay
+        elif index == 2:
+            # Re-populate the dropdown if new analysis finished
+            self.refresh_table() 
+            self.update_image_labels()
+            
+        # index 3: Generate Report (usually no auto-refresh needed)
+        
+        # index 4: Report Viewer
+        elif index == 4:
+            self.refresh_tab5()
+            self.update_report_labels()
+        
     def universal_open(self, path):
         try:
             path = os.path.abspath(os.path.expanduser(path))
@@ -731,6 +750,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
     def setup_tabs(self):
         self.tab_widget = QtWidgets.QTabWidget(self.central_widget)
         self.tab_widget.setGeometry(QtCore.QRect(0, 0, 811, 621))
+        self.tab_widget.currentChanged.connect(self.handle_tab_change)
         
         font = QtGui.QFont()
         font.setPointSize(9)
@@ -810,7 +830,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.plantField.setObjectName("plantField")
 
         self.identifierField = QtWidgets.QLineEdit(self.tab1)
-        self.identifierField.setGeometry(QtCore.QRect(190, 300, 151, 31))
+        self.identifierField.setGeometry(QtCore.QRect(190, 300, 101, 31))
         self.identifierField.setObjectName("identifierField")
 
         self.saveImagesButton = QtWidgets.QCheckBox(self.tab1)
@@ -893,10 +913,10 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.label_6.setGeometry(QtCore.QRect(260, 200, 261, 31))
         self.label_6.setObjectName("label_6")
         self.label_7 = QtWidgets.QLabel(self.tab1)
-        self.label_7.setGeometry(QtCore.QRect(260, 250, 261, 31))
+        self.label_7.setGeometry(QtCore.QRect(260, 250, 301, 31))
         self.label_7.setObjectName("label_7")
         self.label_8 = QtWidgets.QLabel(self.tab1)
-        self.label_8.setGeometry(QtCore.QRect(360, 300, 261, 31))
+        self.label_8.setGeometry(QtCore.QRect(310, 300, 301, 31))
         self.label_8.setObjectName("label_8")
         self.label_9 = QtWidgets.QLabel(self.tab1)
         self.label_9.setGeometry(QtCore.QRect(10, 350, 541, 31))
@@ -1401,10 +1421,10 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             set_translation(self.label_2, "<html><head/><body><p align=\"center\">Camera</p></body></html>")
             set_translation(self.label_3, "<html><head/><body><p align=\"center\">Plant Number</p></body></html>")
             set_translation(self.label_4, "<html><head/><body><p align=\"center\">Identifier</p></body></html>")
-            set_translation(self.label_5, "(should be the raspberry number)")
-            set_translation(self.label_6, "(should be the camera number)")
-            set_translation(self.label_7, "(should be a number, to identify plant)")
-            set_translation(self.label_8, "(variety identifier, e.g. WT, Col0)")
+            set_translation(self.label_5, "(the raspberry module identifier)")
+            set_translation(self.label_6, "(the plate/camera identifier)")
+            set_translation(self.label_7, "(a number, to identify different plants, left to right)")
+            set_translation(self.label_8, "(variety identifier, e.g. WT, Col0; do not use dots)")
             set_translation(self.label_9, "<html><head/><body><p><span style=\" font-size:10pt; font-weight:600;\">Analysis and postprocessing parameters</span></p></body></html>")
             set_translation(self.label_11, "<html><head/><body><p>Capture interval</p></body></html>")
             set_translation(self.label_12, "<html><head/><body><p>Set processing limit</p></body></html>")
