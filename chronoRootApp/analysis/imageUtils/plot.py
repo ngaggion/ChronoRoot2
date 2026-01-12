@@ -70,8 +70,8 @@ def plot_segmentation_overlay(graph, skeleton_overlay, hypocotyl_skeleton):
     
     # Create 3-channel color image (BGR format for OpenCV)
     colored_overlay = np.zeros(list(skeleton_overlay.shape) + [3], dtype='uint8')
-    colored_overlay[:, :, 1] = main_root_mask      # Green channel = main root
-    colored_overlay[:, :, 0] = lateral_root_mask   # Blue channel = lateral roots
+    colored_overlay[:, :, 2] = main_root_mask      # Red channel = main root
+    colored_overlay[:, :, 1] = lateral_root_mask   # Green channel = lateral roots
     
     # Hypocotyl should be yellow (Red + Green)
     colored_overlay[:, :, 1] = np.maximum(colored_overlay[:, :, 1], hypocotyl_mask)  # Green channel
