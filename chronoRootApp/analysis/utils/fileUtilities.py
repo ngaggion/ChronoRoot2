@@ -32,6 +32,17 @@ def loadPath(search_path, ext = '*.*'):
     
     return all_files
 
+def convertToPathSafe(name):
+    name = name.replace('.', '_dot_')
+    name = name.replace('/', '_slash_')
+    name = name.replace('\\', '_backslash_')
+    return name
+def convertFromPathSafe(name):
+    name = name.replace('_dot_', '.')
+    name = name.replace('_slash_', '/')
+    name = name.replace('_backslash_', '\\')
+    return name
+
 def createSaveFolder(conf):
     # Create the folder for the general results
     analysis = os.path.join(conf['MainFolder'], 'Analysis')
@@ -39,7 +50,8 @@ def createSaveFolder(conf):
         os.makedirs(analysis)
     
     # Create the folder for the identifier
-    identifier = conf['identifier']
+    identifier = convertToPathSafe(conf['Experiment'])
+    
     id_path = os.path.join(analysis, identifier)
     if not os.path.exists(id_path):
         os.makedirs(id_path)

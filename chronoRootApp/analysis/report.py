@@ -33,6 +33,8 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 plt.switch_backend('agg')
 
+from .utils.fileUtilities import convertFromPathSafe, convertToPathSafe
+
 def natural_key(string_):
     """See http://www.codinghorror.com/blog/archives/001018.html"""
     return [int(s) if s.isdigit() else s for s in re.split(r'(\d+)', string_)]
@@ -75,13 +77,12 @@ def plot_individual_plant(savepath, dataframe, name):
     dataframe.plot(x='ElapsedTime (h)', y='HypocotylLength (mm)', ax=ax1, color='r', label='Hypocotyl Length')
     
     # Increase title padding to make room for the top "Days" axis ticks
-    ax1.set_title('%s' % name, pad=40, fontsize=TITLE_SIZE)
+    ax1.set_title('%s' % convertFromPathSafe(name), pad=40, fontsize=TITLE_SIZE)
     ax1.set_ylabel('Length (mm)', fontsize=LABEL_SIZE)
     ax1.tick_params(axis='y', which='major', labelsize=TICK_SIZE)
     ax1.legend(fontsize=LEGEND_SIZE, loc='upper left')
     # Remove x-label from top plot since it's shared
     ax1.set_xlabel('')
-
 
     # ===========================
     # BOTTOM SUBPLOT (Number of LRs)
@@ -93,7 +94,6 @@ def plot_individual_plant(savepath, dataframe, name):
     ax2.set_ylabel('Number of Lateral Roots', fontsize=LABEL_SIZE)
     ax2.set_xlabel('Elapsed Time (h)', fontsize=LABEL_SIZE)
     ax2.tick_params(axis='both', which='major', labelsize=TICK_SIZE)
-
 
     # ===========================
     # SECOND X-AXIS (DAYS) ON TOP
@@ -122,7 +122,6 @@ def plot_individual_plant(savepath, dataframe, name):
              ax1_days.set_xticks([])
     else:
         ax1_days.set_xticks([])
-
 
     # Customize the appearance of the top ticks
     ax1_days.tick_params(axis='x', which='major', length=8, width=2, color='black')

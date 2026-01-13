@@ -21,14 +21,15 @@ from analysis.report import (
 from analysis.fourier_analysis import makeFourierPlots
 from analysis.lateral_angles import makeLateralAnglesPlots, plotLateralAnglesOnTop
 from analysis.fpca_analysis import performFPCA
+from analysis.utils.fileUtilities import convertToPathSafe, convertFromPathSafe
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture')
+    parser = argparse.ArgumentParser(description='ChronoRoot: Report Generation')
     parser.add_argument('--config', type=str, help='Path to the configuration file (default: config.json)')
        
-    conf = json.load(open(parser.parse_args().config, 'r'))
+    args = parser.parse_args()
+    conf = json.load(open(args.config, 'r'))
     
-    # Use utils.load_paths instead of load_path
     analysis_folder = os.path.join(conf['MainFolder'], 'Analysis')
     experiments = utils.load_paths(analysis_folder, '*')
 
@@ -41,9 +42,9 @@ if __name__ == "__main__":
 
     print("Report generation began. This may take a while.")
     
-    FORCE_REPORT = True
+    FORCE_REPORT = True 
     
-    # Logic to check if we can skip hull generation
+    # Check if we can skip hull generation
     if not FORCE_REPORT and conf['doConvex'] and not os.path.exists(os.path.join(reportPath, 'Convex_Hull_Data.csv')):
         if not os.path.exists(reportPath_convex):
             utils.ensure_directory(reportPath_convex)
@@ -55,81 +56,84 @@ if __name__ == "__main__":
     
     temporal_parameters = [
         'MainRootLength (mm)', 'LateralRootsLength (mm)', 'TotalLength (mm)', 
-        'NumberOfLateralRoots', 'DiscreteLateralDensity (LR/cm)', 'MainOverTotal (%)'
+        'NumberOfLateralRoots', 'DiscreteLateralDensity (LR/cm)', 'MainOverTotal (%)',
+        'HypocotylLength (mm)'
     ]
-    temp_folder = os.path.join(reportPath, 'Temporal Parameters')
-    utils.ensure_directory(temp_folder)
     
     # --- 1. Global Configuration for Atlases ---
     if conf['doConvex']:
-        days = conf['daysConvexHull'].split(',')
-        # Updated Function Call: calculate_atlas_geometry
         global_shape, global_center = convex_hull.calculate_atlas_geometry(experiments)
         
     # --- 2. Main Data Loading Loop ---
-    if not os.path.exists(os.path.join(reportPath, 'Temporal_Data.csv')) or FORCE_REPORT:
-        for exp in experiments:
-            exp_name = os.path.basename(exp)
-            print('Loading experiment:', exp_name)
+    temporal_data_path = os.path.join(reportPath, 'Temporal_Data.csv')
+    
+    if not os.path.exists(temporal_data_path) or FORCE_REPORT:
+        for exp_dir in experiments:
+            # Determine Names: Check metadata for 'Experiment', fallback to path-safe folder name
+            exp_dir_name = os.path.basename(exp_dir)
+            real_exp_name = convertFromPathSafe(exp_dir_name) # Default fallback
+            
+            first_meta = utils.load_paths(exp_dir, '*/*/*/metadata.json')
+            if first_meta:
+                try:
+                    with open(first_meta[0], 'r') as f:
+                        meta_data = json.load(f)
+                        real_exp_name = meta_data.get('Experiment', real_exp_name)
+                except:
+                    pass
 
-            iplots = os.path.join(individual_plots_folder, exp_name)
-            utils.ensure_directory(iplots)
+            print(f'Loading experiment: {real_exp_name}')
 
-            # Load hierarchy using shared utility
-            rpi_paths = utils.load_paths(exp, '*')
+            iplots_exp_folder = os.path.join(individual_plots_folder, exp_dir_name)
+            utils.ensure_directory(iplots_exp_folder)
+
+            rpi_paths = utils.load_paths(exp_dir, '*')
             for rpi in rpi_paths:
                 rpi_name = os.path.basename(rpi)
-
                 cam_paths = utils.load_paths(rpi, '*')
                 for cam in cam_paths:
                     cam_name = os.path.basename(cam)
-
                     plant_paths = utils.load_paths(cam, '*')
                     for plant in plant_paths:
                         plant_name = os.path.basename(plant)
-
                         results = utils.load_paths(plant, '*')
                         
                         if len(results) == 0:
                             continue
-                        else:
-                            results = results[-1]
-                            
-                        name = f"{rpi_name}_{cam_name}_{plant_name}"
-
-                        file_csv = os.path.join(results, 'PostProcess_Hour.csv')
-                        if not os.path.exists(file_csv): continue
+                        res_folder = results[-1]
+                        
+                        plant_id = f"{rpi_name}_{cam_name}_{plant_name}"
+                        file_csv = os.path.join(res_folder, 'PostProcess_Hour.csv')
+                        
+                        if not os.path.exists(file_csv): 
+                            continue
                         
                         data = pd.read_csv(file_csv)
-                        data['Plant_id'] = name
-                        data['Experiment'] = exp_name
+                        data['Plant_id'] = plant_id
+                        data['Experiment'] = real_exp_name 
 
                         all_data = pd.concat([all_data, data], ignore_index=True)
                         
                         # Handle individual plots
-                        iplot_dest = os.path.join(results, f"{exp_name}_{name}.png")
-                        final_dest = os.path.join(iplots, f"{exp_name}_{name}.png")
+                        plot_filename = f"{exp_dir_name}_{plant_id}.png"
+                        iplot_cache = os.path.join(res_folder, plot_filename)
+                        report_dest = os.path.join(iplots_exp_folder, plot_filename)
 
-                        if not os.path.exists(iplot_dest):
-                            # Generate plot if missing
-                            plot_individual_plant(iplots, data, f"{exp_name}_{name}.png")
-                            # Copy back to results folder for cache
-                            if os.path.exists(final_dest):
-                                shutil.copy(final_dest, iplot_dest)
+                        if not os.path.exists(iplot_cache):
+                            plot_individual_plant(iplots_exp_folder, data, plot_filename)
+                            if os.path.exists(report_dest):
+                                shutil.copy(report_dest, iplot_cache)
                         else:
-                            # Copy from cache to report
-                            shutil.copy(iplot_dest, final_dest)
+                            shutil.copy(iplot_cache, report_dest)
 
             # --- 3. Convex Hull Analysis per Experiment ---
             if conf['doConvex']:
-                print("Performing convex hull analysis for experiment:", exp_name)
+                print(f"Performing convex hull analysis for experiment: {real_exp_name}")
                 utils.ensure_directory(reportPath_convex)
-
                 days = conf['daysConvexHull'].split(',')
                 
-                # Updated Function Call: generate_root_atlases
                 atlases, current_convex_df = convex_hull.generate_root_atlases(
-                    exp, 
+                    exp_dir, 
                     days=days, 
                     timestep=conf['timeStep'], 
                     canvas_shape=global_shape,  
@@ -138,71 +142,54 @@ if __name__ == "__main__":
                 )
                 
                 if not current_convex_df.empty:
-                    current_convex_df['Experiment'] = exp_name
+                    current_convex_df['Experiment'] = real_exp_name
                     convex_hull_df = pd.concat([convex_hull_df, current_convex_df], ignore_index=True)
 
-                # Plot Atlases (Heatmaps)
-                # Updated Function Call: visualize_single_atlas
-                if conf['saveImagesConvex']:
+                if conf['saveImagesConvex'] and atlases:
                     for i in range(len(days)):
                         at_hull, at_cont, at_root = atlases[i]
                         convex_hull.visualize_single_atlas(
                             at_hull, at_cont, at_root, 
-                            reportPath_convex, exp_name, days[i]
+                            reportPath_convex, exp_dir_name, days[i]
                         )
                 elif atlases:
-                    # Plot only the last one
                     at_hull, at_cont, at_root = atlases[-1]
                     convex_hull.visualize_single_atlas(
                         at_hull, at_cont, at_root, 
-                        reportPath_convex, exp_name
+                        reportPath_convex, exp_dir_name
                     )
 
-        # Save temporal data
-        all_data.to_csv(os.path.join(reportPath, 'Temporal_Data.csv'), index=False)
+        all_data.to_csv(temporal_data_path, index=False)
     else:
-        all_data = pd.read_csv(os.path.join(reportPath, 'Temporal_Data.csv'))
+        all_data = pd.read_csv(temporal_data_path)
         all_data['Experiment'] = all_data['Experiment'].astype(str)
 
-    # --- 4. Temporal Stats & Plots ---
-    print("Generating temporal parameter plots.")
+    # --- 4. Final Processing & Stats ---
+    temp_plots_dir = os.path.join(reportPath, 'Temporal Parameters')
+    utils.ensure_directory(temp_plots_dir)
+    
     for parameter in temporal_parameters:
         performStatisticalAnalysis(conf, all_data, parameter)
     
-    plot_info_all(os.path.join(reportPath, 'Temporal Parameters'), all_data)
+    plot_info_all(temp_plots_dir, all_data)
     generateTableTemporal(conf, all_data)
     
     if conf['doFPCA']:
-        performFPCA(parser.parse_args().config)
+        performFPCA(args.config)
     
-    # --- 5. Convex Hull Stats & Plots ---
     if conf['doConvex'] and not convex_hull_df.empty:
-        print("Generating convex hull and area analysis plots.")
         convex_hull_df.to_csv(os.path.join(reportPath, 'Convex_Hull_Data.csv'), index=False)
-        
-        # Updated Function Call: plot_hull_metrics_summary (Handles violins and summary table)
         convex_hull.plot_hull_metrics_summary(reportPath_convex, convex_hull_df)
-        
-        # Updated Function Call: visualize_combined_atlases (Qualitative comparison)
         convex_hull.visualize_combined_atlases(reportPath_convex)
-
-        convex_hull_parameters = [
-            'Convex Hull Area', 'Lateral Root Area Density', 
-            'Total Root Area Density', 'Convex Hull Aspect Ratio', 
-            'Convex Hull Height', 'Convex Hull Width'
-        ]
         
-        # Updated Function Call: analyze_hull_statistics (Mann-Whitney U)
-        for parameter in convex_hull_parameters:
-            convex_hull.analyze_hull_statistics(conf, convex_hull_df, parameter)
+        convex_params = ['Convex Hull Area', 'Lateral Root Area Density', 'Total Root Area Density', 'Convex Hull Aspect Ratio', 'Convex Hull Height', 'Convex Hull Width']
+        for param in convex_params:
+            convex_hull.analyze_hull_statistics(conf, convex_hull_df, param)
 
-    # --- 6. Fourier & Angle Analysis ---
     if conf['doFourier']:
-        print("Generating Fourier analysis plots.")      
         makeFourierPlots(conf)
     
     if conf['doLateralAngles']:
-        print("Generating lateral angles analysis plots.")
         makeLateralAnglesPlots(conf)
         plotLateralAnglesOnTop(conf)
 

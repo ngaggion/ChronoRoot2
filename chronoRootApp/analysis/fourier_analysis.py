@@ -7,6 +7,7 @@ import numpy as np
 from scipy import signal
 import scipy.stats as stats
 from typing import Dict, List, Tuple, Optional
+from .utils.fileUtilities import convertFromPathSafe
 
 class MetricConfig:
     """Configuration class for different metrics"""
@@ -109,17 +110,19 @@ class DataProcessor:
     def read_and_process_data(self, experiments: List[str], root: str = 'MainRootLengthGrad (mm/h)',
                              normalize: bool = False, detrend: bool = False, 
                              medfilt: bool = False) -> pd.DataFrame:
-        """Read and process data from multiple experiments"""
+        """Read and process data from multiple experiments with path-safe naming"""
         all_data = []
-        valid_datasets = [] # Store tuple (exp_name, processed_signal, processed_time)
+        valid_datasets = [] # Store dict (exp_label, signal, time)
         
         # 1. Collect all valid processed data first
         for exp in experiments:
             try:
                 # Get list of plant data files
                 plants = load_path(exp, '*/*/*')
+                raw_folder_name = os.path.basename(exp)
+                exp_label = convertFromPathSafe(raw_folder_name)
                 speeds = []
-
+                
                 # Collect PostProcess_Hour.csv files
                 for plant in plants:
                     results = load_path(plant, '*')
@@ -129,9 +132,8 @@ class DataProcessor:
 
                 for speed_file in speeds:
                     try:
-                        # Process individual file without forcing a length yet
-                        # This allows process_single_file to find the natural "aligned" length
-                        signal, time, _ = self.process_single_file(
+                        # Process individual file
+                        signal_arr, time_arr, _ = self.process_single_file(
                             speed_file, 
                             root=root,
                             normalize=normalize,
@@ -140,10 +142,10 @@ class DataProcessor:
                         )
                         
                         valid_datasets.append({
-                            'exp': exp,
+                            'exp': exp_label, # Use the sanitized label here
                             'file': speed_file,
-                            'signal': signal,
-                            'time': time
+                            'signal': signal_arr,
+                            'time': time_arr
                         })
                         
                     except Exception as e:
@@ -158,7 +160,6 @@ class DataProcessor:
             raise ValueError("No valid data processed from any experiment")
 
         # 2. Find the Common Denominator Length
-        # We look at the lengths of all successfully aligned signals
         lengths = [len(d['signal']) for d in valid_datasets]
         min_common_length = min(lengths)
         
@@ -180,7 +181,7 @@ class DataProcessor:
             df = pd.DataFrame({
                 'Time': time_series, # Use uniform time vector
                 'Signal': sig,
-                'Type': os.path.basename(item['exp']),
+                'Type': item['exp'], # This now uses the safe label
                 'i': len(all_data)
             })
             all_data.append(df)
@@ -196,7 +197,6 @@ class DataProcessor:
         
         fft_data = []
         for (exp_type, i), group in combined_df.groupby(['Type', 'i']):
-             # No check needed here anymore, we guaranteed length above
             signal_data = group['Signal'].values
             fft_vals = np.abs(np.fft.fft(signal_data))
             fft_df = pd.DataFrame({
@@ -212,7 +212,7 @@ class DataProcessor:
             combined_df = pd.concat([combined_df, fft_combined], ignore_index=True)
 
         return combined_df
-
+    
     def perform_statistical_analysis(self, data: pd.DataFrame, metric_type: str):
         """Perform statistical analysis on the data"""
         try:

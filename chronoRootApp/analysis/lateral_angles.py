@@ -28,6 +28,7 @@ from .report import load_path as loadPath
 import scipy.stats as stats
 import cv2
 import logging
+from .utils.fileUtilities import convertFromPathSafe, convertToPathSafe
 
 # Suppress matplotlib category warnings and configure backend for non-interactive use
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
@@ -312,21 +313,20 @@ def getAngles(conf, path):
     Returns:
         None (writes results to LateralRootsData.csv)
     """
-    # Load list of images that have been postprocessed
     images = pd.read_csv(os.path.join(path, "FilesAfterPostprocessing.csv"))
     images.dropna(inplace=True)
     images = images['FileName'].tolist()
 
-    # Get list of available RSML files
-    rsml_files = os.listdir(os.path.join(path, "RSML"))
+    rsml_dir = os.path.join(path, "RSML")
+    rsml_files = os.listdir(rsml_dir)
     
-    # Filter to only images with corresponding RSML files
-    paths = [image for image in images 
-             if image.split('/')[-1].replace('.png', '.rsml') in rsml_files]
-    paths = [os.path.join(path, 'RSML', image.split('/')[-1].replace('.png', '.rsml')) 
-             for image in paths]
+    # Use basename to match files, avoiding issues with special characters in 'path'
+    paths = []
+    for image in images:
+        rsml_name = os.path.basename(image).replace('.png', '.rsml')
+        if rsml_name in rsml_files:
+            paths.append(os.path.join(rsml_dir, rsml_name))
 
-    # Initialize tracking variables
     lateral_roots = []
     lateral_root_starts = []
     lateral_root_names = []
@@ -340,16 +340,10 @@ def getAngles(conf, path):
                         "Mean emergence angle", "First LR tip", "First LR emergence"])
 
         for step in paths:
-            # Parse RSML file
             tree = ET.parse(step).getroot()
 
-            # Load metadata for pixel size
             with open(os.path.join(path, 'metadata.json')) as f:
                 metadata = json.load(f)
-
-            y1, y2, x1, x2 = metadata['bounding box']
-            h = y2 - y1
-            w = x2 - x1
 
             plant = tree[1][0][0]
             
@@ -386,22 +380,15 @@ def getAngles(conf, path):
                     tip_angles.append(tip_angle)
                     emergence_angles.append(emergence_angle)
 
-            # Extract image name for output
-            imgname = step.replace(os.path.join(path, 'RSML') + '/', '').replace('.rsml', '.png')
+            # Robustly extract the image name for the CSV column
+            imgname = os.path.basename(step).replace('.rsml', '.png')
             
-            # Write measurements to CSV
             if num_roots == 0:
                 measures = [imgname, 0, 0, 0, 0, 0]
             else:
-                measures = [
-                    imgname, 
-                    num_roots, 
-                    round(np.mean(tip_angles), 3), 
-                    round(np.mean(emergence_angles), 3), 
-                    round(tip_angles[0], 3), 
-                    round(emergence_angles[0], 3)
-                ]
-                    
+                measures = [imgname, num_roots, round(np.mean(tip_angles), 3), 
+                            round(np.mean(emergence_angles), 3), 
+                            round(tip_angles[0], 3), round(emergence_angles[0], 3)]
             writer.writerow(measures)
     
     return
@@ -606,49 +593,51 @@ def makeLateralAnglesPlots(conf):
     
     all_data = pd.DataFrame()
         
-    # Check for cached data (currently disabled with 'and False')
-    if os.path.exists(os.path.join(report_path, 'LateralRootsData.csv')) and False:
-        all_data = pd.read_csv(os.path.join(report_path, 'LateralRootsData.csv'))
-        all_data['Experiment'] = all_data['Experiment'].astype('str')
-        all_data['Plant_id'] = all_data['Plant_id'].astype('str')
-    else:
-        # Load data from all experiments and plants
-        for exp in experiments:
-            plants = loadPath(exp, '*/*/*')
-            exp_name = exp.replace(analysis, '').replace('/', '')
-            print('Experiment:', exp_name, '- Total plants', len(plants))
+    for exp in experiments:
+        plants = loadPath(exp, '*/*/*')
+        # Use basename to get the literal folder name for logic
+        raw_exp_folder = os.path.basename(exp)
+        
+        # Determine the name for the 'Experiment' column (the display name)
+        # We check the first plant's metadata for the preferred name
+        display_name = convertFromPathSafe(raw_exp_folder)
+        
+        print('Experiment:', display_name, '- Total plants', len(plants))
 
-            for plant in plants:
-                results = loadPath(plant, '*')
-                if len(results) == 0:
-                    continue
-                else:
-                    results = results[-1]
-                plant_name = plant.replace(exp, '').replace('/', '_')
+        for plant in plants:
+            results = loadPath(plant, '*')
+            if len(results) == 0:
+                continue
+            else:
+                results = results[-1]
 
-                file = os.path.join(results, 'LateralRootsData.csv')
-                file2 = os.path.join(results, 'PostProcess_Original.csv')
+            plant_name = plant.replace(exp, '').replace('/', '_')
 
-                data2 = pd.read_csv(file2)
-                data2.dropna(inplace=True)
-                
-                # Get date range from postprocessing data
-                date1 = pd.to_datetime(data2.loc[0, "Date"], dayfirst=False)
-                date2 = pd.to_datetime(data2.iloc[-1]["Date"], dayfirst=False)
-                            
-                data = pd.read_csv(file)
-                data = dataWork(data, date1, date2)
+            file = os.path.join(results, 'LateralRootsData.csv')
+            file2 = os.path.join(results, 'PostProcess_Original.csv')
 
-                if data.empty:
-                    continue
+            if not os.path.exists(file) or not os.path.exists(file2):
+                continue
 
-                data['Plant_id'] = plant_name
-                data['Experiment'] = exp_name
+            data2 = pd.read_csv(file2)
+            data2.dropna(inplace=True)
+            
+            date1 = pd.to_datetime(data2.loc[0, "Date"], dayfirst=False)
+            date2 = pd.to_datetime(data2.iloc[-1]["Date"], dayfirst=False)
+                        
+            data = pd.read_csv(file)
+            data = dataWork(data, date1, date2)
 
-                all_data = pd.concat([all_data, data], ignore_index=True)
+            if data.empty:
+                continue
 
-        all_data.to_csv(os.path.join(report_path, 'LateralRootsData.csv'), index=False)
+            data['Plant_id'] = display_name + plant_name
+            # Assigning the unified name to ensure DataFrame groups correctly
+            data['Experiment'] = display_name 
 
+            all_data = pd.concat([all_data, data], ignore_index=True)
+
+    all_data.to_csv(os.path.join(report_path, 'LateralRootsData.csv'), index=False)
     # Filter data for specified analysis days
     frame = []
     if not all_data.empty:
@@ -1051,18 +1040,21 @@ def plotLateralAnglesOnTop(conf):
     save_path = os.path.join(conf['MainFolder'], "Report", "Angles Analysis", "Images")
     os.makedirs(save_path, exist_ok=True)
 
-    experiments = os.listdir(exp_path)
-
-    for exp in experiments:
+    for exp in os.listdir(exp_path):
+        # Convert folder name to a safe filename string
+        safe_exp = convertToPathSafe(exp)
         robot_path = os.path.join(exp_path, exp)
 
         for robot in os.listdir(robot_path):
+            safe_robot = convertToPathSafe(robot)
             cam_path = os.path.join(robot_path, robot)
 
             for cam in os.listdir(cam_path):
+                safe_cam = convertToPathSafe(cam)
                 plant_path = os.path.join(cam_path, cam)
 
                 for plant in os.listdir(plant_path):
+                    safe_plant = convertToPathSafe(plant)
                     results_path = os.listdir(os.path.join(plant_path, plant))
 
                     if len(results_path) > 0:
@@ -1106,7 +1098,7 @@ def plotLateralAnglesOnTop(conf):
                         estimateAngles(results_path, ax, crop.copy(), i)
                         plt.title("Emergence Angles")
 
-                        save = exp + "_" + robot + "_" + cam + "_" + plant + "_emergence_angles.svg"
+                        save = f"{safe_exp}_{safe_robot}_{safe_cam}_{safe_plant}_emergence_angles.svg"
                         plt.savefig(os.path.join(save_path, save), bbox_inches="tight", dpi=200)
 
                         plt.close()
@@ -1118,9 +1110,9 @@ def plotLateralAnglesOnTop(conf):
                         estimateAngles(results_path, ax, crop.copy(), i, True)
                         plt.title("Tip Angles")
 
-                        save = exp + "_" + robot + "_" + cam + "_" + plant + "_tip_angles.svg"
-                        plt.savefig(os.path.join(save_path, save), bbox_inches="tight", dpi=200)
-
+                        filename = f"{safe_exp}_{safe_robot}_{safe_cam}_{safe_plant}_tip_angles.svg"
+                        plt.savefig(os.path.join(save_path, filename), bbox_inches="tight", dpi=200)
+                        
                         plt.close()
                         plt.clf()
                         plt.cla()

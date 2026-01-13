@@ -12,6 +12,7 @@ from typing import Tuple, List
 
 # Import shared utilities
 from analysis.utils import report_utils as utils
+from analysis.utils.fileUtilities import convertFromPathSafe
 
 # Suppress minor logging and warnings for cleaner output
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
@@ -125,6 +126,15 @@ def generate_root_atlases(save_path, days, timestep, canvas_shape, center_coords
     Generates the accumulated heatmaps (atlases) and calculates convex hull metrics.
     """
     dest_seed_y, dest_seed_x = center_coords 
+    exp_dir_name = os.path.basename(save_path)
+    
+    real_exp_name = convertFromPathSafe(exp_dir_name)
+    sample_meta = utils.load_paths(save_path, '*/*/*/metadata.json')
+    if sample_meta:
+        try:
+            with open(sample_meta[0], 'r') as f:
+                real_exp_name = json.load(f).get('Experiment', real_exp_name)
+        except: pass
     
     # Initialize Accumulators
     atlas_hull_mask = np.zeros(canvas_shape, dtype='uint8')
@@ -253,9 +263,8 @@ def generate_root_atlases(save_path, days, timestep, canvas_shape, center_coords
             biggest_contour = max(contour_sizes, key=lambda x: x[0])[1]
             
             # Check if root is actually connected to the seed area
-            # We check the destination seed coordinates because the image is already warped
-            dist_to_seed = cv2.pointPolygonTest(biggest_contour, (dest_seed_x, dest_seed_y), True)
             is_inside = cv2.pointPolygonTest(biggest_contour, (dest_seed_x, dest_seed_y), False) > 0
+            dist_to_seed = cv2.pointPolygonTest(biggest_contour, (dest_seed_x, dest_seed_y), True)
             
             if is_inside or dist_to_seed < 30:
                 hull_big = cv2.convexHull(biggest_contour, False)
@@ -299,17 +308,18 @@ def generate_root_atlases(save_path, days, timestep, canvas_shape, center_coords
             'Convex Hull Height': metrics['height']
         })
         day_df['Day'] = day
+        day_df['Experiment'] = real_exp_name 
         
         all_frames_list.append(day_df)
         set_of_atlases.append([atlas_hull_mask.copy(), atlas_contours_rgb.copy(), atlas_root_density.copy()])
     
     final_df = pd.concat(all_frames_list, ignore_index=True) if all_frames_list else pd.DataFrame()
-
     return set_of_atlases, final_df
 
 
-def visualize_single_atlas(atlas_hull, atlas_contours, atlas_roots, save_path, name, day=None):
+def visualize_single_atlas(atlas_hull, atlas_contours, atlas_roots, save_path, exp_dir_name, day=None):
     """Plots the three-panel atlas visualization."""
+    readable_name = convertFromPathSafe(exp_dir_name)
     plt.ioff()
     plt.figure(figsize=(9, 4))
 
@@ -329,61 +339,50 @@ def visualize_single_atlas(atlas_hull, atlas_contours, atlas_roots, save_path, n
     plt.axis('off')
 
     title_suffix = f" - Day: {day}" if day is not None else " - Last Day"
-    full_title = f"{name}{title_suffix}"
+    full_title = f"{readable_name}{title_suffix}"
     plt.suptitle(full_title)
     
     save_dir = os.path.join(save_path, "Per Experiment")
     utils.ensure_directory(save_dir)
     
-    plt.savefig(os.path.join(save_dir, full_title), dpi=300, bbox_inches='tight')
+    # Filename uses Path Safe name
+    save_filename = f"{exp_dir_name}_Day_{day}.png" if day is not None else f"{exp_dir_name}_Last_Day.png"
+    plt.savefig(os.path.join(save_dir, save_filename), dpi=300, bbox_inches='tight')
     plt.close('all')
 
 
 def visualize_combined_atlases(folder):
-    """
-    Stacks atlas images vertically for qualitative comparison across days.
-    """
+    """Stacks atlas images vertically for qualitative comparison across days."""
     images_per_day = {}
     source_dir = os.path.join(folder, 'Per Experiment')
 
     if not os.path.exists(source_dir):
         return
 
-    # Group images by day
     for filename in os.listdir(source_dir):
         if not filename.endswith(('png', 'jpg', 'jpeg')): continue
         
-        name = os.path.splitext(filename)[0]
-        
-        # Parse day
-        if "Last Day" in name:
+        # We need to group by Day, extracting from filenames like "Exp_Day_5.png"
+        if "_Day_" in filename:
+            try: day = filename.split('_Day_')[1].split('.png')[0]
+            except: continue
+        elif "Last_Day" in filename:
             day = "Last"
-        elif "Day:" in name:
-            try: day = int(name.split('Day:')[1].strip())
-            except: continue
-        else:
-            try: day = int(name.split('-')[-1].strip())
-            except: continue
+        else: continue
 
         if day not in images_per_day:
             images_per_day[day] = []
         images_per_day[day].append(filename)
     
-    # Sort keys: Numbers first, then "Last"
-    sorted_days = sorted([d for d in images_per_day.keys() if d != "Last"]) 
-    if "Last" in images_per_day:
-        sorted_days.append("Last")
+    sorted_days = sorted([d for d in images_per_day.keys() if d != "Last"], key=lambda x: int(x)) 
+    if "Last" in images_per_day: sorted_days.append("Last")
     
     for day in sorted_days:
         images = images_per_day[day]
         images.sort(key=utils.natural_key)
 
-        # Create subplots stack
         fig, axs = plt.subplots(len(images), 1, figsize=(9, 4 * len(images)))
-        
-        # Ensure axs is iterable even if 1 image
-        if len(images) == 1:
-            axs = [axs]
+        if len(images) == 1: axs = [axs]
 
         for i, image_name in enumerate(images):
             image_path = os.path.join(source_dir, image_name)
@@ -393,143 +392,61 @@ def visualize_combined_atlases(folder):
             axs[i].axis('off')
 
         plt.subplots_adjust(wspace=0, hspace=0)
-        
-        save_name = f'Qualitative - Day {day}'
-        plt.savefig(os.path.join(folder, save_name), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(folder, f'Qualitative - Day {day}.png'), dpi=300, bbox_inches='tight')
         plt.close('all')
 
 
-def _plot_single_metric(save_path, data, x_col, y_col, hue, title, ylabel, filter_zeros=False):
-    """
-    Internal helper to generate violin plots for a specific metric.
-    """
-    plt.figure()
-    fig, ax = plt.subplots()
-    
-    plot_data = data.copy()
-    if filter_zeros:
-        plot_data = plot_data[plot_data[y_col] > 0].reset_index(drop=True)
-    
-    hue_order = plot_data[hue].unique()
-    n_types = len(hue_order)
-
-    sns.violinplot(x=x_col, y=y_col, data=plot_data, hue=hue, inner=None, 
-                   zorder=2, legend=False, hue_order=hue_order)
-
-    # Manual legend handling
-    handles, labels = ax.get_legend_handles_labels()
-    if handles:
-        ax.legend(handles[0:n_types], labels[0:n_types], loc=2)
-
-    ax.set_title(title)
-    ax.set_ylabel(ylabel)
-    
-    # Save as both PNG and SVG
-    clean_title = title.replace('/', ' per ')
-    plt.savefig(os.path.join(save_path, f"{clean_title}.png"), dpi=300, bbox_inches='tight')
-    plt.savefig(os.path.join(save_path, f"{clean_title}.svg"), dpi=300, bbox_inches='tight')
-    plt.close('all')
-
-
 def plot_hull_metrics_summary(save_path, frame):
-    """
-    Generates all statistical plots (violins) and the summary CSV table.
-    """
+    """Generates all statistical plots (violins) and the summary CSV table."""
     plt.ioff()
     utils.ensure_directory(save_path)
 
-    # 1. Generate Plots
     metrics_config = [
-        # (Y Column, Title, Y Label, Filter Zeros?)
         ('Convex Hull Area', 'Convex Hull Area', 'Area (mm²)', False),
-        ('Lateral Root Area Density', 'Lateral Roots Area Density', 'LR / convex hull area (mm/mm²)', True),
-        ('Convex Hull Aspect Ratio', 'Aspect Ratio', 'Aspect Ratio (height/width)', False),
-        ('Total Root Area Density', 'Total Root Area Density', 'TR / convex hull area (mm/mm²)', True),
-        ('Convex Hull Width', 'Convex Hull Width', 'Width (mm)', False),
-        ('Convex Hull Height', 'Convex Hull Height', 'Height (mm)', False)
+        ('Lateral Root Area Density', 'Lateral Roots Area Density', 'LR / area (mm/mm²)', True),
+        ('Convex Hull Aspect Ratio', 'Aspect Ratio', 'H/W Ratio', False),
+        ('Total Root Area Density', 'Total Root Area Density', 'TR / area (mm/mm²)', True),
+        ('Convex Hull Width', 'Width', 'Width (mm)', False),
+        ('Convex Hull Height', 'Height', 'Height (mm)', False)
     ]
 
     for y_col, title, y_label, filter_zeros in metrics_config:
-        _plot_single_metric(save_path, frame, 'Day', y_col, 'Experiment', title, y_label, filter_zeros)
+        plt.figure()
+        plot_data = frame.copy()
+        if filter_zeros:
+            plot_data = plot_data[plot_data[y_col] > 0].reset_index(drop=True)
+        
+        sns.violinplot(x='Day', y=y_col, data=plot_data, hue='Experiment', inner='quartile')
+        plt.title(title)
+        plt.ylabel(y_label)
+        
+        clean_name = title.replace(' ', '_')
+        plt.savefig(os.path.join(save_path, f"{clean_name}.png"), dpi=300, bbox_inches='tight')
+        plt.close('all')
 
-    # 2. Generate Summary Table
-    # Group by Day/Experiment, calculate Mean/Std
-    agg_dict = {
-        'Convex Hull Area': ['count', 'mean', 'std'],
-        'Lateral Root Area Density': ['mean', 'std'],
-        'Convex Hull Aspect Ratio': ['mean', 'std'],
-        'Total Root Area Density': ['mean', 'std'],
-        'Convex Hull Width': ['mean', 'std'],
-        'Convex Hull Height': ['mean', 'std']
-    }
-    
-    summary_data = frame.groupby(['Day', 'Experiment']).agg(agg_dict)
-    
-    # Flatten MultiIndex columns (e.g., ('Convex Hull Area', 'mean') -> 'Convex Hull Area mean')
-    summary_data.columns = [' '.join(col).strip() for col in summary_data.columns.values]
-    summary_data = summary_data.reset_index()
-    summary_data = summary_data.round(3)
-    
-    summary_data.to_csv(os.path.join(save_path, "Summary Table.csv"), index=False)
+    # Summary Table
+    summary = frame.groupby(['Day', 'Experiment']).agg(['mean', 'std']).round(3)
+    summary.to_csv(os.path.join(save_path, "Summary Table.csv"))
 
 
 def analyze_hull_statistics(conf, data, metric):
-    """
-    Performs Mann-Whitney U tests between experiments for a specific metric on specific days.
-    """
-    data['Experiment'] = data['Experiment'].astype(str)
-    data['Day'] = data['Day'].astype(str)
-    
     unique_experiments = data['Experiment'].unique()
-    n_exp = len(unique_experiments)
-    
-    # Days to analyze are defined in the config string (e.g. "1,3,5")
     days_to_analyze = conf['daysConvexHull'].split(',')
-    
-    # Setup report file
     report_folder = os.path.join(conf['MainFolder'], 'Report', 'Convex Hull and Area Analysis')
-    utils.ensure_directory(report_folder)
     
-    file_metric_name = metric.replace('/', ' over ')
-    report_file = os.path.join(report_folder, f'{file_metric_name} Stats.txt')
+    report_file = os.path.join(report_folder, f'{metric.replace(" ", "_")}_Stats.txt')
         
     with open(report_file, 'w') as f:
-        f.write('Using Mann Whitney U test to compare different experiments\n')
-        
-        if metric == 'Lateral Root Area Density':
-            f.write('For Lateral Root Area Density, plants without lateral roots are excluded.\n\n')
-         
+        f.write(f'Comparing experiments for {metric}\n\n')
         for day in days_to_analyze:                       
             f.write(f'Day: {day}\n')
-            subdata = data[data['Day'] == day]
-            
-            # Filter zeros if necessary
-            if metric == 'Lateral Root Area Density':
-                subdata = subdata[subdata['Lateral Root Area Density'] > 0].reset_index(drop=True)
-            
-            # Pairwise comparison
-            for i in range(n_exp - 1):
-                for j in range(i + 1, n_exp):
-                    exp_name_1 = unique_experiments[i]
-                    exp_name_2 = unique_experiments[j]
-                    
-                    vals1 = subdata[subdata['Experiment'] == exp_name_1][metric]
-                    vals2 = subdata[subdata['Experiment'] == exp_name_2][metric]
-                    
-                    try:
-                        if len(vals1) == 0 or len(vals2) == 0:
-                            raise ValueError("Empty data for one experiment")
-                            
-                        U, p = stats.mannwhitneyu(vals1, vals2)
-                        p_val = round(p, 6)
-                        
-                        f.write(f'Mean {exp_name_1}: {round(vals1.mean(), 2)}\n')
-                        f.write(f'Mean {exp_name_2}: {round(vals2.mean(), 2)}\n')
-                        
-                        sig_text = "are significantly different" if p_val < 0.05 else "are not significantly different"
-                        f.write(f'Experiments {exp_name_1} and {exp_name_2} {sig_text}. P-value: {p_val}\n')
-                        
-                    except Exception:
-                        f.write(f'Experiments {exp_name_1} and {exp_name_2} could not be compared (Insufficient data)\n')
-                        
+            subdata = data[data['Day'].astype(str) == day]
+            for i in range(len(unique_experiments)):
+                for j in range(i + 1, len(unique_experiments)):
+                    e1, e2 = unique_experiments[i], unique_experiments[j]
+                    v1 = subdata[subdata['Experiment'] == e1][metric]
+                    v2 = subdata[subdata['Experiment'] == e2][metric]
+                    if not v1.empty and not v2.empty:
+                        _, p = stats.mannwhitneyu(v1, v2)
+                        f.write(f'{e1} vs {e2}: p={round(p, 6)} (Means: {round(v1.mean(),2)}, {round(v2.mean(),2)})\n')
             f.write('\n')

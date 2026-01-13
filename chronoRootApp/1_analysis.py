@@ -126,15 +126,30 @@ if __name__ == "__main__":
     parser.add_argument('--preview', action='store_true', default=False, help='Previews the sequence of images')
     parser.add_argument('--config', type=str, help='Path to the configuration file (default: config.json)')
     parser.add_argument('--rerun', action='store_true', default=False, help='Reruns the analysis, even if the results already exist')
-
+    parser.add_argument('--restart', action='store_true', default=False, help='Reruns the analysis from scratch, ignoring any previous bounding box or root start point')
+    
     args = parser.parse_args()
         
     conf = json.load(open(args.config))
     
+    if args.restart:
+        del conf['bounding box']
+        del conf['seed']
+    
     if not args.preview:
-        conf['fileKey'] = conf['identifier']
-        conf['sequenceLabel'] = conf['identifier'] + "_" + conf['Images'] + "_" + str(conf['plant'])
+        try:
+            conf['fileKey'] = conf["Experiment"]
+        except:
+            conf['fileKey'] = conf["identifierField"]
+            conf['Experiment'] = conf["identifierField"]
+            
+        conf['sequenceLabel'] = conf['Experiment'] + "_" + conf['Images'] + "_" + str(conf['plant'])
         conf['Plant'] = 'Arabidopsis thaliana'
+        
+        if not conf.get('videoHasQRbutton', True):
+            pixel_size = float(conf['knownDistance']) / float(conf['pixelDistance'])
+            conf['pixel_size'] = pixel_size
+            
         if 'bounding box' in conf and args.rerun:
             plantAnalysis(conf, True)
         else:
