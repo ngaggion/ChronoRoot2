@@ -146,7 +146,7 @@ def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, 
         distance_to_root_base = np.abs(distance_to_root_base)
         contains_root_base = cv2.pointPolygonTest(component, (int(current_root_base[0]), int(current_root_base[1])), False) > 0
         
-        if distance_to_root_base < 50 or contains_root_base:
+        if distance_to_root_base < 100 or contains_root_base:
             # This is the root - extract only this component
             component_mask = np.zeros(binary_mask.shape, np.uint8)
             cv2.drawContours(component_mask, [component], -1, 255, -1)

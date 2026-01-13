@@ -108,6 +108,11 @@ def createGraph(skeleton_image, root_base_position, end_points, branch_points):
     if graph.number_of_nodes() < 2:
         raise Exception("Graph has only one vertex - no structure detected")
     
+    # count how many pixels of the skeleton were not visited
+    unvisited_pixels = np.sum(skeleton_image == 1)
+    if unvisited_pixels > 20:
+        raise Exception(f"Skeleton has unvisited pixels ({unvisited_pixels}) - incomplete graph")
+    
     return graph, actual_root_base, skeleton_image
 
 def continue_graph(graph, skeleton_image, current_position, parent_position, end_points_list, branch_points):
@@ -129,6 +134,22 @@ def continue_graph(graph, skeleton_image, current_position, parent_position, end
     
     # Explore each branch from this point
     for neighbor_start in neighbor_pixels:
+        if skeleton_image[neighbor_start[1], neighbor_start[0]] != 1:
+            neighbor_tuple = tuple(neighbor_start)
+                        
+            if neighbor_tuple in graph.nodes:
+                if not graph.has_edge(current_position, neighbor_tuple):
+                    dist = np.linalg.norm(np.array(current_position) - np.array(neighbor_start))
+                    graph.add_edge(
+                        current_position,
+                        neighbor_tuple,
+                        weight=dist,
+                        color=edge_color_counter,
+                        root_type=0
+                    )
+                    edge_color_counter += 1
+            
+            continue
         
         # Trace from this neighbor to the next node (branch or endpoint)
         skeleton_image, next_node_position, edge_length = get_next_node(
@@ -182,64 +203,6 @@ def continue_graph(graph, skeleton_image, current_position, parent_position, end
             )
     
     return graph
-
-'''
-def get_next_node(skeleton_image, current_pixel, parent_pixel, sibling_pixels, accumulated_distance, initial_position):
-    """
-    Trace along skeleton from current pixel until reaching a node (branch/endpoint).
-    Recursively follows the skeleton path.
-    
-    Args:
-        skeleton_image: Skeleton being traversed
-        current_pixel: Current [x, y] position
-        parent_pixel: Where we came from (to avoid backtracking)
-        sibling_pixels: Other branches from parent (to avoid)
-        accumulated_distance: Total distance traveled so far
-        initial_position: Starting position for distance calculation
-        
-    Returns:
-        skeleton_image: Modified with markings
-        node_position: [x, y] of the node we reached
-        total_distance: Length of path traveled
-    """
-    global edge_color_counter
-    
-    # Find neighbors of current pixel
-    neighbor_pixels = find_neighbors(skeleton_image, current_pixel)
-    
-    # Filter out parent and siblings (avoid backtracking)
-    valid_children = []
-    for neighbor in neighbor_pixels:
-        is_parent = np.array_equal(neighbor, parent_pixel)
-        is_sibling = neighbor in sibling_pixels
-        if not is_parent and not is_sibling:
-            valid_children.append(neighbor)
-    
-    # Calculate distance from initial position to current pixel if this is first call
-    if accumulated_distance == 0:
-        # First step - calculate distance from initial position
-        distance_to_current = np.linalg.norm(np.array(current_pixel) - np.array(initial_position))
-        accumulated_distance = distance_to_current
-    
-    # Mark pixel if we've moved from initial position
-    if not np.array_equal(current_pixel, initial_position):
-        skeleton_image[current_pixel[1], current_pixel[0]] = edge_color_counter
-    
-    # Stop condition: reached a node (0 or multiple children)
-    if len(valid_children) != 1:
-        # This is either: an endpoint (0 children) or a branch point (>1 children)
-        return skeleton_image, current_pixel, accumulated_distance
-    
-    # Continue along the path
-    skeleton_image[current_pixel[1], current_pixel[0]] = edge_color_counter
-    
-    next_pixel = valid_children[0]
-    distance_increment = np.linalg.norm(np.array(current_pixel) - np.array(next_pixel))
-    new_distance = accumulated_distance + distance_increment
-    
-    # RECURSION: Continue to next pixel
-    return get_next_node(skeleton_image, next_pixel, current_pixel, [], new_distance, initial_position)
-'''
 
 def get_next_node(skeleton_image, current_pixel, parent_pixel, sibling_pixels, accumulated_distance, initial_position):
     """

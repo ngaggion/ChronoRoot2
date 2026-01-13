@@ -138,8 +138,8 @@ def performFPCA(conf_path):
                 ax.set_xlabel("Time (h)")
 
                 # Create a legend with the quantiles
-                handles = [plt.Line2D([0,1], [0,1], color=palette[i], lw=2) for i in range(N+1)]
-                labels = [f'{z_quantiles[i, fpc1-1]:.2f}' for i in range(N+1)]
+                handles = [plt.Line2D([0,1], [0,1], color=palette[i], lw=2) for i in range(N+1)][::-1]
+                labels = [f'{z_quantiles[i, fpc1-1]:.2f}' for i in range(N+1)][::-1]
                 ax.legend(handles, labels, title=f'FPC{fpc1} Value', bbox_to_anchor=(1.05, 1), loc='upper left')
 
             plt.tight_layout()

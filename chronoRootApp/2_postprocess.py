@@ -20,116 +20,110 @@ from analysis.dataWork import dataWork
 from analysis.qr import qr_detect, get_pixel_size, load_path
 from analysis.report import plot_individual_plant
 from analysis.lateral_angles import getAngles
-
+from analysis.utils.fileUtilities import convertFromPathSafe
 import json
 import os 
 import pandas as pd
 import argparse
 
 if __name__ == "__main__": 
-    parser = argparse.ArgumentParser(description='ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture')
-    parser.add_argument('--config', type=str, help='Path to the configuration file (default: config.json)')
+    parser = argparse.ArgumentParser(description='ChronoRoot Post-processing')
+    parser.add_argument('--config', type=str, help='Path to the configuration file')
        
     conf = json.load(open(parser.parse_args().config, 'r'))
-    analysis = os.path.join(conf['MainFolder'],'Analysis')
+    analysis = os.path.join(conf['MainFolder'], 'Analysis')
 
-    varieties = load_path(analysis, '*')
+    # 'varieties' are just directory paths now
+    experiment_dirs = load_path(analysis, '*')
 
     print('Post processing started.')
     
-    for variety in varieties:
-        rpi = load_path(variety, '*')
-        for rpi in rpi:
-            cam = load_path(rpi, '*')
-            for cam in cam:
+    # --- Cleanup Phase ---
+    for exp_dir in experiment_dirs:
+        rpis = load_path(exp_dir, '*')
+        for rpi in rpis:
+            cams = load_path(rpi, '*')
+            for cam in cams:
                 plants = load_path(cam, '*')
                 for plant in plants:
                     results = load_path(plant, '*')
                     if len(results) == 0:
-                        # remove empty plant folder
                         os.rmdir(plant)
-
     
-    for variety in varieties:
-        print('Processing ' + variety)
-        rpi = load_path(variety, '*')
-        for rpi in rpi:
-            cam = load_path(rpi, '*')
-            for cam in cam:
+    # --- Processing Phase ---
+    for exp_dir in experiment_dirs:
+        print(f'Processing Experiment: {convertFromPathSafe(exp_dir)}')
+                
+        rpis = load_path(exp_dir, '*')
+        for rpi in rpis:
+            cams = load_path(rpi, '*')
+            for cam in cams:
                 plants = load_path(cam, '*')
                 
-                # Reads QR only once per cam
                 if len(plants) == 0:
                     continue
                 
-                results = load_path(plants[0], '*')
-
-                if len(results) == 0:
+                # Use first plant to establish calibration/metadata for the group
+                sample_results = load_path(plants[0], '*')
+                if len(sample_results) == 0:
                     continue
-                else:
-                    results = results[-1]
-                    
-                metadata = json.load(open(results + '/metadata.json', 'r'))
+                
+                res_path = sample_results[-1]
+                with open(os.path.join(res_path, 'metadata.json'), 'r') as f:
+                    metadata = json.load(f)
 
+                # 1. Determine Experiment Name from Metadata
+                # Fallback to folder name if 'Experiment' key is missing
+                raw_exp_name = metadata.get('Experiment', os.path.basename(exp_dir))
+                readable_name = convertFromPathSafe(raw_exp_name)
+                
+                # 2. Pixel Size Calibration Logic
                 try:
                     pixel_size = metadata['pixel_size']
-                except:
-                    # check if video has QR
-                    try:
-                        conf['videoHasQRbutton']
-                    except:
-                        conf['videoHasQRbutton'] = True
-                        conf['knownDistance'] = ""
-                        conf['pixelDistance'] = ""
-                        
-                    if not conf['videoHasQRbutton']:
-                        # manual calibration
-                        knownDistance = float(conf['knownDistance'])
-                        pixelDistance = float(conf['pixelDistance'])
-                        pixel_size = knownDistance / pixelDistance
+                except KeyError:
+                    # [Calibration Logic simplified for brevity, keeping your existing logic]
+                    if not conf.get('videoHasQRbutton', True):
+                        pixel_size = float(conf['knownDistance']) / float(conf['pixelDistance'])
                     else:
                         image_path = metadata['ImagePath']
                         images = load_path(image_path, '*.png')
-                        
-                        k = 0
-                        for image in images:
+                        pixel_size = 0.04 # Default
+                        for i, image in enumerate(images[:20]):
                             qr = qr_detect(image)
                             if qr is not None:
                                 pixel_size = 10 / get_pixel_size(qr[0])
                                 break
-                            k+=1
-                            if k > 20:
-                                pixel_size = 0.04
-                                break
-                        
+                
+                # 3. Process Individual Plants
                 for plant in plants:
-                    results = load_path(plant, '*')
-                    
-                    if len(results) == 0:
+                    plant_results = load_path(plant, '*')
+                    if len(plant_results) == 0:
                         continue
-                    else:
-                        results = results[-1]
-
-                    # Saves QR in each metadata
-                    metadata = json.load(open(results + '/metadata.json', 'r'))
-                    metadata['pixel_size'] = pixel_size
-                    json.dump(metadata, open(results + '/metadata.json', 'w'))
-
-                    if conf['Limit'] != 0:
-                        N_exp = conf['Limit']
-                    else:
-                        N_exp = None
                     
-                    pfile = results + '/Results_raw.csv'
+                    target_res = plant_results[-1]
+                    meta_file = os.path.join(target_res, 'metadata.json')
+                    
+                    with open(meta_file, 'r') as f:
+                        plant_metadata = json.load(f)
 
-                    dataWork(conf, pfile, results, N_exp = N_exp)
+                    # Update metadata with calculated pixel size
+                    plant_metadata['pixel_size'] = pixel_size
+                    with open(meta_file, 'w') as f:
+                        json.dump(plant_metadata, f)
 
-                    file = os.path.join(results,'PostProcess_Hour.csv')
-                    data = pd.read_csv(file)
+                    # Run analysis
+                    n_limit = conf['Limit'] if conf['Limit'] != 0 else None
+                    pfile = os.path.join(target_res, 'Results_raw.csv')
+                    dataWork(conf, pfile, target_res, N_exp=n_limit)
 
-                    name = variety.split('/')[-1] + '_' + rpi.split('/')[-1] + '_' + cam.split('/')[-1] + '_' + plant.split('/')[-1]
-                    plot_individual_plant(results, data, name)
+                    # 4. Generate Plot Name with path components
+                    plot_label = f"{os.path.basename(exp_dir)}_{os.path.basename(rpi)}_{os.path.basename(cam)}_{os.path.basename(plant)}"
+                    
+                    processed_csv = os.path.join(target_res, 'PostProcess_Hour.csv')
+                    if os.path.exists(processed_csv):
+                        data = pd.read_csv(processed_csv)
+                        plot_individual_plant(target_res, data, plot_label)
 
-                    getAngles(conf, results)
-
+                    getAngles(conf, target_res)
+                    
     print('Post processing finished.')

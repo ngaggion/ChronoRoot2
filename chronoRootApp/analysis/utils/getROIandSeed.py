@@ -103,7 +103,7 @@ def selectSeed(images, segFiles, bbox, conf):
     useSeg = False
     
     while True:
-        i = cv2.getTrackbarPos('Frame', window_name)
+        i = cv2.getTrackbarPos('Overlap segmentation with "s"', window_name)
         img = cv2.imread(images[i])[bbox[0]:bbox[1], bbox[2]:bbox[3]]
         h, w = img.shape[:2]
 
@@ -115,8 +115,6 @@ def selectSeed(images, segFiles, bbox, conf):
             img[seg >= 5] = (255, 0, 255)
 
         # Top Overlay: Large Day and Time
-        cv2.putText(img, "Day: %2d" % days[i], (5, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 5)
-        cv2.putText(img, "Time: %2d:%2d" % (hours[i], minutes[i]), (5, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 5)
 
         if pos is not None:
             # Precision marker and divider
@@ -128,10 +126,12 @@ def selectSeed(images, segFiles, bbox, conf):
         row1 = "ENTER: CONFIRM"
         row2 = "S: TOGGLE SEGMENTATION"
         row3 = "ESC/C/Q: CANCEL"
-        
-        cv2.putText(img, row1, (20, h-130), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
-        cv2.putText(img, row2, (20, h-85), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
-        cv2.putText(img, row3, (20, h-40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+
+        cv2.putText(img, "Day: %2d" % days[i], (10, h-230), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 5)
+        cv2.putText(img, "Time: %2d:%2d" % (hours[i], minutes[i]), (10, h-175), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 5)
+        cv2.putText(img, row1, (10, h-130), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+        cv2.putText(img, row2, (10, h-85), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+        cv2.putText(img, row3, (10, h-40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
 
         cv2.imshow(window_name, img)
         key = cv2.waitKey(1) & 0xFF
@@ -168,7 +168,11 @@ def getROIandSeed(conf, images, segFiles):
         return None, None
 
     bbox = [int(r[1]),int(r[1]+r[3]), int(r[0]),int(r[0]+r[2])]    
-    seed = selectSeed(images, segFiles, bbox, conf)
+    
+    try:
+        seed = selectSeed(images, segFiles, bbox, conf)
+    except:
+        return None, None
     
     if seed is None:
         return None, None

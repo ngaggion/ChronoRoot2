@@ -27,6 +27,7 @@ import shutil
 import glob
 import os
 from PIL import Image
+from analysis.utils.fileUtilities import convertFromPathSafe
 
 def natural_keys(text):
     return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', text)]
@@ -70,7 +71,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             if field.text() == "":
                 data[field.objectName()] = ""
                 
-        data.update({field.objectName(): field.text() for field in [self.identifierField, self.videoField, self.projectField,
+        data.update({field.objectName(): field.text() for field in [self.experimentName, self.videoField, self.projectField,
                                                                     self.everyXhourField, self.everyXhourFieldFourier, 
                                                                     self.everyXhourFieldAngles, self.numComponentsFPCAField]})
         data.update({field.objectName(): field.isChecked() for field in [self.saveImagesButton, 
@@ -86,7 +87,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         data["rpi"] = data["rpiField"]
         data["cam"] = data["cameraField"]
         data["plant"] = data["plantField"]
-        data["identifier"] = data["identifierField"]
+        data["Experiment"] = data["experimentName"]
         data["Images"] = data["videoField"]
         data["processingLimit"] = data["processingLimitField"]
         data["timeStep"] = data["captureIntervalField"]
@@ -141,7 +142,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
                     if field.objectName() in data:
                         field.setText(str(data[field.objectName()]))
 
-                for field in [self.identifierField, self.videoField, self.projectField]:
+                for field in [self.experimentName, self.videoField, self.projectField]:
                     if field.objectName() in data:
                         field.setText(data[field.objectName()])
 
@@ -186,7 +187,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         for file in data_files:
             rel_path = os.path.relpath(file, AnalysisFolder)
             split = rel_path.split(os.path.sep)
-            variety = split[0]
+            experiment = convertFromPathSafe(split[0])
             rpi = split[1]
             camera = split[2]
             plant = split[3]
@@ -208,7 +209,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
                 error_rate = ""
                 status = "Not finished"
 
-            data.append([variety, rpi, camera, plant, results, error_rate, status, date, file])
+            data.append([experiment, rpi, camera, plant, results, error_rate, status, date, file])
 
             self.plant_dropdown.addItem(file)
 
@@ -437,12 +438,12 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         bbox = metadata["bounding box"]
         overlayPath = metadata["folders"]["images"] + "/SegMulti/"
         
-        variety = self.selected_plant.split(os.path.sep)[-5]
+        experiment = self.selected_plant.split(os.path.sep)[-5]
         rpi = self.selected_plant.split(os.path.sep)[-4]
         camera = self.selected_plant.split(os.path.sep)[-3]
         plant = self.selected_plant.split(os.path.sep)[-2]
 
-        filename = variety + "_" + rpi + "_" + camera + "_" + plant + ".png"
+        filename = experiment + "_" + rpi + "_" + camera + "_" + plant + ".png"
         image2_path = os.path.join(self.selected_plant, filename)
         
         if not os.path.exists(image2_path):
@@ -619,15 +620,11 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.saveFieldsIntoJson()
         subprocess.Popen(["python", "1_analysis.py", "--config", os.path.join(self.projectField.text(), "project_config.json")])
         
-    def getBBOX(self):
-        self.saveFieldsIntoJson()
-        subprocess.Popen(["python", "1_analysis.py", "--config", os.path.join(self.projectField.text(), "project_config.json"), "--getbbox"])
-
-    def rerunAnalysis(self):
+    def redoAnalysis(self):
         metadata_path = os.path.join(self.selected_plant, "metadata.json")
-        subprocess.Popen(["python", "1_analysis.py", "--config", metadata_path, "--rerun"])
+        subprocess.Popen(["python", "1_analysis.py", "--config", metadata_path, "--restart"])
 
-    def rerunAnalysis_table(self):
+    def repeatAnalysis(self):
         selected_rows = self.table.selectionModel().selectedRows()
 
         if not selected_rows:
@@ -689,6 +686,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
     def report(self):
         self.saveFieldsIntoJson()
         subprocess.Popen(["python", "3_generateReport.py", "--config", os.path.join(self.projectField.text(), "project_config.json")])   
+    
     def reviewPlant(self):
         path = self.selected_plant
         subprocess.Popen(["python", "4_reviewPlant.py", "--path", path])
@@ -735,6 +733,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
         self.setup_field_validation()
         self.set_default_parameters()
+        self.setup_tooltips()
 
         chrono_root_analysis.setCentralWidget(self.central_widget)
         self.statusbar = QtWidgets.QStatusBar(chrono_root_analysis)
@@ -744,8 +743,6 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.retranslate_ui(chrono_root_analysis)
         self.tab_widget.setCurrentIndex(0)
         QtCore.QMetaObject.connectSlotsByName(chrono_root_analysis)
-
-        #self.refresh_table()
 
     def setup_tabs(self):
         self.tab_widget = QtWidgets.QTabWidget(self.central_widget)
@@ -776,7 +773,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             if field.objectName() in data:
                 field.setText(str(data[field.objectName()]))
 
-        for field in [self.identifierField, self.videoField, self.projectField]:
+        for field in [self.experimentName, self.videoField, self.projectField]:
             if field.objectName() in data:
                 field.setText(data[field.objectName()])
 
@@ -829,9 +826,9 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.plantField.setGeometry(QtCore.QRect(190, 250, 51, 31))
         self.plantField.setObjectName("plantField")
 
-        self.identifierField = QtWidgets.QLineEdit(self.tab1)
-        self.identifierField.setGeometry(QtCore.QRect(190, 300, 101, 31))
-        self.identifierField.setObjectName("identifierField")
+        self.experimentName = QtWidgets.QLineEdit(self.tab1)
+        self.experimentName.setGeometry(QtCore.QRect(190, 300, 101, 31))
+        self.experimentName.setObjectName("experimentName")
 
         self.saveImagesButton = QtWidgets.QCheckBox(self.tab1)
         self.saveImagesButton.setGeometry(QtCore.QRect(10, 380, 161, 31))
@@ -851,7 +848,6 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.processingLimitField.setObjectName("processingLimitField")
         self.processingLimitField.textChanged.connect(self.syncProcessingLimitField)
 
-        # Add emergence distance field to tab1
         self.emergenceDistanceField_2 = QtWidgets.QLineEdit(self.tab1)
         self.emergenceDistanceField_2.setGeometry(QtCore.QRect(190, 550, 51, 31))
         self.emergenceDistanceField_2.setObjectName("emergenceDistanceField_2")
@@ -1024,7 +1020,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         # Create the table
         self.table = QTableWidget()
         self.table.setColumnCount(8)
-        self.table.setHorizontalHeaderLabels(["Variety", "Raspberry", "Camera", "Plant Number", "Result ID", 
+        self.table.setHorizontalHeaderLabels(["Experiment", "Raspberry", "Camera", "Plant Number", "Result ID", 
                                               "Error Rate", "Status", "Finish Date"])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -1037,24 +1033,30 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.refresh_button.clicked.connect(self.refresh_table)
 
         # Create the rerun analysis button
-        self.rerun_analysis_button_tab2 = QPushButton("Rerun Analysis")
-        self.rerun_analysis_button_tab2.clicked.connect(self.rerunAnalysis_table)
+        self.rerun_analysis_button_tab2 = QPushButton("Repeat Analysis")
+        self.rerun_analysis_button_tab2.clicked.connect(self.repeatAnalysis)
 
         # Create the open path button
-        self.open_path_button = QPushButton("Open Path")
-        self.open_path_button.clicked.connect(self.open_selected_path)
+        self.open_path_button_tab2 = QPushButton("Open Folder")
+        self.open_path_button_tab2.clicked.connect(self.open_selected_path)
 
         # Create the remove path button
         self.remove_path_button = QPushButton("Remove Plant")
         self.remove_path_button.clicked.connect(self.remove_selected_path)
+        
+        # Include a process all plants button
+        self.postprocess_plants_button = QPushButton("Process all plants")
+        self.postprocess_plants_button.clicked.connect(self.PostProcess)
 
         # Set up the layout
         buttons_layout = QHBoxLayout()
         buttons_layout.addWidget(self.refresh_button)
-        buttons_layout.addWidget(self.open_path_button)
+        buttons_layout.addWidget(self.open_path_button_tab2)
         buttons_layout.addWidget(self.remove_path_button)
         buttons_layout.addWidget(self.rerun_analysis_button_tab2)
+        buttons_layout.addWidget(self.postprocess_plants_button)
 
+        # Set up the main layout
         layout = QVBoxLayout()
         layout.addWidget(self.table)
         layout.addLayout(buttons_layout)
@@ -1085,8 +1087,8 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.refresh_button_tab3.clicked.connect(self.refresh_table)
 
         # Create a rerun analysis button
-        self.rerun_analysis_button = QPushButton("Rerun Analysis")
-        self.rerun_analysis_button.clicked.connect(self.rerunAnalysis)
+        self.rerun_analysis_button_tab3 = QPushButton("Redo Analysis")
+        self.rerun_analysis_button_tab3.clicked.connect(self.redoAnalysis)
 
         # Create the remove path button
         self.remove_path_button_tab3 = QPushButton("Remove Plant")
@@ -1099,8 +1101,8 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.reviewButton = QPushButton("View full sequence")
         self.reviewButton.clicked.connect(self.reviewPlant)
 
-        self.openPathButton2 = QPushButton("Open Folder")
-        self.openPathButton2.clicked.connect(self.open_selected_path_tab3)
+        self.open_path_button_tab3 = QPushButton("Open Folder")
+        self.open_path_button_tab3.clicked.connect(self.open_selected_path_tab3)
 
         # Set up the layout for the checkbox, dropdown menu, and refresh button
         controls_layout = QHBoxLayout()
@@ -1109,10 +1111,10 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
         controls_layout2 = QHBoxLayout()
         controls_layout2.addWidget(self.refresh_button_tab3)
-        controls_layout2.addWidget(self.rerun_analysis_button)
-        controls_layout2.addWidget(self.remove_path_button_tab3)
+        controls_layout2.addWidget(self.open_path_button_tab3)
         controls_layout2.addWidget(self.reviewButton)
-        controls_layout2.addWidget(self.openPathButton2)
+        controls_layout2.addWidget(self.rerun_analysis_button_tab3)
+        controls_layout2.addWidget(self.remove_path_button_tab3)
 
         # Set up the main layout
         layout = QHBoxLayout()
@@ -1375,9 +1377,9 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.report_dropdown.setObjectName("report_dropdown")
         self.report_dropdown.currentIndexChanged.connect(self.update_report_labels)
         
-        self.open_path_button = QPushButton(self.tab5)
-        self.open_path_button.setObjectName("Open Path")
-        self.open_path_button.clicked.connect(self.open_report_folder)
+        self.open_path_button_tab5 = QPushButton(self.tab5)
+        self.open_path_button_tab5.setObjectName("Open Path")
+        self.open_path_button_tab5.clicked.connect(self.open_report_folder)
 
         # Set up the main layout
         layout = QVBoxLayout()
@@ -1388,7 +1390,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
         horizontal_layout = QHBoxLayout()
         horizontal_layout.addWidget(self.report_dropdown, 3)
-        horizontal_layout.addWidget(self.open_path_button, 1)
+        horizontal_layout.addWidget(self.open_path_button_tab5, 1)
         horizontal_layout.addWidget(self.refresh_button_tab5, 1)
         horizontal_layout.setAlignment(QtCore.Qt.AlignCenter)
                 
@@ -1423,8 +1425,8 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             set_translation(self.label_4, "<html><head/><body><p align=\"center\">Identifier</p></body></html>")
             set_translation(self.label_5, "(the raspberry module identifier)")
             set_translation(self.label_6, "(the plate/camera identifier)")
-            set_translation(self.label_7, "(a number, to identify different plants, left to right)")
-            set_translation(self.label_8, "(variety identifier, e.g. WT, Col0; do not use dots)")
+            set_translation(self.label_7, "(a number to identify plants in the plate, left to right)")
+            set_translation(self.label_8, "(experiment identifier, e.g. WT, Col0)")
             set_translation(self.label_9, "<html><head/><body><p><span style=\" font-size:10pt; font-weight:600;\">Analysis and postprocessing parameters</span></p></body></html>")
             set_translation(self.label_11, "<html><head/><body><p>Capture interval</p></body></html>")
             set_translation(self.label_12, "<html><head/><body><p>Set processing limit</p></body></html>")
@@ -1465,7 +1467,8 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             set_translation(self.refresh_button, "Refresh")
             set_translation(self.refresh_button_tab3, "Refresh")
             set_translation(self.refresh_button_tab5, "Refresh")
-            set_translation(self.open_path_button, "Open Path")
+            set_translation(self.open_path_button_tab2, "Open Path")
+            set_translation(self.open_path_button_tab5, "Open Report Path")
             set_translation(self.averagePerPlantStats, "Average intervals before testing")
             set_translation(self.everyXhourText, "Time series stats interval (dt, in hours)")
             set_translation(self.everyXhourTextFourier, "Speeds stats interval (dt, in hours)")
@@ -1484,7 +1487,62 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         translate_labels()
         translate_buttons()
         translate_tab_text()
+    
+    def setup_tooltips(self):
+        """Standardized explanations for all UI elements focusing on user workflow."""
         
+        # --- Tab 1: Plant Analysis ---
+        self.loadProject.setToolTip("Select the primary directory where experiment results and data are organized.")
+        self.loadVideo.setToolTip("Select the folder containing the raw image sequence for analysis.")
+        self.saveButton.setToolTip("Save the current parameters to the project configuration.")
+        
+        self.previewAnalysisButton.setToolTip(
+            "<b>Visual Inspection:</b><br>"
+            "Open a viewer to check image quality and verify that the root segmentation is accurate."
+        )
+        
+        self.analysisButton.setToolTip(
+            "<b>Initiate Analysis:</b><br>"
+            "1. Define the plant analysis area (ROI).<br>"
+            "2. Mark the <b>Root Starting Point</b>.<br>"
+            "3. Process the growth tracking graph."
+        )
+        
+        self.PostProcessButton.setToolTip("Finalize and calculate statistics for all analyzed plants in this project.")
+        self.loadConfigFileButton.setToolTip("Import settings from an existing configuration file.")
+        self.loadLastConfigButton.setToolTip("Restore the most recently used settings.")
+        
+        self.saveImagesButton.setToolTip("Save individual plant crops; required for creating growth time-lapse videos.")
+        self.videoHasQRbutton.setToolTip("Enable automatic scale detection using the 1-cm QR code in the images.")
+        self.calibrateBtn.setToolTip("Manually define the physical scale by measuring a known distance in the image.")
+
+        # --- Tab 2: Analysis Overview ---
+        self.refresh_button.setToolTip("Update the table to show the latest analysis progress and error rates.")
+        self.open_path_button_tab2.setToolTip("Open the folder containing the data for the selected plant.")
+        self.remove_path_button.setToolTip("Move the selected plant to the 'Removed' folder. This hides it from reports without deleting the data.")
+        self.rerun_analysis_button_tab2.setToolTip("<b>Quick Re-run:</b> Repeat tracking using the existing ROI and Root Starting Point.")
+        self.postprocess_plants_button.setToolTip("Refresh global statistics for all plants currently in the project.")
+        
+        # --- Tab 3: Plant Overlay ---
+        self.refresh_button_tab3.setToolTip("Refresh the list of plants available for visual inspection.")
+        self.open_path_button_tab3.setToolTip("Open the results folder for the plant currently being viewed.")
+        self.rerun_analysis_button_tab3.setToolTip("<b>Manual Re-run:</b> Restart the analysis to choose a new ROI or Root Starting Point.")
+        self.remove_path_button_tab3.setToolTip("Move the current plant to the 'Removed' folder if it is unsuitable for reporting.")
+        self.reviewButton.setToolTip("Open the sequence viewer to inspect the development of this root system.")
+        self.overlay_checkbox.setToolTip("Show or hide the color-coded tracking mask over the plant image.")
+        
+        # --- Tab 4: Generate Report ---
+        self.reportButton.setToolTip(
+            "<b>Compile Results:</b><br>"
+            "Generate visual charts, CSV data, and perform statistical comparisons between varieties."
+        )
+        self.loadLastConfig2.setToolTip("Restore previous reporting and statistical parameters.")
+        self.saveButton_2.setToolTip("Save current reporting preferences.")
+        self.PostProcessButton2.setToolTip("Ensure all plant data is synchronized before generating final figures.")
+        
+        # --- Tab 5: Report ---
+        self.refresh_button_tab5.setToolTip("Update the list of available report figures based on the current project data.")
+        self.open_path_button_tab5.setToolTip("Open the directory where generated reports are stored.")
         
 def main():
     app = QtWidgets.QApplication(sys.argv)
