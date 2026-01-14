@@ -137,8 +137,8 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     hypocotylLength = np.nan_to_num(hypocotylLength, nan=0.0)
 
     # Remove spurious lateral roots at the beginning
-    # The space are eight hours (32 timepoints with 15 min timeStep)
-    space = int((8 * 60) / timeStep)  # 8 hours worth of timeSteps
+    # The space are six hours (24 timepoints with 15 min timeStep)
+    space = int((6 * 60) / timeStep)  # 6 hours worth of timeSteps
 
     for t in range(space, len(numlateralRoots)):
         if t-space >= 0 and t < len(numlateralRoots):

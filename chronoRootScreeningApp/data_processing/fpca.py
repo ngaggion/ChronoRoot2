@@ -117,25 +117,23 @@ def run_fpca_analysis(args):
         
         fpc_df = fpc_df.sort_values(by=args.groupby)
         
-        # Plot 2: Explained variance text
+        # Plot 2: Scatter PC1 vs PC2
         ax = plt.subplot(5, 2, 2)
-        plt.axis('off')
-        for fpc1 in range(1, args.components + 1):
-            plt.text(
-                0.01, 
-                1 - 0.10*fpc1, 
-                f'Explained variance by PC{fpc1}: {fpca.explained_variance_ratio_[fpc1-1] * 100:.2f}%', 
-                fontsize=12, 
-                color='black'
-            )
-        plt.text(
-            0.01, 
-            1 - 0.10*(args.components+1), 
-            f'Total explained variance: {sum(fpca.explained_variance_ratio_) * 100:.2f}%', 
-            fontsize=12, 
-            color='black'
-        )
         
+        sns.scatterplot(
+            data=fpc_df, 
+            x='FPC1' + ('_IRN' if args.normalize else ''), 
+            y='FPC2' + ('_IRN' if args.normalize else ''), 
+            hue=args.groupby, 
+            palette="tab10", 
+            s=100,
+            ax=ax
+        )
+        ax.set_title('PC1 vs PC2')
+        ax.set_xlabel('PC1' + (' (IRN)' if args.normalize else ''))
+        ax.set_ylabel('PC2' + (' (IRN)' if args.normalize else ''))
+        ax.legend(title=args.groupby, bbox_to_anchor=(1.05, 1), loc='upper left')
+
         # Write statistical results
         with open(os.path.join(args.output, f"{name}_stats.txt"), 'w') as f:
             f.write('Using Mann Whitney U test to compare different experiments\n')
@@ -172,9 +170,9 @@ def run_fpca_analysis(args):
                     ax=ax, 
                     palette="tab10"
                 )
-                ax.set_title(f'Box plot for PC {fpc1}')
+                ax.set_title(f'PC{fpc1}. Explained Variance: {fpca.explained_variance_ratio_[fpc1-1]*100:.2f}%')
                 
-                # Interpretation plot for each FPC
+                # Interpretation plot for each PC
                 ax = plt.subplot(5, 2, 1 + fpc1 * 2 + 1)
                 
                 N = 10
@@ -202,12 +200,12 @@ def run_fpca_analysis(args):
                 ax.set_xlabel(f"Time ({args.xcol.split(' ')[-1].strip('()')})")
                 
                 # Create a legend with the quantiles
-                handles = [plt.Line2D([0,1], [0,1], color=palette[i], lw=2) for i in range(N+1)]
-                labels = [f'{z_quantiles[i, fpc1-1]:.2f}' for i in range(N+1)]
+                handles = [plt.Line2D([0,1], [0,1], color=palette[i], lw=2) for i in range(N+1)][::-1]
+                labels = [f'{z_quantiles[i, fpc1-1]:.2f}' for i in range(N+1)][::-1]
                 ax.legend(
                     handles, 
                     labels, 
-                    title=f'FPC{fpc1} Value', 
+                    title=f'PC{fpc1} Value', 
                     bbox_to_anchor=(1.05, 1), 
                     loc='upper left'
                 )
@@ -229,14 +227,14 @@ def run_fpca_analysis(args):
                     fpc_j = f"FPC{j}{'_IRN' if args.normalize else ''}"
                     
                     sns.scatterplot(data=fpc_df, x=fpc_i, y=fpc_j, hue=args.groupby, palette="tab10", s=100)
-                    plt.title(f'{magnitude} - FPC{i} vs FPC{j}', fontsize=14)
-                    plt.xlabel(f'FPC{i}', fontsize=12)
-                    plt.ylabel(f'FPC{j}', fontsize=12)
+                    plt.title(f'{magnitude} - PC{i} vs PC{j}', fontsize=14)
+                    plt.xlabel(f'PC{i}', fontsize=12)
+                    plt.ylabel(f'PC{j}', fontsize=12)
                     plt.legend(title=args.groupby, bbox_to_anchor=(1.05, 1), loc='upper left')
                     plt.tight_layout()
                     
-                    plt.savefig(os.path.join(args.output, f"{name}_FPC{i}_vs_FPC{j}.png"), dpi=300, bbox_inches='tight')
-                    plt.savefig(os.path.join(args.output, f"{name}_FPC{i}_vs_FPC{j}.svg"), dpi=300, bbox_inches='tight')
+                    plt.savefig(os.path.join(args.output, f"{name}_PC{i}_vs_PC{j}.png"), dpi=300, bbox_inches='tight')
+                    plt.savefig(os.path.join(args.output, f"{name}_PC{i}_vs_PC{j}.svg"), dpi=300, bbox_inches='tight')
                     plt.close()
                     plt.cla()
                     plt.clf()

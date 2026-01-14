@@ -90,8 +90,8 @@ def main():
     parser.add_argument(
         '--dt',
         type=float,
-        default=0.25,
-        help='Delta time between measurements (hours)'
+        default=15,
+        help='Delta time between measurements (minutes)'
     )
     parser.add_argument(
         '--name-mapping',
@@ -104,7 +104,26 @@ def main():
         default=0,
         help='Add time before first photo (in integer hours)'
     )
+    
+    # Inside main(), update the parser:
+    parser.add_argument('--germination-time-cut', type=int, default=0)
+    parser.add_argument('--do-germination', type=str, default='True')
+    parser.add_argument('--germination-each-video', type=str, default='False')
+    parser.add_argument('--do-plant-growth', type=str, default='True')
+    parser.add_argument('--selected-metrics', type=str, default='')
+    parser.add_argument('--do-fpca', type=str, default='False')
+    parser.add_argument('--fpca-components', type=int, default=2)
+    parser.add_argument('--normalize-fpca', type=str, default='False')
+
     args = parser.parse_args()
+
+    # Convert string booleans to actual booleans
+    do_germination = args.do_germination.lower() == 'true'
+    store_for_each_video = args.germination_each_video.lower() == 'true'
+    do_plant_growth = args.do_plant_growth.lower() == 'true'
+    do_fpca = args.do_fpca.lower() == 'true'
+    normalize_fpca = args.normalize_fpca.lower() == 'true'
+    selected_metrics = args.selected_metrics.split(',') if args.selected_metrics else []
         
     try:
         # Setup
@@ -121,23 +140,31 @@ def main():
         )
                 
         # Run germination analysis
-        print("Running germination analysis...")
-        germ_analyzer = GerminationAnalyzer(
-            data=combined_data,
-            output_dir=results_dir,
-            dt=args.dt,
-            add_time_before_photo=args.add_time_before_photo
-        )
-        germ_analyzer.analyze()
+        if do_germination:
+            print("Running germination analysis...")
+            germ_analyzer = GerminationAnalyzer(
+                data=combined_data,
+                output_dir=results_dir,
+                dt=args.dt,
+                add_time_before_photo=args.add_time_before_photo,
+                store_for_each_video=store_for_each_video,
+                time_cut=args.germination_time_cut  
+            )
+            germ_analyzer.analyze()
         
         # Run plant growth analysis
-        print("Analyzing plant growth...")
-        plant_analyzer = PlantGrowthAnalyzer(
-            data=combined_data,
-            output_dir=results_dir,
-            add_time_before_photo=args.add_time_before_photo
-        )
-        plant_analyzer.analyze_all_parameters()
+        if do_plant_growth:
+            print("Analyzing plant growth...")
+            plant_analyzer = PlantGrowthAnalyzer(
+                data=combined_data,
+                output_dir=results_dir,
+                add_time_before_photo=args.add_time_before_photo,
+                metrics=selected_metrics,           
+                do_fpca=do_fpca,                    
+                fpca_components=args.fpca_components,
+                fpca_normalize=normalize_fpca
+            )
+            plant_analyzer.analyze_all_parameters()
 
         print("Analysis complete!")
         print(f"Results saved in: {results_dir}")
