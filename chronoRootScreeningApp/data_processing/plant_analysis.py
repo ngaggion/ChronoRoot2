@@ -16,7 +16,7 @@ class PlantGrowthAnalyzer:
         "HypocotylLength", "Area", "MainRootLength", "TotalRootLength", "DenseRootArea"
     ]
     
-    def __init__(self, data=None, output_dir='.', add_time_before_photo=0):
+    def __init__(self, data=None, output_dir='.', add_time_before_photo=0, metrics=None, do_fpca=False, fpca_components=2, fpca_normalize=False):
         """
         Initialize the analyzer.
         
@@ -29,6 +29,10 @@ class PlantGrowthAnalyzer:
         self.base_dir = output_dir
         self.plot_dirs = {}
         self.add_time_before_photo = add_time_before_photo
+        self.metrics = metrics if metrics is not None else self.PARAMETERS
+        self.do_fpca = do_fpca
+        self.fpca_components = fpca_components
+        self.do_fpca_normalize = fpca_normalize
         self.all_results = {}
         
     def _setup_directories(self, parameter):
@@ -43,16 +47,10 @@ class PlantGrowthAnalyzer:
             os.makedirs(dir_path, exist_ok=True)
         return dirs
     
-    def analyze_all_parameters(self, run_fpca=True,  
-                              fpca_components=2, fpca_normalize=False):
+    def analyze_all_parameters(self):
         """
         Run complete analysis for all parameters.
         
-        Args:
-            run_fpca: Whether to run FPCA on hourly data (default: True)
-            fpca_components: Number of FPCA components (default: 2)
-            fpca_normalize: Whether to normalize FPCA data (default: False)
-            
         Returns:
             Dictionary with analysis results for all parameters
         """
@@ -69,9 +67,9 @@ class PlantGrowthAnalyzer:
                 # Run standard analysis with optional FPCA
                 param_results = self.analyze_parameter(
                     parameter,
-                    run_fpca=run_fpca,
-                    fpca_components=fpca_components,
-                    fpca_normalize=fpca_normalize
+                    run_fpca=self.do_fpca,
+                    fpca_components=self.fpca_components,
+                    fpca_normalize=self.do_fpca_normalize
                 )
                                                 
                 results[parameter] = param_results

@@ -101,10 +101,9 @@ class AnalysisTab(QWidget):
         # Time delta field
         time_settings = QHBoxLayout()
         self.time_delta_edit = QLineEdit()
-        self.time_delta_edit.setPlaceholderText('60')
+        self.time_delta_edit.setPlaceholderText('15')
         time_settings.addWidget(QLabel('Time between slices (minutes):'))
         time_settings.addWidget(self.time_delta_edit)
-        proj_layout.addLayout(time_settings)
 
         # Time before pictures
         added_time = QHBoxLayout()
@@ -112,11 +111,24 @@ class AnalysisTab(QWidget):
         self.add_time_edit.setPlaceholderText('0')
         added_time.addWidget(QLabel('Extra time before first picture (hours):'))
         added_time.addWidget(self.add_time_edit)
-        proj_layout.addLayout(added_time)
+        
+        # Cut down germination plot time
+        germination_time_layout = QHBoxLayout()
+        self.germination_time_edit = QLineEdit()
+        self.germination_time_edit.setPlaceholderText('0 (Leave 0 for full duration)')
+        germination_time_layout.addWidget(QLabel('End germination plot time (hours):'))
+        germination_time_layout.addWidget(self.germination_time_edit)
+        
+        # Put them both in next to each other
+        time_layout = QHBoxLayout()
+        time_layout.addLayout(time_settings)
+        time_layout.addLayout(added_time)
+        time_layout.addLayout(germination_time_layout)
+        proj_layout.addLayout(time_layout)
 
         # Calibration Group Box
         calib_group = QGroupBox('Calibration Settings')
-        calib_layout = QVBoxLayout()
+        calib_layout = QHBoxLayout()
 
         # QR Code toggle and calibration options
         self.qr_checkbox = QCheckBox('Video has QR codes for calibration')
@@ -125,7 +137,12 @@ class AnalysisTab(QWidget):
 
         # Manual calibration widget (hidden by default)
         self.manual_calib_widget = QWidget()
-        manual_calib_layout = QVBoxLayout()
+        manual_calib_layout = QHBoxLayout()
+        
+        # Calibration helper button
+        self.calibrate_btn = QPushButton('Open Calibration Helper')
+        self.calibrate_btn.clicked.connect(self.open_calibration_helper)
+        manual_calib_layout.addWidget(self.calibrate_btn)
         
         # Known distance input
         known_dist_layout = QHBoxLayout()
@@ -145,11 +162,6 @@ class AnalysisTab(QWidget):
         pixel_dist_layout.addWidget(self.pixel_dist_edit)
         manual_calib_layout.addLayout(pixel_dist_layout)
 
-        # Calibration helper button
-        self.calibrate_btn = QPushButton('Open Calibration Helper')
-        self.calibrate_btn.clicked.connect(self.open_calibration_helper)
-        manual_calib_layout.addWidget(self.calibrate_btn)
-
         self.manual_calib_widget.setLayout(manual_calib_layout)
         calib_layout.addWidget(self.manual_calib_widget)
         calib_group.setLayout(calib_layout)
@@ -157,6 +169,70 @@ class AnalysisTab(QWidget):
         proj_group.setLayout(proj_layout)
         layout.addWidget(proj_group)
         layout.addWidget(calib_group)
+        
+        # Process customization options
+        process_group = QGroupBox('Processing Options')
+        process_vertical_layout = QVBoxLayout()
+        
+        process_layout = QHBoxLayout()
+        
+        # 1 Do germination analysis
+        self.germination_checkbox = QCheckBox('Perform germination analysis')
+        self.germination_checkbox.setChecked(True)
+        process_layout.addWidget(self.germination_checkbox)
+        
+        # 2 Perform plant growth analysis
+        self.plant_growth_checkbox = QCheckBox('Perform plant growth analysis')
+        self.plant_growth_checkbox.setChecked(True)
+        process_layout.addWidget(self.plant_growth_checkbox)
+        self.plant_growth_checkbox.stateChanged.connect(self.toggle_plant_growth_options)
+        
+        # 3 Store tracking visualization
+        self.show_tracking_checkbox = QCheckBox('Store tracking visualization')
+        self.show_tracking_checkbox.setChecked(False)
+        process_layout.addWidget(self.show_tracking_checkbox)
+        
+        # 4 Store germination for each video
+        self.store_each_video_checkbox = QCheckBox('Store germination plots for each video separately')
+        self.store_each_video_checkbox.setChecked(False)
+        process_layout.addWidget(self.store_each_video_checkbox)
+        
+        process_vertical_layout.addLayout(process_layout)
+        
+        self.plant_growth_widget = QWidget()
+        plant_process_layout = QHBoxLayout() # Use VBox to stack the rows
+        
+        # Metric selection row
+        self.check_hypocotyl = QCheckBox('Hypocotyl Length')
+        self.check_main_root = QCheckBox('Main Root Length')
+        self.check_total_root = QCheckBox('Total Root Length')
+        self.check_plant_area = QCheckBox('Plant Area')
+        self.check_root_area = QCheckBox('Dense Root Area')
+        
+        for cb in [self.check_hypocotyl, self.check_main_root, self.check_total_root, 
+                   self.check_plant_area, self.check_root_area]:
+            cb.setChecked(True)
+            plant_process_layout.addWidget(cb)
+        
+        # FPCA row
+        self.fpca_checkbox = QCheckBox('Perform FPCA analysis')
+        plant_process_layout.addWidget(self.fpca_checkbox)
+        plant_process_layout.addWidget(QLabel('Components:'))
+        self.fpca_components_edit = QLineEdit("2")
+        self.fpca_components_edit.setFixedWidth(40)
+        self.fpca_components_edit.setValidator(QIntValidator(2, 10))
+        plant_process_layout.addWidget(self.fpca_components_edit)
+        self.fpca_normalize_checkbox = QCheckBox('Normalize FPCA data')
+        self.fpca_normalize_checkbox.setChecked(False)
+        plant_process_layout.addWidget(self.fpca_normalize_checkbox)
+        
+        self.plant_growth_widget.setLayout(plant_process_layout)
+        
+        process_vertical_layout.addWidget(self.plant_growth_widget)
+        
+        process_group.setLayout(process_vertical_layout)     
+        self.plant_growth_widget.setLayout(plant_process_layout)
+        layout.addWidget(process_group)
         
         # Group Names
         group_group = QGroupBox('Group Names')
@@ -178,16 +254,6 @@ class AnalysisTab(QWidget):
         group_group.layout().addWidget(scroll)
         layout.addWidget(group_group)
 
-        # Checkboxes layout
-        checks_layout = QHBoxLayout()
-        
-        # Show tracking visualization checkbox
-        self.show_tracking_checkbox = QCheckBox('Show tracking visualization')
-        self.show_tracking_checkbox.setChecked(False)
-        checks_layout.addWidget(self.show_tracking_checkbox)
-
-        layout.addLayout(checks_layout)
-
         # Buttons layout
         buttons_layout = QHBoxLayout()
         
@@ -201,10 +267,10 @@ class AnalysisTab(QWidget):
         self.process_btn.clicked.connect(self.process_video)
         buttons_layout.addWidget(self.process_btn)
 
-        # Post-process Button
-        self.postprocess_btn = QPushButton('Post-process Results')
-        self.postprocess_btn.clicked.connect(self.postprocess_results)
-        buttons_layout.addWidget(self.postprocess_btn)
+        # Generate Report Button
+        self.generate_report_btn = QPushButton('Generate Report')
+        self.generate_report_btn.clicked.connect(self.generate_report)
+        buttons_layout.addWidget(self.generate_report_btn)
         
         # Add name mapping button to the buttons_layout
         self.name_mapping_btn = QPushButton('Edit Name Mapping')
@@ -221,6 +287,7 @@ class AnalysisTab(QWidget):
 
         # Initialize calibration mode
         self.toggle_calibration_mode()
+        self.toggle_plant_growth_options()
 
     def edit_name_mapping(self):
         """Open dialog to edit name mapping for visualization"""
@@ -241,6 +308,11 @@ class AnalysisTab(QWidget):
         """Toggle between QR and manual calibration modes"""
         has_qr = self.qr_checkbox.isChecked()
         self.manual_calib_widget.setVisible(not has_qr)
+    
+    def toggle_plant_growth_options(self):
+        """Enable or disable plant growth analysis options"""
+        enabled = self.plant_growth_checkbox.isChecked()
+        self.plant_growth_widget.setVisible(enabled)
 
     def open_calibration_helper(self):
         """Opens a helper window to assist with manual calibration"""
@@ -369,11 +441,11 @@ class AnalysisTab(QWidget):
         
         identifier = self.identifier_edit.text().strip()
         
-        # Get time delta, default to 60 if empty or invalid
+        # Get time delta, default to 15 if empty or invalid
         try:
-            time_delta = float(self.time_delta_edit.text() or '60')
+            time_delta = float(self.time_delta_edit.text() or '15')
         except ValueError:
-            time_delta = 60
+            time_delta = 15
         
         # Collect parameters including seed counts
         params = {
@@ -455,11 +527,11 @@ class AnalysisTab(QWidget):
 
     def preview_video(self):
         
-        # Get time delta, default to 60 if empty or invalid
+        # Get time delta, default to 15 if empty or invalid
         try:
-            time_delta = float(self.time_delta_edit.text() or '60')
+            time_delta = float(self.time_delta_edit.text() or '15')
         except ValueError:
-            time_delta = 60
+            time_delta = 15
 
         # Collect parameters
         params = {
@@ -495,9 +567,9 @@ class AnalysisTab(QWidget):
         return
 
 
-    def postprocess_results(self):
+    def generate_report(self):
         """
-        Run post-processing analysis on all completed experiments.
+        Generate report on all completed experiments.
         """
         if not self.proj_dir_edit.text():
             QMessageBox.warning(self, 'Error', 'Please select a project directory first!')
@@ -505,11 +577,11 @@ class AnalysisTab(QWidget):
             
         project_dir = self.proj_dir_edit.text()
         
-        # Get time delta, default to 60 if empty or invalid
+        # Get time delta, default to 15 if empty or invalid
         try:
-            time_delta = float(self.time_delta_edit.text() or '60')
+            time_delta = float(self.time_delta_edit.text() or '15')
         except ValueError:
-            time_delta = 60
+            time_delta = 15
 
         # Get add time, default 0 if empty or invalid
         try:
@@ -533,13 +605,40 @@ class AnalysisTab(QWidget):
         # Check for name mapping file
         mapping_file = os.path.join(project_dir, 'name_mapping.json')
         
-        # Create command line arguments
+        # 1. Collect Active Metrics/Parts
+        active_parts = []
+        mapping = [
+            ("HypocotylLength", self.check_hypocotyl),
+            ("MainRootLength", self.check_main_root),
+            ("TotalRootLength", self.check_total_root),
+            ("Area", self.check_plant_area),
+            ("DenseRootArea", self.check_root_area)
+        ]
+        for name, cb in mapping:
+            if cb.isChecked():
+                active_parts.append(name)        
+        
+        # 2. Collect FPCA Settings
+        do_fpca = self.fpca_checkbox.isChecked()
+        fpca_comps = self.fpca_components_edit.text() or "2"
+        
+        # 3. Handle Germination Cutoff
+        germ_cut = self.germination_time_edit.text() or "0"
+
+        # 4. Construct Command Line Arguments
         args = [
-            "python",
-            "postprocess_results.py",
+            "python", "generate_report.py",
             "--project-dir", project_dir,
             "--dt", str(time_delta),
-            "--add-time-before-photo", str(add_time)
+            "--add-time-before-photo", str(add_time),
+            "--germination-time-cut", str(germ_cut),
+            "--do-germination", str(self.germination_checkbox.isChecked()),
+            "--germination-each-video", str(self.store_each_video_checkbox.isChecked()),
+            "--do-plant-growth", str(self.plant_growth_checkbox.isChecked()),
+            "--selected-metrics", ",".join(active_parts),
+            "--do-fpca", str(do_fpca),
+            "--fpca-components", fpca_comps,
+            "--normalize-fpca", str(self.fpca_normalize_checkbox.isChecked())
         ]
         
         # Add name mapping if it exists
@@ -557,8 +656,8 @@ class AnalysisTab(QWidget):
             mapping_msg = " with name mapping" if os.path.exists(mapping_file) else ""
             QMessageBox.information(
                 self,
-                "Post-processing Started",
-                f"Post-processing has been started{mapping_msg}.\n"
+                "Report Generation Started",
+                f"Report generation has been started{mapping_msg}.\n"
                 f"Results will be saved in: {os.path.join(project_dir, 'results')}"
             )
             
@@ -566,7 +665,7 @@ class AnalysisTab(QWidget):
             QMessageBox.critical(
                 self, 
                 "Error", 
-                f"Error starting post-processing: {str(e)}"
+                f"Error starting report generation: {str(e)}"
             )
 
 class ResultsTab(QWidget):
@@ -807,10 +906,10 @@ class ReportsTab(QWidget):
     PARAMETERS = [
         "Germination",
         "Area",
+        "DenseRootArea",
         "HypocotylLength", 
         "MainRootLength", 
-        "TotalRootLength", 
-        "DenseRootArea",
+        "TotalRootLength"
     ]
 
     def __init__(self, parent=None):

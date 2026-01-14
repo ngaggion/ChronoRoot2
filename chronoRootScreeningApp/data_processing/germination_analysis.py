@@ -8,16 +8,18 @@ from scipy.optimize import curve_fit
 class GerminationAnalyzer:
     """Analyzes seed germination data and generates plots."""
     
-    def __init__(self, data=None, output_dir='.', dt=1, add_time_before_photo=0):
+    def __init__(self, data=None, output_dir='.', dt=15, store_for_each_video=False, add_time_before_photo=0, time_cut=0):
         self.data = self._prepare_data(data)
         self.base_dir = output_dir
         self.plot_dirs = self._setup_directories()
         
         # Analysis parameters
-        self.TIME_WINDOW = dt
+        self.TIME_WINDOW = 1
         self.ROLL_WINDOW = max(5, int(round(2.5 / self.TIME_WINDOW)))
         self.DETECTION_WINDOW = max(10, int(round(5 / self.TIME_WINDOW)))
+        self.store_for_each_video = store_for_each_video
         self.add_time_before_photo = add_time_before_photo
+        self.time_cut = time_cut
         
         self.germination_data = None
         self.statistics = None
@@ -260,18 +262,17 @@ class GerminationAnalyzer:
         # Original group plots
         for group_name, group_data in self.data.groupby('Group'):
             self._plot_germination_curve(group_name, group_data)
-            self._plot_germination_curve(group_name, group_data, log_scale=True)
             
             # Add per-video plots for this group
-            for video_name, video_data in group_data.groupby('Video'):
-                self._plot_germination_curve_per_video(group_name, video_name, video_data)
-                self._plot_germination_curve_per_video(group_name, video_name, video_data, log_scale=True)
+            if self.store_for_each_video:
+                for video_name, video_data in group_data.groupby('Video'):
+                    self._plot_germination_curve_per_video(group_name, video_name, video_data)
         
         # Survival curves
         self._plot_survival_curves(pairwise=False)
         self._plot_survival_curves(pairwise=True)
 
-    def _plot_germination_curve(self, group_name, group_data, log_scale=False):
+    def _plot_germination_curve(self, group_name, group_data):
         """
         Create comprehensive germination curve plot using manual seed counts.
         """
@@ -373,11 +374,7 @@ class GerminationAnalyzer:
             # Set limits
             ax1.set_ylim(0, 100)
             ax2.set_ylim(0, total_seeds)
-            ax1.set_xlim(0, max(time_points))
-            
-            # put x axis in symlog scale
-            if log_scale:
-                ax1.set_xscale('symlog', linthresh=1)
+            ax1.set_xlim(0, min(max(time_points), self.time_cut) if self.time_cut > 0 else max(time_points))
             
             # Add grid
             ax1.grid(True, alpha=0.3)
@@ -387,8 +384,7 @@ class GerminationAnalyzer:
             
             # Save plot
             plot_name = os.path.join(self.plot_dirs['germination'], 
-                                f'GerminationCurve_{group_name}' +
-                                ('_LogScale' if log_scale else ''))
+                                f'GerminationCurve_{group_name}')
             plt.tight_layout()
             self._save_plot(plot_name)
                         
@@ -483,7 +479,7 @@ class GerminationAnalyzer:
         # Adjust layout to prevent legend cutoff
         plt.tight_layout()
 
-    def _plot_germination_curve_per_video(self, group_name, video_name, video_data, log_scale=False):
+    def _plot_germination_curve_per_video(self, group_name, video_name, video_data):
         """
         Create germination curve plot for a specific video.
         
@@ -566,11 +562,8 @@ class GerminationAnalyzer:
             # Set limits
             ax1.set_ylim(0, 100)
             ax2.set_ylim(0, total_seeds)
-            ax1.set_xlim(0, max(time_points))
-            
-            if log_scale:
-                ax1.set_xscale('symlog', linthresh=1)
-            
+            ax1.set_xlim(0, min(max(time_points), self.time_cut) if self.time_cut > 0 else max(time_points))
+                        
             # Add grid
             ax1.grid(True, alpha=0.3)
             

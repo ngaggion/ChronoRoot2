@@ -68,21 +68,30 @@ def performFPCA(conf_path):
         fpc_values = fpca.fit_transform(FDataGrid(magnitudes_dict[magnitude].transpose()))
         
         fpc_df = pd.DataFrame(fpc_values).set_index(magnitudes_dict[magnitude].columns)
-        fpc_df.columns = [ f"FPC{i}" for i in range(1, fpca.n_components+1) ]
+        fpc_df.columns = [ f"PC{i}" for i in range(1, fpca.n_components+1) ]
         fpc_df = fpc_df.reset_index()
         fpc_df["Experiment"] = fpc_df.Plant_id.apply(get_expid)
         
         # Inverse Rank Normalization for Standard Normal Distribution
         for j in range(1, fpca.n_components+1):
-            fpc_df[f'FPC{j}_IRN'] = norm.ppf(fpc_df[f'FPC{j}'].rank() / (len(fpc_df) + 1))
+            fpc_df[f'PC{j}_IRN'] = norm.ppf(fpc_df[f'PC{j}'].rank() / (len(fpc_df) + 1))
         fpc_df = fpc_df.sort_values(by="Experiment")
         
         ax = plt.subplot(5, 2, 2)
-        plt.axis('off')
-        for fpc1 in range(1, number_of_components + 1): 
-            plt.text(0.01, 1 - 0.10*fpc1, 'Explained variance by PC%s: ' %fpc1+ '{:.2f}%'.format(fpca.explained_variance_ratio_[fpc1-1] * 100), fontsize=12, color='black')
-        plt.text(0.01, 1 - 0.10*(number_of_components+1), 'Total explained variance: ' + '{:.2f}%'.format(sum(fpca.explained_variance_ratio_) * 100), fontsize=12, color='black')
-
+        sns.scatterplot(
+            data=fpc_df, 
+            x='PC1' + ('_IRN' if inverse_rank_normalize else ''), 
+            y='PC2' + ('_IRN' if inverse_rank_normalize else ''), 
+            hue="Experiment", 
+            palette="tab10", 
+            s=100,
+            ax=ax
+        )
+        ax.set_title('PC1 vs PC2')
+        ax.set_xlabel('PC1' + (' (IRN)' if inverse_rank_normalize else ''))
+        ax.set_ylabel('PC2' + (' (IRN)' if inverse_rank_normalize else ''))
+        ax.legend(title="Experiment", bbox_to_anchor=(1.05, 1), loc='upper left')
+        
         with open(os.path.join(report, name + "_stats.txt"), 'w') as f:
             f.write('Using Mann Whitney U test to compare different experiments\n')
             
@@ -94,8 +103,8 @@ def performFPCA(conf_path):
                         exp1 = experiments[i]
                         exp2 = experiments[j]
                         p_value = mannwhitneyu(
-                            x = fpc_df[f"FPC{fpc1}"][fpc_df.Experiment == exp1], 
-                            y = fpc_df[f"FPC{fpc1}"][fpc_df.Experiment == exp2],                         
+                            x = fpc_df[f"PC{fpc1}"][fpc_df.Experiment == exp1], 
+                            y = fpc_df[f"PC{fpc1}"][fpc_df.Experiment == exp2],                         
                         )[1]
 
                         # Compare the p-value with the significance level
@@ -108,8 +117,8 @@ def performFPCA(conf_path):
 
                 ax = plt.subplot(5,2, 1 + fpc1 * 2)
 
-                sns.boxplot(data=fpc_df, x = "Experiment", hue="Experiment", y=f"FPC{fpc1}{'_IRN' if inverse_rank_normalize else ''}", ax=ax, palette="tab10");
-                ax.set_title('Box plot for PC %s' %fpc1, fontsize=16)
+                sns.boxplot(data=fpc_df, x = "Experiment", hue="Experiment", y=f"PC{fpc1}{'_IRN' if inverse_rank_normalize else ''}", ax=ax, palette="tab10");
+                ax.set_title(f'PC{fpc1}. Variance Explained: {fpca.explained_variance_ratio_[fpc1-1]:.2f}', fontsize=16)
                 
                 ax = plt.subplot(5,2, 1 + fpc1 * 2 + 1)
 
@@ -140,7 +149,7 @@ def performFPCA(conf_path):
                 # Create a legend with the quantiles
                 handles = [plt.Line2D([0,1], [0,1], color=palette[i], lw=2) for i in range(N+1)][::-1]
                 labels = [f'{z_quantiles[i, fpc1-1]:.2f}' for i in range(N+1)][::-1]
-                ax.legend(handles, labels, title=f'FPC{fpc1} Value', bbox_to_anchor=(1.05, 1), loc='upper left')
+                ax.legend(handles, labels, title=f'PC{fpc1} Value', bbox_to_anchor=(1.05, 1), loc='upper left')
 
             plt.tight_layout()
             plt.savefig(os.path.join(report, name + ".png"), dpi=300, bbox_inches='tight')
@@ -154,18 +163,18 @@ def performFPCA(conf_path):
             for i in range(1, number_of_components + 1):
                 for j in range(i + 1, number_of_components + 1):
                     plt.figure(figsize=(8, 6))
-                    fpc_i = f"FPC{i}{'_IRN' if inverse_rank_normalize else ''}"
-                    fpc_j = f"FPC{j}{'_IRN' if inverse_rank_normalize else ''}"
+                    fpc_i = f"PC{i}{'_IRN' if inverse_rank_normalize else ''}"
+                    fpc_j = f"PC{j}{'_IRN' if inverse_rank_normalize else ''}"
                     
                     sns.scatterplot(data=fpc_df, x=fpc_i, y=fpc_j, hue="Experiment", palette="tab10", s=100)
-                    plt.title(f'{magnitude} - FPC{i} vs FPC{j}', fontsize=14)
-                    plt.xlabel(f'FPC{i}', fontsize=12)
-                    plt.ylabel(f'FPC{j}', fontsize=12)
+                    plt.title(f'{magnitude} - PC{i} vs PC{j}', fontsize=14)
+                    plt.xlabel(f'PC{i}', fontsize=12)
+                    plt.ylabel(f'PC{j}', fontsize=12)
                     plt.legend(title='Experiment', bbox_to_anchor=(1.05, 1), loc='upper left')
                     plt.tight_layout()
                     
-                    plt.savefig(os.path.join(report, f"{name}_FPC{i}_vs_FPC{j}.png"), dpi=300, bbox_inches='tight')
-                    plt.savefig(os.path.join(report, f"{name}_FPC{i}_vs_FPC{j}.svg"), dpi=300, bbox_inches='tight')
+                    plt.savefig(os.path.join(report, f"{name}_PC{i}_vs_PC{j}.png"), dpi=300, bbox_inches='tight')
+                    plt.savefig(os.path.join(report, f"{name}_PC{i}_vs_PC{j}.svg"), dpi=300, bbox_inches='tight')
                     plt.close()
                     plt.cla()
                     plt.clf()
