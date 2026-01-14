@@ -46,33 +46,28 @@ def convertFromPathSafe(name):
 def createSaveFolder(conf):
     # Create the folder for the general results
     analysis = os.path.join(conf['MainFolder'], 'Analysis')
-    if not os.path.exists(analysis):
-        os.makedirs(analysis)
+    os.makedirs(analysis, exist_ok=True)
     
     # Create the folder for the identifier
     identifier = convertToPathSafe(conf['Experiment'])
     
     id_path = os.path.join(analysis, identifier)
-    if not os.path.exists(id_path):
-        os.makedirs(id_path)
+    os.makedirs(id_path, exist_ok=True)
 
     # Create the folder for the rpi
     rpi = str(conf['rpi'])
     rpi_path = os.path.join(id_path, rpi)
-    if not os.path.exists(rpi_path):
-        os.makedirs(rpi_path)
+    os.makedirs(rpi_path, exist_ok=True)
     
     # Create the folder for the cam
     cam = "cam_" + str(str(conf['cam']))
     cam_path = os.path.join(rpi_path, cam)
-    if not os.path.exists(cam_path):
-        os.makedirs(cam_path)
+    os.makedirs(cam_path, exist_ok=True)
     
     # Create the folder for the plant
     plant = "plant_" + str(str(conf['plant']))
     plant_path = os.path.join(cam_path, plant)
-    if not os.path.exists(plant_path):
-        os.makedirs(plant_path)
+    os.makedirs(plant_path, exist_ok=True)
     
     # Create the folder for the results
     for j in range(0, 50):
@@ -83,29 +78,23 @@ def createSaveFolder(conf):
     
     # create folders for outputs
     graphsPath = os.path.join(result_path, 'Graphs')
-    if not os.path.exists(graphsPath):
-        os.makedirs(graphsPath)
+    os.makedirs(graphsPath, exist_ok=True)
     
     imagePath = os.path.join(result_path, 'Images')
-    if not os.path.exists(imagePath):
-        os.makedirs(imagePath)
+    os.makedirs(imagePath, exist_ok=True)
     
     outSegPath = os.path.join(imagePath, 'Seg')
-    if not os.path.exists(outSegPath):
-        os.makedirs(outSegPath)
+    os.makedirs(outSegPath, exist_ok=True)
         
     multiPath = os.path.join(imagePath, 'SegMulti')
-    if not os.path.exists(multiPath):
-        os.makedirs(multiPath)
-
+    os.makedirs(multiPath, exist_ok=True)
+    
     if conf['saveImages']:
         inPath = os.path.join(imagePath, 'Input')
-        if not os.path.exists(inPath):
-            os.makedirs(inPath)
+        os.makedirs(inPath, exist_ok=True)
 
     rsmlPath = os.path.join(result_path, 'RSML')
-    if not os.path.exists(rsmlPath):
-        os.makedirs(rsmlPath)
+    os.makedirs(rsmlPath, exist_ok=True)
     
     # creates a dictionary with all the paths
     paths = {'analysis': analysis, 'result': result_path, 'graphs': graphsPath, 'images': imagePath, 'rsml': rsmlPath}
