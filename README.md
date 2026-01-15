@@ -163,6 +163,7 @@ We provide a pre-packaged dataset to help you learn the system.
 Inside the `Documents/` folder, you will find:
 
 * [📄 Standard Interface Tutorial](Documents/StandardInterfaceTutorial.pdf)
+* [📄 Standard Interface Tutorial With Tomato Data](Documents/StandardInterfaceTutorial_TomatoDemo.pdf)
 * [📄 Screening Interface Tutorial](Documents/ScreeningInterfaceTutorial.pdf)
 * [📄 Segmentation Tutorial](Documents/SegmentationTutorial.pdf)
 
