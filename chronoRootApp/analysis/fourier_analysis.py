@@ -213,58 +213,87 @@ class DataProcessor:
 
         return combined_df
     
-    def perform_statistical_analysis(self, data: pd.DataFrame, metric_type: str):
-        """Perform statistical analysis on the data"""
+    def perform_statistical_analysis(self, data_orig: pd.DataFrame, data_detrended: pd.DataFrame, metric_type: str):
+        """Perform statistical analysis on temporal and frequency data"""
         try:
             stats_path = os.path.join(self.fourier_path, f'{metric_type}_Stats.txt')
-            
-            unique_experiments = data['Type'].unique()
+            unique_experiments = data_orig['Type'].unique()
             N_exp = len(unique_experiments)
-            dt = int(self.conf['everyXhourFieldFourier'])
-            N_steps = int(round((data['Time'].max()+1) / dt, 0))
 
             with open(stats_path, 'w') as f:
-                f.write('Using Mann Whitney U test to compare the growth speed of different experiments\n')
+                f.write(f'CHRONOROOT 2.0 STATISTICAL REPORT - {metric_type}\n')
+                f.write('='*60 + '\n')
                 
-                for step in range(N_steps):
-                    end = min(dt * (step+1), data['Time'].max())
-                    hours = np.arange(dt * step, end)
-                    subdata = data[data['Time'].isin(hours)]
+                # PART 1: Temporal Growth Speed (Original Scale)
+                f.write('PART 1: HOURLY GROWTH SPEED COMPARISONS (Original Data)\n')
+                dt = int(self.conf['everyXhourFieldFourier'])
+                time_data = data_orig[data_orig['Time'].notna()]
+                N_steps = int(round((time_data['Time'].max()+1) / dt, 0))
 
+                for step in range(N_steps):
+                    end = min(dt * (step+1), time_data['Time'].max())
+                    subdata = time_data[time_data['Time'].isin(np.arange(dt * step, end))]
                     if self.conf.get('averagePerPlantStats', False):
                         subdata = subdata.groupby(['Type', 'i']).mean().reset_index()
 
-                    f.write(f'\nHours from {step*dt} to {end}\n')
+                    f.write(f'\nWindow: {step*dt}h to {end}h\n')
+                    for i in range(N_exp-1):
+                        for j in range(i+1, N_exp):
+                            self._write_comparison_stats(f, subdata, unique_experiments[i], unique_experiments[j], col='Signal')
+
+                # PART 2: FFT Energy Analysis (Detrended & Normalized)
+                f.write('\n' + '='*60 + '\n')
+                f.write('PART 2: CIRCADIAN RHYTHM ANALYSIS (Detrended/Normalized FFT)\n')
+                f.write('This section compares the oscillatory power after removing growth trends.\n')
+                f.write('='*60 + '\n')
+                
+                fft_detrended = data_detrended[data_detrended['Freqs'].notna()]
+                target_rhythms = {'24h Period': 1/24, '12h Period': 1/12}
+                
+                for label, target_freq in target_rhythms.items():
+                    f.write(f'\nFrequency Bin: {label} ({target_freq:.4f} Hz)\n')
+                    
+                    available_freqs = fft_detrended['Freqs'].unique()
+                    closest_freq = available_freqs[np.argmin(np.abs(available_freqs - target_freq))]
+                    freq_subdata = fft_detrended[fft_detrended['Freqs'] == closest_freq]
                     
                     for i in range(N_exp-1):
                         for j in range(i+1, N_exp):
-                            self._write_comparison_stats(f, subdata, 
+                            self._write_comparison_stats(f, freq_subdata, 
                                                        unique_experiments[i], 
-                                                       unique_experiments[j])
+                                                       unique_experiments[j], 
+                                                       col='FFT', 
+                                                       is_fft=True)
 
         except Exception as e:
             print(f"Error in statistical analysis: {str(e)}")
-            raise
 
-    def _write_comparison_stats(self, f, subdata: pd.DataFrame, exp1_name: str, exp2_name: str):
+
+    def _write_comparison_stats(self, f, subdata: pd.DataFrame, exp1_name: str, exp2_name: str, col='Signal', is_fft=False):
         """Write comparison statistics between two experiments"""
-        exp1 = subdata[subdata['Type'] == exp1_name]['Signal']
-        exp2 = subdata[subdata['Type'] == exp2_name]['Signal']
+        exp1 = subdata[subdata['Type'] == exp1_name][col]
+        exp2 = subdata[subdata['Type'] == exp2_name][col]
 
         try:
+            if len(exp1) == 0 or len(exp2) == 0:
+                return
+
             U, p = stats.mannwhitneyu(exp1, exp2)
-            p = round(p, 6)
+            p_val = round(p, 6)
 
-            f.write(f'Number of samples {exp1_name}: {len(exp1)} - ')
-            f.write(f'Number of samples {exp2_name}: {len(exp2)}\n')
-            f.write(f'Mean {exp1_name}: {round(exp1.mean(), 2)} - ')
-            f.write(f'Mean {exp2_name}: {round(exp2.mean(), 2)}\n')
-
-            significance = "significantly different" if p < 0.05 else "not significantly different"
-            f.write(f'Experiments {exp1_name} and {exp2_name} are {significance}. P-value: {p}\n')
+            f.write(f'Comparison: {exp1_name} vs {exp2_name}\n')
+            f.write(f'  - Samples: {len(exp1)} vs {len(exp2)}\n')
+            f.write(f'  - Mean: {exp1.mean():.4f} vs {exp2.mean():.4f}\n')
+            f.write(f'  - Std Dev: {exp1.std():.4f} vs {exp2.std():.4f}\n')
+            # Standardized significance notation for the report
+            sig_text = "SIGNIFICANT" if p < 0.05 else "NOT SIGNIFICANT"
+            stars = "**" if p < 0.001 else ("*" if p < 0.05 else "ns")
+            
+            metric_label = "FFT Energy" if is_fft else "Speed"
+            f.write(f'  - Result: {metric_label} is {sig_text} (p={p_val}, {stars})\n')
 
         except Exception as e:
-            f.write(f'Experiments {exp1_name} and {exp2_name} could not be compared: {str(e)}\n')
+            f.write(f'Error comparing {exp1_name} and {exp2_name}: {str(e)}\n')
 
 class Visualizer:
     """Class for creating visualizations"""
@@ -532,6 +561,7 @@ def makeFourierPlots(conf: dict):
                 # Perform statistical analysis
                 processor.perform_statistical_analysis(
                     all_frames_original, 
+                    all_frames_detrended,
                     metric_type
                 )
                 
