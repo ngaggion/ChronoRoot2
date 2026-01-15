@@ -150,6 +150,16 @@ def run_fpca_analysis(args):
                             y=fpc_df[f"FPC{fpc1}"][fpc_df[args.groupby] == exp2],
                         )[1]
                         
+                        # Write number of samples, mean and std deviation
+                        mean1 = fpc_df[f"FPC{fpc1}"][fpc_df[args.groupby] == exp1].mean()
+                        std1 = fpc_df[f"FPC{fpc1}"][fpc_df[args.groupby] == exp1].std()
+                        n1 = fpc_df[fpc_df[args.groupby] == exp1].shape[0]
+                        mean2 = fpc_df[f"FPC{fpc1}"][fpc_df[args.groupby] == exp2].mean()
+                        std2 = fpc_df[f"FPC{fpc1}"][fpc_df[args.groupby] == exp2].std()
+                        n2 = fpc_df[fpc_df[args.groupby] == exp2].shape[0]
+                        f.write(f'Experiment {exp1}: n={n1}, mean={mean1:.4f}, std={std1:.4f}\n')
+                        f.write(f'Experiment {exp2}: n={n2}, mean={mean2:.4f}, std={std2:.4f}\n')
+                        
                         # Compare the p-value with the significance level
                         if p_value < 0.05:
                             f.write(f'Experiments {experiments[i]} and {experiments[j]} are significantly different. P-value: {p_value}\n')
