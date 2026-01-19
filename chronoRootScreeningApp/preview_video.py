@@ -16,7 +16,7 @@ def loadPath(path: str, ext: str = "*") -> List[str]:
         return []
     return sorted(glob.glob(os.path.join(path, ext)))
 
-def getImages(video_dir: str) -> Tuple[List[str], List[str]]:
+def getImages(video_dir: str, segmentation_dir: str) -> Tuple[List[str], List[str]]:
     """
     Returns lists of image paths and segmentation paths
     """
@@ -24,9 +24,9 @@ def getImages(video_dir: str) -> Tuple[List[str], List[str]]:
     images = loadPath(video_dir, ext="*.png")
     
     # Look for segmentation files
-    seg_path = os.path.join(video_dir, 'Segmentation', 'Ensemble')
+    seg_path = os.path.join(segmentation_dir, 'Ensemble')
     if not os.path.exists(seg_path):
-        seg_path = os.path.join(video_dir, 'Seg')
+        seg_path = os.path.join(segmentation_dir, 'Seg')
     
     seg_files = loadPath(seg_path, ext="*.png")
     
@@ -37,7 +37,7 @@ def getImages(video_dir: str) -> Tuple[List[str], List[str]]:
     
     return images, seg_files
 
-def preview_sequence(video_dir: str, time_delta: float = 60.0):
+def preview_sequence(video_dir: str, segmentation_dir: str, time_delta: float = 60.0):
     """
     Preview the sequence of images with the given time delta between frames
     Args:
@@ -45,10 +45,7 @@ def preview_sequence(video_dir: str, time_delta: float = 60.0):
         time_delta: Time in seconds between frames
     """
     # Get image and segmentation paths
-    images, seg_files = getImages(video_dir)
-    if not images:
-        print(f"No images found in directory: {video_dir}")
-        return
+    images, seg_files = getImages(video_dir, segmentation_dir)
     
     N = len(images)
     
@@ -126,13 +123,15 @@ def main():
     parser = argparse.ArgumentParser(description='Preview video sequence from images')
     parser.add_argument('--video-dir', required=True,
                       help='Directory containing the image sequence')
+    parser.add_argument('--segmentation-dir', required=True,
+                      help='Directory containing the segmentation images')
     parser.add_argument('--time-delta', type=float, default=60.0,
                       help='Time in seconds between frames (default: 60)')
     
     args = parser.parse_args()
     
     try:
-        preview_sequence(args.video_dir, args.time_delta)
+        preview_sequence(args.video_dir, args.segmentation_dir, args.time_delta)
     except Exception as e:
         print(f"Error during preview: {str(e)}", file=sys.stderr)
         sys.exit(1)

@@ -57,9 +57,7 @@ class PlantGrowthAnalyzer:
         results = {}
         
         for parameter in self.PARAMETERS:
-            print(f"\n{'='*50}")
             print(f"Analyzing {parameter}...")
-            print(f"{'='*50}")
             
             self.plot_dirs = self._setup_directories(parameter)
             
@@ -80,6 +78,7 @@ class PlantGrowthAnalyzer:
                     'status': 'failed',
                     'error': str(e)
                 }
+            print(f"Completed analysis for {parameter}.\n")
         
         # Store the comprehensive results
         self.all_results = results
