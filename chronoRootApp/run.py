@@ -573,6 +573,14 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         # Check for PNG images
         images = glob.glob(os.path.join(video_folder, "*.png"))
         
+        # Check if there is no images, then look for a file called "segmentation_metadata.json"
+        if not images:
+            metadata_path = os.path.join(video_folder, 'segmentation_metadata.json')
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                images = glob.glob(os.path.join(metadata["images_path"], "*.png")) 
+                
         if not images:
             QtWidgets.QMessageBox.warning(
                 None, 'Error', 
@@ -657,6 +665,14 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         # Check for PNG images
         images = glob.glob(os.path.join(video_folder, "*.png"))
         
+        # Check if there is no images, then look for a file called "segmentation_metadata.json"
+        if not images:
+            metadata_path = os.path.join(video_folder, 'segmentation_metadata.json')
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                images = glob.glob(os.path.join(metadata["images_path"], "*.png")) 
+        
         if not images:
             QtWidgets.QMessageBox.warning(
                 None, 'Error', 
@@ -730,6 +746,12 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.setup_tab3_elements()
         self.setup_tab4_elements()
         self.setup_tab5_elements()
+        
+        # Initialize Tab 6
+        self.tab6 = QtWidgets.QWidget()
+        self.tab6.setObjectName("tab6")
+        self.tab_widget.addTab(self.tab6, "About") # Add title here
+        self.setup_tab6_elements()
 
         self.setup_field_validation()
         self.set_default_parameters()
@@ -1399,7 +1421,108 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         
         self.tab5.setLayout(layout) 
         #self.update_report_labels()
+    
+    def setup_tab6_elements(self):        
+        self.tab6.setAutoFillBackground(True)
+        self.tab6.setStyleSheet("background-color: white;")
         
+        layout = QVBoxLayout(self.tab6)
+        layout.setAlignment(QtCore.Qt.AlignCenter)
+
+        # Logo
+        self.logo_label = QLabel()
+        ico_path = "../logo.ico"
+        try:
+            with Image.open(ico_path) as img:
+                img = img.convert("RGBA").resize((200, 200), Image.Resampling.LANCZOS)
+                data = img.tobytes("raw", "RGBA")
+                qimg = QtGui.QImage(data, img.size[0], img.size[1], QtGui.QImage.Format_RGBA8888)
+                self.logo_label.setPixmap(QtGui.QPixmap.fromImage(qimg))
+        except Exception:
+            self.logo_label.setPixmap(QtGui.QPixmap(ico_path).scaled(150, 150, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        
+        self.logo_label.setStyleSheet("background-color: transparent;")
+        layout.addWidget(self.logo_label, alignment=QtCore.Qt.AlignCenter)
+
+        # Short Description
+        title = QLabel("ChronoRoot")
+        title.setStyleSheet("font-size: 28px; font-weight: bold; color: #2c3e50; background-color: transparent;")
+        layout.addWidget(title, alignment=QtCore.Qt.AlignCenter)
+
+        description = QLabel("An open-source platform for high-throughput phenotyping of plant root systems.")
+        description.setStyleSheet("font-size: 14px; color: #34495e; background-color: transparent; margin-bottom: 5px;")
+        layout.addWidget(description, alignment=QtCore.Qt.AlignCenter)
+        # Website Link
+        web_link = QLabel('<a href="https://chronoroot.github.io/">https://chronoroot.github.io/</a>')
+        web_link.setOpenExternalLinks(True)
+        web_link.setStyleSheet("font-size: 13px; background-color: transparent; margin-bottom: 20px;")
+        layout.addWidget(web_link, alignment=QtCore.Qt.AlignCenter)
+
+        # Update Button
+        self.update_btn = QPushButton("Check for Updates")
+        self.update_btn.setFixedWidth(250)
+        self.update_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.update_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db; color: white; border-radius: 5px;
+                padding: 10px; font-weight: bold;
+            }
+            QPushButton:hover { background-color: #2980b9; }
+        """)
+        self.update_btn.clicked.connect(self.update_software)
+        layout.addWidget(self.update_btn, alignment=QtCore.Qt.AlignCenter)
+        # Last Commit Info
+        self.commit_label = QLabel(f"Last update: {self.get_last_commit_time()}")
+        self.commit_label.setStyleSheet("color: #95a5a6; background-color: transparent; margin-top: 15px;")
+        layout.addWidget(self.commit_label, alignment=QtCore.Qt.AlignCenter)
+        
+    def get_git_hash(self):
+        """Returns the current git commit hash (language independent)."""
+        try:
+            return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+        except:
+            return None
+
+    def get_last_commit_time(self):
+        """Fetches the date of the last local git commit (YYYY-MM-DD)."""
+        try:
+            # --date=short is ISO format (2024-05-20), which is universal
+            cmd = ["git", "log", "-1", "--format=%cd", "--date=short"]
+            return subprocess.check_output(cmd).decode().strip()
+        except:
+            return "Unknown"
+
+    def update_software(self):
+        """Performs a git pull using hash-comparison for language safety."""
+        try:
+            self.update_btn.setText("Checking...")
+            self.update_btn.setEnabled(False)
+            QtWidgets.QApplication.processEvents()
+
+            # Record the hash before pulling
+            old_hash = self.get_git_hash()
+            
+            # Perform pull (suppress language-specific text output)
+            subprocess.check_call(["git", "pull"], stderr=subprocess.STDOUT)
+            
+            # Record the hash after pulling
+            new_hash = self.get_git_hash()
+
+            if old_hash == new_hash:
+                QtWidgets.QMessageBox.information(self, "Update", "ChronoRoot is already up to date!")
+            else:
+                QtWidgets.QMessageBox.information(self, "Update Success", 
+                    "Update downloaded successfully!\nPlease restart the application to apply changes.")
+                self.commit_label.setText(f"Last update: {self.get_last_commit_time()}")
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Update Error", 
+                "Failed to update. Make sure you have an internet connection and 'git' is installed.")
+        
+        finally:
+            self.update_btn.setText("Check for Updates")
+            self.update_btn.setEnabled(True)
+            
     def retranslate_ui(self, ChronoRootAnalysis):
         _translate = QtCore.QCoreApplication.translate
         
@@ -1493,7 +1616,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         
         # --- Tab 1: Plant Analysis ---
         self.loadProject.setToolTip("Select the primary directory where experiment results and data are organized.")
-        self.loadVideo.setToolTip("Select the folder containing the raw image sequence for analysis.")
+        self.loadVideo.setToolTip("Select the folder containing the segmented image sequence for analysis. \nFolder should contain a Segmentation/ subfolder with images. \nImages can be stored somewhere else as long their path is saved within the segmentation_metadata.json file and has not been moved.")
         self.saveButton.setToolTip("Save the current parameters to the project configuration.")
         
         self.previewAnalysisButton.setToolTip(

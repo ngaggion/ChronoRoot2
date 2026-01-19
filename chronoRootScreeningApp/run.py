@@ -1,3 +1,4 @@
+import glob
 import os
 import sys
 import platform
@@ -446,11 +447,46 @@ class AnalysisTab(QWidget):
             time_delta = float(self.time_delta_edit.text() or '15')
         except ValueError:
             time_delta = 15
+            
+        video_folder = self.video_path_edit.text()
+        segmentation_dir = os.path.join(video_folder, 'Segmentation')
+        
+        # Check for PNG images
+        images = glob.glob(os.path.join(video_folder, "*.png"))
+        
+        # Check if there is no images, then look for a file called "segmentation_metadata.json"
+        if not images:
+            metadata_path = os.path.join(video_folder, 'segmentation_metadata.json')
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                images = glob.glob(os.path.join(metadata["images_path"], "*.png")) 
+                video_folder = metadata["images_path"]
+
+        if not images:
+            QMessageBox.warning(
+                None, 'Error', 
+                'No images found in the video folder!\nPlease check the path to the folder where the images are located.'
+            )
+            return
+        
+        # Check for segmentation files in Segmentation/Ensemble folder
+        seg_folder = os.path.join(segmentation_dir, "Ensemble")
+        seg_files = glob.glob(os.path.join(seg_folder, "*.png")) if os.path.exists(seg_folder) else []
+        
+        if not seg_files:
+            # Images exist but no segmentation found
+            QMessageBox.warning(
+                None, 'Error',
+                f'Found {len(images)} images but no segmentation files!\n The images may not have been properly segmented.'
+            )
+            return
         
         # Collect parameters including seed counts
         params = {
             'project_dir': project_dir,
-            'video_dir': self.video_path_edit.text(),
+            'video_dir': video_folder,
+            'segmentation_dir': segmentation_dir,
             'analysis_id': identifier,
             'has_qr': self.qr_checkbox.isChecked(),
             'show_tracking': self.show_tracking_checkbox.isChecked(),
@@ -464,6 +500,7 @@ class AnalysisTab(QWidget):
             "python",
             "process_video.py",
             "--video-dir", params['video_dir'],
+            "--segmentation-dir", params['segmentation_dir'],
             "--project-dir", params['project_dir'],
             "--analysis-id", params['analysis_id'],
             "--time-delta", str(params['time_delta'])
@@ -533,17 +570,54 @@ class AnalysisTab(QWidget):
         except ValueError:
             time_delta = 15
 
+        video_folder = self.video_path_edit.text()
+        segmentation_dir = os.path.join(video_folder, 'Segmentation')
+        
+        # Check for PNG images
+        images = glob.glob(os.path.join(video_folder, "*.png"))
+        
+        # Check if there is no images, then look for a file called "segmentation_metadata.json"
+        if not images:
+            metadata_path = os.path.join(video_folder, 'segmentation_metadata.json')
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                images = glob.glob(os.path.join(metadata["images_path"], "*.png")) 
+                video_folder = metadata["images_path"]
+
+        if not images:
+            QMessageBox.warning(
+                None, 'Error', 
+                'No images found in the video folder!\nPlease check the path to the folder where the images are located.'
+            )
+            return
+        
+        # Check for segmentation files in Segmentation/Ensemble folder
+        seg_folder = os.path.join(segmentation_dir, "Ensemble")
+        seg_files = glob.glob(os.path.join(seg_folder, "*.png")) if os.path.exists(seg_folder) else []
+        
+        if not seg_files:
+            # Images exist but no segmentation found
+            QMessageBox.warning(
+                None, 'Error',
+                f'Found {len(images)} images but no segmentation files!\n The images may not have been properly segmented.'
+            )
+            return
+        
         # Collect parameters
         params = {
-            'video_dir': self.video_path_edit.text(),
+            'video_dir': video_folder,
+            'segmentation_dir': segmentation_dir,
             'time_delta': time_delta
         }
-
+        
+        
         # Create command line arguments
         args = [
             "python",
             "preview_video.py",
             "--video-dir", params['video_dir'],
+            "--segmentation-dir", params['segmentation_dir'],
             "--time-delta", str(params['time_delta'])
         ]
 
@@ -1021,24 +1095,25 @@ class ReportsTab(QWidget):
                 
         parameter_dir = os.path.join(self.project_dir, 'results', current_parameter)
         
-        if not os.path.exists(parameter_dir):
-            self.plot_type.clear()
-            return
-                
         plot_types = []
-        for folder in os.listdir(parameter_dir):
-            folder_path = os.path.join(parameter_dir, folder)
-            if os.path.isdir(folder_path) and not folder.endswith('ProcessedData'):
-                plot_types.append(folder)
+        if os.path.exists(parameter_dir):
+            for folder in os.listdir(parameter_dir):
+                folder_path = os.path.join(parameter_dir, folder)
+                if os.path.isdir(folder_path) and not folder.endswith('ProcessedData'):
+                    plot_types.append(folder)
         
-        current_type = self.plot_type.currentText()
+        # Block signals to prevent multiple redundant image updates
+        self.plot_type.blockSignals(True)
         self.plot_type.clear()
         self.plot_type.addItems(plot_types)
+        self.plot_type.blockSignals(False)
         
-        if current_type in plot_types:
-            self.plot_type.setCurrentText(current_type)
-        else:
-            self.update_image_list()
+        if plot_types:
+            # Default to the first one if current selection is gone
+            self.plot_type.setCurrentIndex(0)
+        
+        # Manually trigger image list update
+        self.update_image_list()
 
     def update_image_list(self):
         self.image_paths = []
@@ -1046,20 +1121,24 @@ class ReportsTab(QWidget):
         
         if image_folder and os.path.exists(image_folder):
             for f in os.listdir(image_folder):
-                if f.lower().endswith(('.png')):
+                if f.lower().endswith('.png'):
                     full_path = os.path.join(image_folder, f)
                     self.image_paths.append(full_path)
             
             self.image_paths.sort()
         
         # Update image selector
+        self.image_selector.blockSignals(True)
         self.image_selector.clear()
         if self.image_paths:
             self.image_selector.addItems([os.path.basename(p) for p in self.image_paths])
+            self.image_selector.blockSignals(False)
+            self.image_selector.setCurrentIndex(0) # Force selection of first image
         else:
+            self.image_selector.blockSignals(False)
             self.image_label.setText("No images found in the selected directory")
+            self.image_label.setPixmap(QPixmap()) # Clear old image
         
-        # Reset current index and update display
         self.current_image_index = 0
         self.display_current_image()
         self.update_button_states()
@@ -1110,7 +1189,9 @@ class ReportsTab(QWidget):
         self.next_btn.setEnabled(self.current_image_index < len(self.image_paths) - 1)
         
     def refresh_images(self):
-        self.update_image_list()
+        if not self.project_dir:
+            return
+        self.update_plot_types() 
         
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1242,6 +1323,116 @@ class NameMappingDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Error saving mapping: {str(e)}')
 
+from PyQt5.QtGui import QPixmap, QImage
+from PyQt5.QtCore import Qt
+from PIL import Image
+import subprocess
+
+class AboutTab(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        # Set the background color to white
+        self.setAutoFillBackground(True)
+        self.setStyleSheet("background-color: white;")
+        
+        layout = QVBoxLayout()
+        layout.setAlignment(Qt.AlignCenter)
+
+        # Logo Logic (Pillow for high quality)
+        self.logo_label = QLabel()
+        ico_path = "../logo.ico"
+        try:
+            with Image.open(ico_path) as img:
+                img = img.convert("RGBA").resize((200, 200), Image.Resampling.LANCZOS)
+                data = img.tobytes("raw", "RGBA")
+                qimg = QImage(data, img.size[0], img.size[1], QImage.Format_RGBA8888)
+                self.logo_label.setPixmap(QPixmap.fromImage(qimg))
+        except Exception:
+            self.logo_label.setPixmap(QPixmap(ico_path).scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        
+        self.logo_label.setStyleSheet("background-color: transparent;")
+        layout.addWidget(self.logo_label, alignment=Qt.AlignCenter)
+
+        # Title
+        title = QLabel("ChronoRoot")
+        title.setStyleSheet("font-size: 28px; font-weight: bold; color: #2c3e50; background-color: transparent;")
+        layout.addWidget(title, alignment=Qt.AlignCenter)
+
+        # Short Description
+        description = QLabel("An open-source platform for high-throughput phenotyping of plant root systems.")
+        description.setStyleSheet("font-size: 14px; color: #34495e; background-color: transparent; margin-bottom: 5px;")
+        layout.addWidget(description, alignment=Qt.AlignCenter)
+
+        # Website Link
+        web_link = QLabel('<a href="https://chronoroot.github.io/">https://chronoroot.github.io/</a>')
+        web_link.setOpenExternalLinks(True)
+        web_link.setStyleSheet("font-size: 13px; background-color: transparent; margin-bottom: 20px;")
+        layout.addWidget(web_link, alignment=Qt.AlignCenter)
+
+        # Update Button
+        self.update_btn = QPushButton("Check for Updates")
+        self.update_btn.setFixedWidth(250)
+        self.update_btn.setCursor(Qt.PointingHandCursor)
+        self.update_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db; color: white; border-radius: 5px;
+                padding: 10px; font-weight: bold;
+            }
+            QPushButton:hover { background-color: #2980b9; }
+        """)
+        self.update_btn.clicked.connect(self.update_software)
+        layout.addWidget(self.update_btn, alignment=Qt.AlignCenter)
+
+        # Last Commit Info
+        self.commit_label = QLabel(f"Last update: {self.get_last_commit_time()}")
+        self.commit_label.setStyleSheet("color: #95a5a6; background-color: transparent; margin-top: 15px;")
+        layout.addWidget(self.commit_label, alignment=Qt.AlignCenter)
+
+        self.setLayout(layout)
+
+    def get_git_hash(self):
+        """Returns the current git commit hash (language independent)."""
+        try:
+            return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+        except:
+            return None
+
+    def get_last_commit_time(self):
+        """Fetches the ISO date of the last local git commit."""
+        try:
+            cmd = ["git", "log", "-1", "--format=%cd", "--date=short"]
+            return subprocess.check_output(cmd).decode().strip()
+        except:
+            return "Unknown"
+
+    def update_software(self):
+        """Performs a git pull and compares hashes to detect updates."""
+        try:
+            self.update_btn.setText("Checking...")
+            self.update_btn.setEnabled(False)
+            QApplication.processEvents()
+
+            old_hash = self.get_git_hash()
+            subprocess.check_call(["git", "pull"], stderr=subprocess.STDOUT)
+            new_hash = self.get_git_hash()
+
+            if old_hash == new_hash:
+                QMessageBox.information(self, "Update", "ChronoRoot is already up to date!")
+            else:
+                QMessageBox.information(self, "Update Success", 
+                    "Update downloaded successfully!\nPlease restart the application to apply changes.")
+                self.commit_label.setText(f"Last update: {self.get_last_commit_time()}")
+
+        except Exception:
+            QMessageBox.critical(self, "Update Error", 
+                "Failed to update. Please check your internet connection or git installation.")
+        
+        finally:
+            self.update_btn.setText("Check for Updates")
+            self.update_btn.setEnabled(True)
+
+        
 class ScreeningGUI(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1260,11 +1451,13 @@ class ScreeningGUI(QMainWindow):
         self.analysis_tab = AnalysisTab(self)  # passing self as main_window
         self.results_tab = ResultsTab()
         self.reports_tab = ReportsTab()
+        self.about_tab = AboutTab()
         
         # Add tabs
         self.tabs.addTab(self.analysis_tab, "Analysis")
         self.tabs.addTab(self.results_tab, "Results")
         self.tabs.addTab(self.reports_tab, "Reports")
+        self.tabs.addTab(self.about_tab, "About")
         
     def set_project_dir(self, dir_path):
         """Update project directory for all tabs"""

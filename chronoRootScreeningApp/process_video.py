@@ -140,6 +140,7 @@ def save_metadata(analysis_dir: str, params: Dict[str, Any], start_time: str = N
             'group_names': params['group_names'],
             'num_groups': len(params['group_names']),
             'video_directory': params['video_dir'],
+            'segmentation_directory': params['segmentation_dir'],
             'start_time': start_time,
             'completion_time': None,
             'status': 'In Progress'
@@ -304,7 +305,7 @@ def process_video(params: Dict[str, Any]):
 
     # Process frames
     for img_file in image_files:
-        seg_file = os.path.join(params['video_dir'], "Segmentation", "Ensemble", img_file)
+        seg_file = os.path.join(params['segmentation_dir'], "Ensemble", img_file)
         original_seg = cv2.imread(seg_file, cv2.IMREAD_GRAYSCALE)
         if original_seg is None:
             print(f'Warning: Could not read segmentation file: {seg_file}')
@@ -551,6 +552,7 @@ def main():
     parser = argparse.ArgumentParser(description='Process seed tracking video')
     # Required arguments
     parser.add_argument('--video-dir', required=True, help='Directory containing the video frames')
+    parser.add_argument('--segmentation-dir', required=True, help='Directory containing segmentation masks')
     parser.add_argument('--project-dir', required=True, help='Project directory for output')
     parser.add_argument('--analysis-id', required=True, help='Unique identifier for this analysis')
 
@@ -589,6 +591,7 @@ def main():
     # Build parameters dictionary
     params = {
         'video_dir': args.video_dir,
+        'segmentation_dir': args.segmentation_dir,
         'project_dir': args.project_dir,
         'analysis_id': args.analysis_id,
         'time_delta': args.time_delta,

@@ -93,8 +93,6 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
     # Set segmentation path
     if seg_path is None:
         seg_path = os.path.join(path, "Segmentation")
-    else:
-        seg_path = os.path.join(path, seg_path)
     
     # Find segmentation folders (folds)
     folds = find_segmentation_folders(seg_path)

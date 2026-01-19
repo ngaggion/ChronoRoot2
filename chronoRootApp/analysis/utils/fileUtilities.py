@@ -105,6 +105,20 @@ def getImages(conf):
     # Get the list of images    
     images = loadPath(conf['Images'], ext = "*.png") 
 
+    conf['ImagePath'] = conf['Images']
+                
+    # Check if there is no images, then look for a file called "segmentation_metadata.json"
+    if len(images) == 0:
+        metadata_path = os.path.join(conf['Images'], 'segmentation_metadata.json')
+        if os.path.exists(metadata_path):
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            images_path = metadata.get('images_path', None)
+            if images_path and os.path.exists(images_path):
+                images = loadPath(images_path, ext="*.png")
+                conf['ImagePath'] = images_path
+                print(f"✓ Loaded images from metadata path: {images_path}")
+    
     # Get the list of segmentation images
     SegPath = os.path.join(conf['Images'], 'Segmentation', 'Ensemble')
     if not os.path.exists(SegPath):
@@ -113,7 +127,7 @@ def getImages(conf):
     segFiles = loadPath(SegPath, ext = "*.png") 
 
     # Save configuration
-    conf['ImagePath'] = conf['Images']
+    
     conf['SegPath'] = SegPath
         
     return images, segFiles
