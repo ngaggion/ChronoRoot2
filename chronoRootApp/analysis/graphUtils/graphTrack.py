@@ -180,7 +180,6 @@ def matchGraphs(previous_graph, current_graph, max_movement=70):
     
     # FIX: Check if seed moved too far - use topology if so
     if seed_distance > max_movement:    
-        print(f"Seed moved {seed_distance:.1f}px")
         raise Exception("Seed tracking lost - cannot reliably assign seed node")
     else:
         # Match the seed normally

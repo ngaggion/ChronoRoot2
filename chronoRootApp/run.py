@@ -12,7 +12,6 @@ PROJECT_CONFIG_NAME = "project_config.json"
 GLOBAL_CONFIG_DIR = os.path.expanduser(f"~/.config/{APP_NAME}")
 GLOBAL_CONFIG_FILE = os.path.join(GLOBAL_CONFIG_DIR, "mainInterfaceConfig.json")
 
-# Ensure global config directory exists
 os.makedirs(GLOBAL_CONFIG_DIR, exist_ok=True)
 
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -62,7 +61,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
     def saveFieldsIntoJson(self):            
         data = {}
 
-        for field in [self.rpiField, self.cameraField, self.plantField, self.processingLimitField, 
+        for field in [self.processingLimitField, 
                       self.processingLimitField_3, self.emergenceDistanceField, self.captureIntervalField,
                       self.everyXhourField, self.everyXhourFieldFourier, self.everyXhourFieldAngles, self.numComponentsFPCAField]:
             if field.text().isdigit():
@@ -84,9 +83,12 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         data["daysAngles"] = self.daysAnglesField.text()
 
         # map values for compatibility with 1_analysis.py
-        data["rpi"] = data["rpiField"]
-        data["cam"] = data["cameraField"]
-        data["plant"] = data["plantField"]
+        data["rpi"] = self.rpiField.text()
+        data["rpiField"] = self.rpiField.text()
+        data["cam"] = self.cameraField.text()
+        data["cameraField"] = self.cameraField.text()
+        data["plant"] = self.plantField.text()
+        data["plantField"] = self.plantField.text()
         data["Experiment"] = data["experimentName"]
         data["Images"] = data["videoField"]
         data["processingLimit"] = data["processingLimitField"]
