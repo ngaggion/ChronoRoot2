@@ -117,7 +117,6 @@ def getImages(conf):
             if images_path and os.path.exists(images_path):
                 images = loadPath(images_path, ext="*.png")
                 conf['ImagePath'] = images_path
-                print(f"✓ Loaded images from metadata path: {images_path}")
     
     # Get the list of segmentation images
     SegPath = os.path.join(conf['Images'], 'Segmentation', 'Ensemble')
