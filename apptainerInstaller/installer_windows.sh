@@ -104,26 +104,23 @@ main() {
     # Default to 'Yes' if empty
     if [[ -z "$download_choice" || "$download_choice" =~ ^[Yy]$ ]]; then
         WEIGHTS_SCRIPT="$REPO_DIR/segmentationApp/download_weights.sh"
-
         if [ -f "$WEIGHTS_SCRIPT" ]; then
             chmod +x "$WEIGHTS_SCRIPT"
             print_info "Syncing models from Hugging Face..."
 
             # Create temp directory for the isolated pip install
-            TEMP_HF_HOME="$INSTALL_DIR/.temp_hf_env"
+            TEMP_HF_HOME=".tmp_hf_env"
             mkdir -p "$TEMP_HF_HOME"
 
-            # Execute container with temporary environment variables
-            # We use 'apptainer' directly here as checked in step 2
+            # Execute container
             apptainer exec $GPU_FLAG \
                 --bind "$TEMP_HF_HOME:/tmp/hf_env" \
-                --bind "$INSTALL_DIR:$INSTALL_DIR" \
-                --bind "$HOME:$HOME" \
+                --bind "/mnt/c:/mnt/c" --bind "/init:/init" --bind "/run/WSL:/run/WSL" \
+                --bind "/home/$USER:/home/$USER" --bind "/run/user/$(id -u):/run/user/$(id -u)" \
                 --env PIP_USER=true \
                 --env PYTHONUSERBASE=/tmp/hf_env \
-                --env PATH=/tmp/hf_env/bin:$PATH \
                 "$IMAGE_PATH" \
-                bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate ChronoRoot && pip install \"huggingface_hub[cli]>=0.27.0\" && $WEIGHTS_SCRIPT"
+                bash -c "export PATH=/tmp/hf_env/bin:\$PATH && source /opt/conda/etc/profile.d/conda.sh && conda activate ChronoRoot && pip install huggingface_hub==1.3.4 && $WEIGHTS_SCRIPT"
                 
             if [ $? -eq 0 ]; then
                 print_success "Weights synchronized successfully."
@@ -131,10 +128,9 @@ main() {
                 print_error "Weight download failed."
             fi
 
-            # Cleanup
             rm -rf "$TEMP_HF_HOME"
         else
-            print_warning "download_weights.sh not found. Skipping weight update."
+            print_error "Weights download script not found."
         fi
     else
         print_info "Skipping weight download."
