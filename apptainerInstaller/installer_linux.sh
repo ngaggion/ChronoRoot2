@@ -165,8 +165,52 @@ main() {
         print_success "Container image is already present."
     fi
 
-    # 5. Shortcuts and Integration
-    section_title "5. Creating System Shortcuts"
+    # 5. Download Weights (Isolated Environment)
+    section_title "5. Downloading Segmentation Weights"
+
+    echo "The segmentation models are required for the Full analysis pipeline."
+    read -p "Would you like to download/update the segmentation weights now? [Y/n]: " download_choice
+    
+    # Default to 'Yes' if empty
+    if [[ -z "$download_choice" || "$download_choice" =~ ^[Yy]$ ]]; then
+        WEIGHTS_SCRIPT="$REPO_DIR/segmentationApp/download_weights.sh"
+
+        if [ -f "$WEIGHTS_SCRIPT" ]; then
+            chmod +x "$WEIGHTS_SCRIPT"
+            print_status "Syncing models from Hugging Face..."
+
+            # Create temp directory for the isolated pip install
+            TEMP_HF_HOME="$INSTALL_DIR/.temp_hf_env"
+            mkdir -p "$TEMP_HF_HOME"
+
+            # Execute container with temporary environment variables
+            $CONTAINER_CMD exec $GPU_FLAG \
+                --bind "$TEMP_HF_HOME:/tmp/hf_env" \
+                --bind "$INSTALL_DIR:$INSTALL_DIR" \
+                --bind "$HOME:$HOME" \
+                --env PIP_USER=true \
+                --env PYTHONUSERBASE=/tmp/hf_env \
+                --env PATH=/tmp/hf_env/bin:$PATH \
+                "$IMAGE_PATH" \
+                bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate ChronoRoot && pip install huggingface_hub[cli]==0.27.1 && $WEIGHTS_SCRIPT"
+                
+            if [ $? -eq 0 ]; then
+                print_success "Weights synchronized successfully."
+            else
+                print_error "Weight download failed."
+            fi
+
+            # Cleanup
+            rm -rf "$TEMP_HF_HOME"
+        else
+            print_warning "download_weights.sh not found. Skipping weight update."
+        fi
+    else
+        print_status "Skipping weight download."
+    fi
+    
+    # 6. Create Application Shortcuts
+    section_title "6. Creating Application Shortcuts"
     mkdir -p "$DESKTOP_ENTRY_DIR"
 
     create_app_shortcuts() {

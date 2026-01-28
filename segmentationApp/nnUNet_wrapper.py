@@ -3,10 +3,13 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
+from datetime import datetime
 import time
+import json
 
 import warnings
-warnings.filterwarnings("ignore", category=UserWarning)
+# Remove all warnings from nnunetv2 module
+warnings.filterwarnings("ignore", module="nnunetv2")
 
 class nnUNetv2:
     """
@@ -15,13 +18,13 @@ class nnUNetv2:
     """
     
     def __init__(self, model_path: str, device: str = 'cuda', verbose: bool = False, use_gaussian: bool = True,
-                 use_mirroring: bool = True, tile_step_size: float = 0.5):
+                use_mirroring: bool = True, tile_step_size: float = 0.5):
         """
         Initialize the nnUNet predictor.
         
         Args:
             model_path: Path to trained model folder (contains fold_X subdirectories)
-            device: 'cuda', 'cpu', or 'mps'
+            device: 'cuda' or 'cpu'
             verbose: Print detailed information during processing
         """
         self.model_path = Path(model_path)
@@ -36,18 +39,21 @@ class nnUNetv2:
         if device == 'cuda' and not torch.cuda.is_available():
             print("CUDA not available, falling back to CPU")
             self.device = torch.device('cpu')
+            self.perform_everything_on_device = False
+        else:
+            self.perform_everything_on_device = True
         
         self._initialize_predictor()
     
     def _initialize_predictor(self):
         """Initialize the nnUNet predictor from trained model folder."""
-        print(f"Initializing predictor from: {self.model_path}")
+        print(f"Loading model from: {self.model_path}")
         
         self.predictor = nnUNetPredictor(
             tile_step_size=self.tile_step_size,
             use_gaussian=self.use_gaussian,
             use_mirroring=self.use_mirroring,
-            perform_everything_on_device=True,
+            perform_everything_on_device=self.perform_everything_on_device,
             device=self.device,
             verbose=self.verbose,
             verbose_preprocessing=self.verbose,
@@ -59,8 +65,6 @@ class nnUNetv2:
             use_folds=(0,),  # Use fold 0, or specify multiple folds
             checkpoint_name='checkpoint_final.pth'
         )
-        
-        print("Predictor initialized successfully!")
     
     def _read_png_image(self, image_path: str):
         """
@@ -93,58 +97,97 @@ class nnUNetv2:
         
         return img, properties
     
-    def predict_from_folder(self, input_dir: str, output_dir: str, 
-                           save_as_png: bool = True):
-        """
-        Run inference on all PNG images in input directory.
+    def _update_metadata(self, metadata_path: Path, data: dict):
+        """Internal helper to update the metadata JSON."""
+        if not metadata_path:
+            return
+        metadata = {}
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+            except:
+                pass
+        metadata.update(data)
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=4)
         
-        Args:
-            input_dir: Directory containing input PNG images
-            output_dir: Directory to save predictions
-            save_as_png: If True, convert and save as PNG (for 2D only)
+    def predict_from_folder(self, input_dir: str, output_dir: str, 
+                        save_as_png: bool = True, metadata_path: str = None, 
+                        processed_files: list = None):
+        
         """
+        Run inference on all PNG images in a folder.
+        Args:
+            input_dir: Directory with input PNG images
+            output_dir: Directory to save predictions
+            save_as_png: If True, save predictions as PNG images
+            metadata_path: Path to metadata JSON file for progress updates
+            processed_files: List of already processed files to skip (optional)
+        """
+        
         input_path = Path(input_dir)
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
+        m_path = Path(metadata_path) if metadata_path else None
         
-        # Get all PNG files
         png_files = sorted(list(input_path.glob('*.png')))
-        
         if not png_files:
             raise ValueError(f"No PNG files found in {input_path}")
         
-        print(f"Found {len(png_files)} PNG images in: {input_path}")
-        print(f"Saving results to: {output_path}")
+        total_files = len(png_files)
+        print(f"Found {total_files} images in: {input_path}")
         
-        results = []
+        # If resume is on, we skip files already in the set.
+        if processed_files is not None:
+            files_to_process = [f for f in png_files if f.name not in processed_files]
+            print(f"Resuming: Skipping {len(processed_files)} images.")
+        else:
+            files_to_process = png_files
+            processed_files = set() # Initialize empty set for metadata tracking
         
-        t1 = time.time()
+        # Initial metadata update
+        self._update_metadata(m_path, {"n_images": total_files, "processed_images": len(processed_files)})
+
+        time_per_image = []
         
-        for png_file in png_files:
-            print(f"Processing: {png_file.name}", end='', flush=True)
-                        
-            # Read image
+        for i, png_file in enumerate(files_to_process): 
+            t_start = time.time()
+            
             img, props = self._read_png_image(png_file)
+            result = self.predictor.predict_single_npy_array(img, props, None, None, False)
             
-            # Run prediction
-            result = self.predictor.predict_single_npy_array(
-                img, props, None, None, False
-            )
-            
-            # Save result
             output_file = output_path / png_file.name
             if save_as_png:
                 self._save_array_as_png(result, output_file)
             else:
                 np.save(str(output_file.with_suffix('.npy')), result)
             
-            results.append(result)
-            print(" ✓")
+            t_end = time.time()
+            time_per_image.append(t_end - t_start)
             
-        print(f"\nCompleted processing {len(results)} images in {time.time() - t1:.2f} seconds.")
-        print(f"Average time per image: {(time.time() - t1) / len(results):.2f} seconds.")
+            processed_files.add(png_file.name)
+            
+            # Update metadata every image
+            self._update_metadata(m_path, {
+                "processed_images": len(processed_files),
+                "processed_files": list(processed_files),
+                "segmentation_progress": round((len(processed_files) / total_files) * 100, 2),
+                "last_segmentation_time":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "segmentation_average_time_per_image": round(np.mean(time_per_image), 2)
+            })
+            
+            print(f"Processed: {png_file.name}")
         
-        return results
+        if len(processed_files) == total_files and m_path:
+            self._update_metadata(m_path, {
+                "processed_files": "All",
+                "segmentation_status": "Success"
+            })
+        
+        print("Segmentation complete.")
+        print(f"\nCompleted processing {total_files} images in {sum(time_per_image):.2f} seconds.")
+        print(f"Average time per image: {np.mean(time_per_image):.2f} seconds.")
     
     def predict_single_image(self, image_path: str, output_path: str = None,
                             save_as_png: bool = True):

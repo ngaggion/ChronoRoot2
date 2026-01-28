@@ -1,145 +1,186 @@
 #!/usr/bin/env python3
-"""
-CLI interface for nnUNet segmentation and postprocessing.
-"""
-
 import argparse
-from pathlib import Path
-import sys
 import json
+import sys
 import warnings
 from datetime import datetime
+from pathlib import Path
 
-# Import existing modules
-from nnUNet_wrapper import nnUNetv2
-from postprocess import postprocess
-
+# Suppress external library warnings for a cleaner CLI output
 warnings.filterwarnings("ignore")
 
+from postprocess import postprocess
+from nnUNet_wrapper import nnUNetv2
+
+def get_available_models():
+    """Scans the local 'models/' directory for available nnU-Net species folders."""
+    models_dir = Path(__file__).parent.resolve() / "models"
+    if not models_dir.exists():
+        return []
+    return [d.name for d in models_dir.iterdir() if d.is_dir()]
+
+def update_metadata(file_path, data, mode='update'):
+    """
+    Handles JSON metadata persistence.
+    mode='update': Merges new data into existing JSON.
+    mode='set': Overwrites/Initializes the JSON file.
+    """
+    metadata = {}
+    if mode == 'update' and file_path.exists():
+        try:
+            with open(file_path, 'r') as f:
+                metadata = json.load(f)
+        except Exception:
+            metadata = {}
+            
+    metadata.update(data)
+    with open(file_path, 'w') as f:
+        json.dump(metadata, f, indent=4)
+
 def main():
+    # 1. SETUP & ARGPARSE
+    available_models = get_available_models()
+    
+    description = """
+ChronoRoot 2.0 - Automated Plant Root Segmentation Pipeline
+-----------------------------------------------------------
+1. nnU-Net Segmentation: Generates raw masks from PNG root images.
+2. Temporal Postprocessing: Refines masks via temporal weighted trailing average.
+
+Usage:
+  Standard:  python cli.py /path/to/images --model Tomato
+  Resume:    python cli.py /path/to/images --model Arabidopsis --resume
+  Refine:    python cli.py /path/to/images --model Tomato --alpha 0.7 --postprocess-only
+    """
+
     parser = argparse.ArgumentParser(
-        description='nnUNet CLI for segmentation and postprocessing',
+        description=description,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    # Required arguments
-    parser.add_argument('input', 
-                       help='Input folder containing images to segment')
-    
-    # Optional Output Path
-    parser.add_argument('--output', '-o',
-                       help='Optional custom output directory. If provided, results go to '
-                            'OUTPUT/Segmentation/Fold_0 instead of inside the input folder.')
-    
-    # Model/species selection
-    parser.add_argument('--species', default='arabidopsis', 
-                       choices=['arabidopsis', 'tomato'],
-                       help='Species/model to use (default: arabidopsis)')
-    
-    # Optional arguments
-    parser.add_argument('--device', default='cuda', choices=['cuda', 'cpu', 'mps'],
-                       help='Device to use (default: cuda)')
-    parser.add_argument('--fast', action='store_true',
-                       help='Fast mode - disable test-time augmentation')
-    parser.add_argument('--verbose', action='store_true',
-                       help='Enable verbose output')
-    
-    # Postprocessing options
-    parser.add_argument('--postprocess-only', action='store_true',
-                       help='Only run postprocessing (skip segmentation)')
-    parser.add_argument('--alpha', type=float,
-                       help='Alpha parameter for postprocessing')
+    # Required Arguments
+    parser.add_argument('input', help='Input folder containing PNG images.')
+    parser.add_argument('--model', '-m', required=True, choices=available_models,
+                        help='Pre-trained model to use. Folders must exist in models/')
+
+    # Processing Parameters
+    proc_group = parser.add_argument_group('Processing Parameters')
+    proc_group.add_argument('--alpha', '-a', type=float, 
+                            help='Temporal alpha (0.0-1.0). Default: Arabidopsis=0.85, Tomato=0.60')
+    proc_group.add_argument('--output', '-o', help='Custom output path. Default: Input folder.')
+    proc_group.add_argument('--device', default='cuda', choices=['cuda', 'cpu'], help='Default: cuda')
+    proc_group.add_argument('--fast', action='store_true', help='Disable mirroring for speed.')
+
+    # Execution Flow
+    exec_group = parser.add_argument_group('Execution Modes')
+    exec_group.add_argument('--postprocess-only', action='store_true', help='Skip segmentation.')
+    exec_group.add_argument('--resume', action='store_true', help='Resume from metadata state.')
 
     args = parser.parse_args()
-    
-    # 1. Path Resolution
+
     input_path = Path(args.input).resolve()
     if not input_path.exists():
-        print(f"Error: Input path does not exist: {input_path}")
+        print(f"Error: Input path not found: {input_path}")
         sys.exit(1)
-    
-    # Determine result base (either input folder or custom output)
-    result_base = Path(args.output).resolve() if args.output else input_path
-    
-    # Final segmentation folder: result_base/Segmentation/Fold_0
-    seg_folder_name = 'Segmentation'
-    output_path = result_base / seg_folder_name / 'Fold_0'
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    # If args.alpha is not provided, set default based on species
-    if args.alpha is None:
-        args.alpha = 0.85 if args.species == 'arabidopsis' else 0.60
-
-    # 2. Model setup
-    script_dir = Path(__file__).parent.resolve()
-    model_name = "Arabidopsis" if args.species == "arabidopsis" else "Tomato"
-    model_path = script_dir / "models" / model_name
-    
-    if not model_path.exists() and not args.postprocess_only:
-        print(f"Error: Model not found at: {model_path}")
-        sys.exit(1)
-     
-    # 3. Generate Metadata JSON with day, hour, and other info
-    metadata = {
-        "images_path": str(input_path),
-        "segmentation_path": str(result_base / seg_folder_name),
-        "model_species": args.species,
-        "alpha": args.alpha,
-        "date": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
-    }
-    
-    if args.postprocess_only:
-        metadata["note"] = "Postprocessing only"
-    elif args.fast:
-        metadata["note"] = "Fast mode"
-        metadata["model_path"] = str(model_path)
-    else:
-        metadata["note"] = "Standard mode"
-        metadata["model_path"] = str(model_path)   
-    
-    metadata_file = result_base / 'segmentation_metadata.json'
-    with open(metadata_file, 'w') as f:
-        json.dump(metadata, f, indent=4)
-    print(f"✓ Metadata written to {metadata_file}")
-    
-    # 4. Run segmentation
-    if not args.postprocess_only:
-        print(f"\n=== Segmentation ===")
-        print(f"Input:  {input_path}")
-        print(f"Output: {output_path}")
         
-        model = nnUNetv2(
-            model_path=str(model_path),
-            device=args.device,
-            verbose=args.verbose,
-            use_gaussian=True,
-            use_mirroring=not args.fast,
-            tile_step_size=0.5
-        )
+    result_base = Path(args.output).resolve() if args.output else input_path
+    segmentation_dir = result_base / 'Segmentation'
+    segmentation_dir.mkdir(parents=True, exist_ok=True)
+    metadata_file = segmentation_dir / 'segmentation_metadata.json'
+    
+    script_dir = Path(__file__).parent.resolve()
+    model_path = script_dir / "models" / args.model
+
+    processed_files = None
+    if args.resume:
+        if not metadata_file.exists():
+            args.resume = False
+        else:
+            try:
+                with open(metadata_file, 'r') as f:
+                    meta = json.load(f)
+                    if meta.get("segmentation_status") == "Success":
+                        print("Previous segmentation complete. Skipping to postprocessing.")
+                        args.postprocess_only = True
+                    elif isinstance(meta.get("processed_files"), list):
+                        processed_files = set(meta["processed_files"])
+                        print(f"Resuming: {len(processed_files)} images found in metadata.")
+            except Exception as e:
+                print(f"Warning: Could not parse metadata for resume: {e}")
+
+    # Set default alpha if not provided
+    if args.alpha is None:
+        args.alpha = 0.85 if "arabidopsis" in args.model.lower() else 0.60
+
+    # Initialize metadata file for a new run
+    if not args.postprocess_only and not args.resume:
+        update_metadata(metadata_file, {
+            "input_path": str(input_path),
+            "output_path": str(result_base),
+            "alpha_used": args.alpha,
+            "model": args.model,
+            "fast_mode": args.fast,
+            "segmentation_status": "Not started",
+            "postprocessing_status": "Not started"
+        }, mode='set')
+    
+    # check if the metadata contains alpha_used and model keys, if not add them
+    if metadata_file.exists():
+        update_metadata(metadata_file, {
+            "alpha_used": args.alpha,
+            "model": args.model
+        })
+
+    if not args.postprocess_only:
+        print(f"\n--- Stage 1: Segmentation (Model: {args.model}) ---")
+        update_metadata(metadata_file, {
+            "segmentation_status": "Started",
+            "segmentation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
         
         try:
-            results = model.predict_from_folder(
-                input_dir=str(input_path),
-                output_dir=str(output_path),
-                save_as_png=True
+            model = nnUNetv2(
+                model_path=str(model_path), 
+                device=args.device, 
+                use_mirroring=not args.fast
             )
-            print(f"✓ Segmented {len(results)} images")
+            
+            model.predict_from_folder(
+                input_dir=str(input_path), 
+                output_dir=str(segmentation_dir / 'Fold_0'),
+                save_as_png=True,
+                metadata_path=metadata_file,
+                processed_files=processed_files
+            )
+            update_metadata(metadata_file, {"segmentation_status": "Success"})
         except Exception as e:
-            print(f"✗ Segmentation failed: {e}")
+            update_metadata(metadata_file, {"segmentation_status": f"Error: {str(e)}"})
+            print(f"Segmentation failed: {e}")
             sys.exit(1)
+
+    print(f"\n--- Stage 2: Temporal Postprocessing (α={args.alpha}) ---")
+    update_metadata(metadata_file, {
+        "postprocessing_status": "Started",
+        "postprocessing_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "alpha_used": args.alpha
+    })
     
-    # 5. Run Postprocessing
-    print(f"\n=== Postprocessing ===")
     try:
-        postprocess(
-            path=str(input_path),
-            method=args.species,
-            alpha=args.alpha,
-            seg_path=str(result_base / seg_folder_name)
+        finished = postprocess(
+            path=str(input_path), 
+            alpha=args.alpha, 
+            seg_path=str(segmentation_dir),
+            metadata_path=metadata_file
         )
-        print(f"✓ Postprocessing complete")
+        
+        if not finished:
+            raise RuntimeError("Postprocessing did not complete successfully.")
+        
+        update_metadata(metadata_file, {"postprocessing_status": "Success"})
+        print(f"Pipeline finished successfully at {datetime.now().strftime('%H:%M:%S')}")
     except Exception as e:
-        print(f"✗ Postprocessing failed: {e}")
+        update_metadata(metadata_file, {"postprocessing_status": f"Error: {str(e)}"})
+        print(f"Postprocessing failed: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

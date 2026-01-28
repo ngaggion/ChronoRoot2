@@ -70,40 +70,83 @@ main() {
     fi
     REPO_DIR="$INSTALL_DIR/ChronoRoot2"
 
-    # 4. Conda Environment Setup
-    section_title "4. Conda Environment Setup"
-    echo "Which version would you like to install?"
-    echo -e "1) ${BOLD}Full${NC} (Segmentation + Analysis, requires GPU)"
-    echo -e "2) ${BOLD}Lite${NC} (Analysis only, perfect for laptops)"
+    # 4. Environment & Capability Selection
+    section_title "4. Configuration Selection"
+    
+    echo "Choose your installation type:"
+    echo -e "1) ${BOLD}Full Node${NC} (Executes Segmentation + Analysis. Requires GPU)."
+    echo -e "2) ${BOLD}Lite Node${NC} (Analysis only. Runs on standard Laptops)."
     read -p "Selection [1-2]: " env_choice
 
-    # Safety check for Full installation without GPU
-    if [ "$env_choice" == "1" ] && [ "$HAS_GPU" = false ]; then
-        print_warning "Full version requires a GPU for segmentation."
-        read -p "Proceed anyway? [y/N]: " proceed
-        [[ ! $proceed =~ ^[Yy]$ ]] && exit 1
-    fi
+    # Logic Variables
+    INSTALL_SEG_GUI=false
+    DOWNLOAD_WEIGHTS=false
+    ENV_FILE=""
 
-    ENV_NAME="chronoroot_local"
     if [ "$env_choice" == "1" ]; then
+        # -- FULL MODE --
+        # Safety check for GPU
+        if [ "$HAS_GPU" = false ]; then
+            print_warning "Full version requires a GPU for processing."
+            read -p "Proceed anyway? [y/N]: " proceed
+            [[ ! $proceed =~ ^[Yy]$ ]] && exit 1
+        fi
         ENV_FILE="$REPO_DIR/environment.yml"
-        print_status "Installing Full Environment..."
+        INSTALL_SEG_GUI=true
+        DOWNLOAD_WEIGHTS=true
+        print_status "Selected: Full Installation"
+
     else
+        # -- LITE MODE --
         ENV_FILE="$REPO_DIR/environment_no_nnunet.yml"
-        print_status "Installing Lite Environment..."
+        print_status "Selected: Lite Installation"
+
+        # Ask about Monitoring GUI
+        echo -e "\n${BOLD}Optional: Segmentation Monitoring${NC}"
+        echo "Do you want to install the Segmentation GUI?"
+        echo "Useful for monitoring jobs running on a cluster/shared drive."
+        read -p "Install Segmentation GUI? [Y/n]: " monitor_choice
+        
+        if [[ $monitor_choice =~ ^[Yy]$ ]] || [[ -z $monitor_choice ]]; then
+            INSTALL_SEG_GUI=true
+            print_status "Segmentation GUI will be installed (Monitoring Mode)."
+        else
+            print_status "Segmentation GUI skipped."
+        fi
     fi
 
-    # Create/Update Environment
+    # 5. Conda Environment Install
+    section_title "5. Conda Environment Setup"
+    ENV_NAME="ChronoRoot"
+    
     if conda env list | grep -q "$ENV_NAME"; then
-        print_status "Updating existing environment..."
+        print_status "Updating existing environment ($ENV_NAME)..."
         conda env update -n "$ENV_NAME" -f "$ENV_FILE" --prune
     else
-        print_status "Creating new environment..."
+        print_status "Creating new environment ($ENV_NAME)..."
         conda env create -n "$ENV_NAME" -f "$ENV_FILE"
     fi
 
-    # 5. Launcher Generation
-    section_title "5. Creating Desktop Launchers"
+    # 6. Download Weights (Only if Full Node)
+    if [ "$DOWNLOAD_WEIGHTS" = true ]; then
+        section_title "6. Downloading Segmentation Weights"
+        
+        WEIGHTS_SCRIPT="$REPO_DIR/segmentationApp/download_weights.sh"
+        
+        if [ -f "$WEIGHTS_SCRIPT" ]; then
+            chmod +x "$WEIGHTS_SCRIPT"
+            print_status "Syncing models from Hugging Face..."
+            # Run inside conda to access 'hf' or install it if missing
+            conda run -n "$ENV_NAME" /bin/bash "$WEIGHTS_SCRIPT"
+        else
+            print_warning "download_weights.sh not found. Skipping."
+        fi
+    else
+        echo -e "\n${BLUE}[INFO]${NC} Skipping weight download (Monitoring/Lite mode selected)."
+    fi
+
+    # 7. Launcher Generation
+    section_title "7. Creating Desktop Launchers"
     CONDA_BASE=$(conda info --base)
     
     create_local_shortcut() {
@@ -111,7 +154,6 @@ main() {
         local file_name="$2"
         local subdir="$3"
         local icon="$4"
-
         local wrapper="$INSTALL_DIR/${file_name}.sh"
         local desktop="$DESKTOP_ENTRY_DIR/${file_name}.desktop"
 
@@ -140,12 +182,12 @@ EOF
         print_success "Created: $name"
     }
 
-    # Core Apps
+    # Always install Core Apps
     create_local_shortcut "ChronoRoot App" "ChronoRootApp" "chronoRootApp" "logo.ico"
     create_local_shortcut "ChronoRoot Screening" "ChronoRootScreening" "chronoRootScreeningApp" "logo_screening.ico"
     
-    # Segmentation (Only for Full)
-    if [ "$env_choice" == "1" ]; then
+    # Conditionally install Segmentation GUI
+    if [ "$INSTALL_SEG_GUI" = true ]; then
         create_local_shortcut "ChronoRoot Segmentation" "ChronoRootSegmentation" "segmentationApp" "logo_seg.ico"
     fi
 
