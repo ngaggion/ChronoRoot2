@@ -126,7 +126,7 @@ main() {
         print_status "Updating existing environment..."
         conda env update -n "$ENV_NAME" -f "$ENV_FILE" --prune
     else
-        print_status "Creating new environment (this may take a while)..."
+        print_status "Creating new environment (this may take a few minutes)..."
         conda env create -n "$ENV_NAME" -f "$ENV_FILE"
     fi
 
@@ -140,7 +140,7 @@ main() {
             chmod +x "$WEIGHTS_SCRIPT"
             print_status "Syncing models from Hugging Face..."
             # Run inside conda to access 'hf' or install it if missing
-            conda run -n "$ENV_NAME" /bin/bash "$WEIGHTS_SCRIPT"
+            conda run --no-capture-output -n "$ENV_NAME" /bin/bash "$WEIGHTS_SCRIPT"
         else
             print_warning "download_weights.sh not found. Skipping."
         fi
