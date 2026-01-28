@@ -119,7 +119,24 @@ main() {
 #!/bin/bash
 [ -z "\$DISPLAY" ] && export DISPLAY=:0
 echo "Starting $name..."
-apptainer exec $GPU_FLAG --bind /mnt/c:/mnt/c --bind /home/\$USER:/home/\$USER --env DISPLAY=\$DISPLAY --bind /run/user/$(id -u):/run/user/$(id -u) --bind /init:/init --bind /run/WSL:/run/WSL --env WSL_INTEROP=$WSL_INTEROP "$IMAGE_PATH" \\
+
+# 1. Initialize Bind Paths (WSL Essentials)
+# We strictly bind C: and WSL interop paths first
+BINDS="--bind /mnt/c:/mnt/c --bind /init:/init --bind /run/WSL:/run/WSL"
+
+# 2. Add User & Runtime paths
+BINDS="\$BINDS --bind /home/\$USER:/home/\$USER --bind /run/user/\$(id -u):/run/user/\$(id -u)"
+
+# 3. Dynamic Optional Paths (Net/Media/Mnt)
+# Helpful if you have mounted network drives or external disks in WSL
+if [ -d "/net" ]; then BINDS="\$BINDS --bind /net:/net"; fi
+if [ -d "/media" ]; then BINDS="\$BINDS --bind /media:/media"; fi
+
+# WSL Special: /mnt usually exists, but binding it whole allows access to D:, E:, etc.
+if [ -d "/mnt" ]; then BINDS="\$BINDS --bind /mnt:/mnt"; fi
+
+# 4. Execute
+apptainer exec $GPU_FLAG \$BINDS --env DISPLAY=\$DISPLAY --env WSL_INTEROP=\$WSL_INTEROP "$IMAGE_PATH" \\
   bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate ChronoRoot && cd $REPO_DIR/$folder && python run.py"
 EOF
         chmod +x "$sh_file"
