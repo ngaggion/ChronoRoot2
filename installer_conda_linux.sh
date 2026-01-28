@@ -137,7 +137,7 @@ main() {
             chmod +x "$WEIGHTS_SCRIPT"
             print_status "Syncing models from Hugging Face..."
             # Run inside conda to access 'hf' or install it if missing
-            conda run -n "$ENV_NAME" /bin/bash "$WEIGHTS_SCRIPT"
+            conda run --no-capture-output -n "$ENV_NAME" /bin/bash "$WEIGHTS_SCRIPT"
         else
             print_warning "download_weights.sh not found. Skipping."
         fi

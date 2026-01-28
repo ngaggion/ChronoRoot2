@@ -16,5 +16,5 @@ dependencies:
   - pyzbar=0.1.9
   - pip
   - pip:
-    - opencv-python
+    - opencv-python==4.13.0.90
     - lapx==0.9.2
