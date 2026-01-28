@@ -3,8 +3,9 @@
 ![Figure](Documents/images/mainFigure.png)
 
 [![DOI](https://img.shields.io/badge/arXiv-2504.14736-red.svg)](http://arxiv.org/abs/2504.14736)
-[![GitHub license](https://img.shields.io/github/license/ngaggion/ChronoRoot2)](https://github.com/ngaggion/ChronoRoot2/blob/main/LICENSE)
+[![GitHub license](https://img.shields.io/github/license/ngaggion/ChronoRoot2)](LICENSE)
 [![Docker](https://img.shields.io/docker/pulls/ngaggion/chronoroot.svg)](https://hub.docker.com/r/ngaggion/chronoroot)
+[![Hugging Face Models](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-yellow)](https://huggingface.co/ngaggion/models)
 
 ## An Open AI-Powered Platform for 2D Temporal Plant Phenotyping
 
@@ -31,20 +32,20 @@ A typical ChronoRoot 2.0 experiment follows this pipeline:
     * **Screening App**: For high-throughput automated analysis of multiple plants.
 4.  **Reporting**: Export statistical analysis, visualizations, and group comparisons.
 
-## 💻 System Requirements
+## System Requirements
 
 Before installing, ensure your system meets the following criteria:
 
 | Component | Requirement |
 | :--- | :--- |
-| **OS** | **Linux** (Ubuntu 20.04+), **Windows 10/11** (via WSL2), or **macOS** (Docker only) |
+| **OS** | **Linux** (Ubuntu 20.04+), **Windows 10** (via WSL2), or **macOS** (Docker only) |
 | **RAM** | 8 GB minimum (16 GB recommended) |
 | **Storage** | ~15 GB (Disk space for images/containers) |
 | **GPU** | NVIDIA GPU with CUDA 11.0+ (Highly recommended for Segmentation) |
 
 > **Note on macOS:** Native installation is not supported. Mac users must use the Docker method.
 
-## 🚀 Installation & Getting Started
+## Installation & Getting Started
 
 ChronoRoot 2.0 offers automated installers that set up the environment and create **Desktop Shortcuts** for a point-and-click experience. Choose the method that best fits your setup.
 
@@ -149,45 +150,68 @@ Once inside the container, use these aliases to launch the apps:
 * `chronoroot` : Launches Standard Interface
 * `screening` : Launches Screening Interface
 
-## 📂 Demo Data & Tutorials
+## Note on Segmentation Models
 
-We provide a pre-packaged dataset to help you learn the system.
+The pre-trained nnU-Net weights are now hosted on **[Hugging Face](https://huggingface.co/ngaggion/models)** to keep the repository lightweight. The installers above will ask to download them automatically.
 
-**Location:**
+If you need to update them later manually, run:
+```bash
+cd segmentationApp
+./download_weights.sh
+```
+
+## Documentation & Tutorials
+
+For comprehensive, step-by-step guides, please visit our **[Official Documentation Website](https://chronoroot.github.io/)**.
+
+### Step-by-Step Tutorials
+We have migrated our tutorials to the web to provide detailed, up-to-date instructions.
+
+* **Standard Interface (Detailed Analysis)**
+    * [Tutorial: Arabidopsis Analysis](https://chronoroot.github.io/tutorials/standard/)
+    * [Tutorial: Tomato Analysis](https://chronoroot.github.io/tutorials/standard_tomato/)
+* **Screening Interface (High-Throughput)**
+    * [Tutorial: Hypocotyl Etiolation](https://chronoroot.github.io/tutorials/screening_hypocotyl/)
+    * [Tutorial: Seed Germination](https://chronoroot.github.io/tutorials/screening_germination/)
+* **AI Segmentation**
+    * [Segmentation Module Usage](https://chronoroot.github.io/tutorials/segmentation/)
+    * [Guide: Train Your Own Model](https://chronoroot.github.io/tutorials/training_on_your_images/)
+* **Infrastructure**
+    * [Docker Installation & Usage](https://chronoroot.github.io/tutorials/docker/)
+
+### Demo Data
+We provide a pre-packaged dataset to help you follow along with the tutorials above.
 
 * **Docker/Apptainer:** Pre-loaded at `/Demo/` inside the container.
 * **Download:** [Google Drive Link](https://drive.google.com/drive/folders/1PJCn_MMHcM9KPgz8dYe1F2Cvdt43FS3Z?usp=sharing)
 
-**Step-by-Step PDF Guides:**
-
-Inside the `Documents/` folder, you will find:
-
-* [📄 Standard Interface Tutorial](Documents/StandardInterfaceTutorial.pdf)
-* [📄 Standard Interface Tutorial With Tomato Data](Documents/StandardInterfaceTutorial_TomatoDemo.pdf)
-* [📄 Screening Interface Tutorial](Documents/ScreeningInterfaceTutorial.pdf)
-* [📄 Segmentation Tutorial](Documents/SegmentationTutorial.pdf)
-
 ## Repository Structure
 
-```
+```text
 ChronoRoot2
 ├── apptainerInstaller         # Scripts for Singularity deployment
 ├── chronoRootApp              # Standard Root Phenotyping Interface
 ├── chronoRootScreeningApp     # High-throughput Screening Interface
 ├── segmentationApp            # AI-based segmentation tools (nnUNet)
 ├── Docker                     # Dockerfile and instructions
-├── Documents                  # Tutorials and technical docs
+├── Documents                  # Legacy PDF documentation
 ├── environment.yml            # Conda environment spec
+├── environment_no_nnunet.yml  # Conda environment spec without nnU-Net
+├── installer_conda_linux.sh   # Linux native installer script
+├── installer_conda_wsl.sh     # WSL native installer script
+├── logo.ico                   # ChronoRoot icon
+├── logo_screening.ico         # ChronoRoot Screening icon
+├── logo_seg.ico               # ChronoRoot Segmentation icon
 ├── LICENSE                    # GNU GPL v3.0
 └── README.md                  # This file
 ```
 
 For technical details on specific modules, please refer to their internal documentation:
 
-* [Standard Interface Docs](https://www.google.com/search?q=chronoRootApp/README.md)
-* [Screening Interface Docs](https://www.google.com/search?q=chronoRootScreeningApp/README.md)
-* [Segmentation Module Docs](https://www.google.com/search?q=segmentationApp/README.md)
-* [Docker Guide](https://www.google.com/search?q=Docker/README.md)
+* [Standard Interface Docs](chronoRootApp/README.md) 
+* [Screening Interface Docs](chronoRootScreeningApp/README.md) 
+* [Segmentation Module Docs](segmentationApp/README.md) 
+* [Docker Guide](Docker/README.md) 
 
 ## Hardware Specifications
 

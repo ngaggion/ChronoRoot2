@@ -1,5 +1,7 @@
 # ChronoRoot 2.0 - Segmentation Module
 
+[![Hugging Face Models](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-yellow)](https://huggingface.co/ngaggion/models)
+
 This directory contains the AI-powered segmentation module for ChronoRoot 2.0, designed to automatically identify plant root structures from images.
 
 ## Overview
@@ -17,24 +19,23 @@ This application provides both a graphical user interface (GUI) and command-line
 
 ### Directory Structure
 
-```
+```text
 segmentationApp/
 ├── bash_usage.sh             # Example bash script for demo processing
 ├── cli.py                    # Command-line interface for quick processing
 ├── config.json               # Stores user settings (Conda env, alpha, etc.)
+├── download_weights.sh       # SCRIPT: Syncs model weights from Hugging Face
 ├── models/                   # Contains pre-trained nnUNet models
-│   ├── Arabidopsis/
-│   │   ├── dataset_fingerprint.json
+│   ├── Arabidopsis/          # (Populated after running download_weights.sh)
 │   │   ├── dataset.json
-│   │   ├── fold_0/
-│   │   │   └── checkpoint_final.pth
-│   │   └── plans.json
+│   │   ├── plans.json
+│   │   └── fold_0/
+│   │       └── checkpoint_final.pth
 │   └── Tomato/
-│       ├── dataset_fingerprint.json
 │       ├── dataset.json
-│       ├── fold_0/
-│       │   └── checkpoint_final.pth
-│       └── plans.json
+│       ├── plans.json
+│       └── fold_0/
+│           └── checkpoint_final.pth
 ├── nnUNet_wrapper.py         # Internal script for nnUNet
 ├── postprocess.py            # Script for temporal post-processing
 ├── README.md                 # This file
@@ -42,13 +43,39 @@ segmentationApp/
 ├── screenshots/
 │   └── MainScreen.png        # Screenshot of the GUI interface
 └── trainerOrganization/      # Tools for training custom models
-    ├── CreateArabidopsisDataset.ipynb  # Dataset preparation for Arabidopsis
-    ├── CreateTomatoDataset.ipynb        # Dataset preparation for Tomato
-    ├── dataset_Arabidopsis.json        # Dataset configuration
-    ├── dataset_Tomato.json              # Dataset configuration
-    ├── PredToNii.ipynb              # Convert predictions to NIfTI format to match the dataset
-    └── train.sh                         # Training script for nnUNet
+    ├── CreateArabidopsisDataset.ipynb
+    ├── CreateTomatoDataset.ipynb
+    ├── dataset_Arabidopsis.json
+    ├── dataset_Tomato.json
+    ├── PredToNii.ipynb
+    └── train.sh
+
 ```
+
+## Model Installation and Updates
+
+To keep the repository lightweight and ensure version control efficiency, **model weights are hosted externally on Hugging Face**. 
+
+### Automatic Installation
+
+If you used the main ChronoRoot installer (Apptainer, WSL, or Local), the weights were likely downloaded automatically during setup.
+
+### Manual Installation / Updating
+
+If the `models/` folder is empty, or if you want to check for model updates, run the included helper script:
+
+```bash
+# Make the script executable (first time only)
+chmod +x download_weights.sh
+
+# Download/Update weights
+./download_weights.sh
+
+```
+
+This script handles the connection to Hugging Face, checks for newer versions of the models, and places them correctly into the `models/` directory.
+
+---
 
 ## How to Use (GUI Interface)
 
@@ -57,8 +84,9 @@ segmentationApp/
 ### Workflow Steps
 
 1. **Launch the App:**
+2. 
 ```bash
-# Run the GUI interface using Docker
+# Run the GUI interface using Docker/Apptainer
 segmentation
 
 # Or run directly with Python
@@ -73,7 +101,6 @@ python run.py
    * **Conda:** Enter the name of your Conda environment if you have a different local installation (default: `ChronoRoot`).
 
 3. **Load Robot:** Click **"Load Robot"** and select one or more root folders containing your experiment data (e.g., `/path/to/Robot_1/`).
-   
 4. **Monitor & Process:**
    * **Tooltips:** Hover over any button in the interface to see a detailed explanation of its function.
    * **Context-Aware Actions:** The "Actions" column updates dynamically based on the folder's status:
@@ -96,7 +123,7 @@ For faster processing without the GUI overhead, use the CLI tool `cli.py`. This 
 | --- | --- | --- |
 | `input` | Path to the folder containing PNG images. | **Required** |
 | `--model`, `-m` | The specific model to use (must match a folder in `models/`). | **Required** |
-| `--alpha`, `-a` | Temporal consistency parameter (0.0 - 1.0).  | `0.85` (Arabidopsis) `0.60` (Tomato) |
+| `--alpha`, `-a` | Temporal consistency parameter (0.0 - 1.0). | `0.85` (Arabidopsis) `0.60` (Tomato) |
 | `--device` | Computing device to use. | `cuda` |
 | `--output`, `-o` | Custom output directory. | `input` folder |
 | `--fast` | Enable fast mode (disables test-time augmentation/mirroring). | `False` |
@@ -195,7 +222,7 @@ Our complete annotated dataset (Arabidopsis & Tomato) is available on HuggingFac
 
 ## Replacing or Adding Models
 
-Once you have trained a new nnU-Net model, you can add it to the application by creating a standard nnU-Net results structure inside the `models/` directory. It will then be available for selection in the GUI and CLI automatically.
+The `download_weights.sh` script manages the official ChronoRoot models. However, if you have trained your own custom nnU-Net model, you can add it manually:
 
 **Structure:**
 
@@ -205,12 +232,6 @@ Once you have trained a new nnU-Net model, you can add it to the application by 
     * `plans.json` (CRITICAL: Configuration file specific to your training run)
     * `fold_0/`
     * `checkpoint_final.pth` (The trained model weights)
-
-
-
-
-
-
 
 **To add a model:**
 
