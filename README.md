@@ -207,11 +207,11 @@ For the controller software for the Raspberry Pi 3B, see the [ChronoRoot Module 
 If you use this platform in your research, please cite:
 
 ```bibtex
-@article{gaggion2025chronoroot,
-  title={ChronoRoot 2.0: An Open AI-Powered Platform for 2D Temporal Plant Phenotyping},
-  author={Gaggion, Nicolás and Bonazzola, Rodrigo and Legascue, María Florencia and Mammarella, María Florencia and Rodriguez, Florencia Sol and Aballay, Federico Emanuel and Catulo, Florencia Belén and Barrios, Andana and Accavallo, Franco and Villarreal, Santiago Nahuel and Crespi, Martin and Ricardi, Martiniano María and Petrillo, Ezequiel and Blein, Thomas and Ariel, Federico and Ferrante, Enzo},
+@article{gaggion2026chronoroot,
+  title={ChronoRoot 2.0: An Open AI-Powered Platform for 2D Temporal Plant Phenotyping}, 
+  author={Nicolás Gaggion and Noelia A. Boccardo and Rodrigo Bonazzola and María Florencia Legascue and María Florencia Mammarella and Florencia Sol Rodriguez and Federico Emanuel Aballay and Florencia Belén Catulo and Andana Barrios and Luciano J. Santoro and Franco Accavallo and Santiago Nahuel Villarreal and Leonardo I. Pereyra-Bistrain and Moussa Benhamed and Martin Crespi and Martiniano María Ricardi and Ezequiel Petrillo and Thomas Blein and Federico Ariel and Enzo Ferrante},
   journal={arXiv preprint arXiv:2504.14736},
-  year={2025}
+  year={2026}
 }
 ```
 

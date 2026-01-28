@@ -75,28 +75,51 @@ main() {
         (cd "$REPO_DIR" && git pull)
     fi
 
-    # 4. Conda Environment Setup
-    section_title "4. Conda Environment Setup"
-    echo "Which version would you like to install?"
-    echo -e "1) ${BOLD}Full${NC} (Segmentation + Analysis, requires GPU)"
-    echo -e "2) ${BOLD}Lite${NC} (Analysis only, perfect for laptops)"
+    # 4. Configuration Selection
+    section_title "4. Configuration Selection"
+    echo "Choose your installation type:"
+    echo -e "1) ${BOLD}Full Node${NC} (Executes Segmentation + Analysis. Requires GPU)."
+    echo -e "2) ${BOLD}Lite Node${NC} (Analysis only. Runs on standard Laptops)."
     read -p "Selection [1-2]: " env_choice
 
-    # Safety check for Full without GPU
-    if [ "$env_choice" == "1" ] && [ "$HAS_GPU" = false ]; then
-        print_warning "Full version requires a GPU for segmentation."
-        read -p "Proceed anyway? [y/N]: " proceed
-        [[ ! $proceed =~ ^[Yy]$ ]] && exit 1
+    # Logic Variables
+    INSTALL_SEG_GUI=false
+    DOWNLOAD_WEIGHTS=false
+    ENV_FILE=""
+    ENV_NAME="ChronoRoot"
+
+    if [ "$env_choice" == "1" ]; then
+        # -- FULL MODE --
+        if [ "$HAS_GPU" = false ]; then
+            print_warning "Full version requires a GPU for processing."
+            read -p "Proceed anyway? [y/N]: " proceed
+            [[ ! $proceed =~ ^[Yy]$ ]] && exit 1
+        fi
+        ENV_FILE="$REPO_DIR/environment.yml"
+        INSTALL_SEG_GUI=true
+        DOWNLOAD_WEIGHTS=true
+        print_status "Selected: Full Installation"
+
+    else
+        # -- LITE MODE --
+        ENV_FILE="$REPO_DIR/environment_no_nnunet.yml"
+        print_status "Selected: Lite Installation"
+
+        # Ask about Monitoring GUI
+        echo -e "\n${BOLD}Optional: Segmentation Monitoring${NC}"
+        echo "Do you want to install the Segmentation GUI for monitoring?"
+        read -p "Install Segmentation GUI? [Y/n]: " monitor_choice
+        
+        if [[ $monitor_choice =~ ^[Yy]$ ]] || [[ -z $monitor_choice ]]; then
+            INSTALL_SEG_GUI=true
+            print_status "Segmentation GUI will be installed (Monitoring Mode)."
+        else
+            print_status "Segmentation GUI skipped."
+        fi
     fi
 
-    ENV_NAME="chronoroot_wsl"
-    if [ "$env_choice" == "1" ]; then
-        ENV_FILE="$REPO_DIR/environment.yml"
-        print_status "Selected: Full Environment"
-    else
-        ENV_FILE="$REPO_DIR/environment_no_nnunet.yml"
-        print_status "Selected: Lite Environment"
-    fi
+    # 5. Conda Environment Setup
+    section_title "5. Conda Environment Setup"
 
     # Create/Update Environment
     if conda env list | grep -q "$ENV_NAME"; then
@@ -107,8 +130,26 @@ main() {
         conda env create -n "$ENV_NAME" -f "$ENV_FILE"
     fi
 
-    # 5. Windows Integration
-    section_title "5. Configuring Windows Shortcuts"
+    # 6. Download Weights (Only if Full Node)
+    if [ "$DOWNLOAD_WEIGHTS" = true ]; then
+        section_title "6. Downloading Segmentation Weights"
+        
+        WEIGHTS_SCRIPT="$REPO_DIR/segmentationApp/download_weights.sh"
+        
+        if [ -f "$WEIGHTS_SCRIPT" ]; then
+            chmod +x "$WEIGHTS_SCRIPT"
+            print_status "Syncing models from Hugging Face..."
+            # Run inside conda to access 'hf' or install it if missing
+            conda run -n "$ENV_NAME" /bin/bash "$WEIGHTS_SCRIPT"
+        else
+            print_warning "download_weights.sh not found. Skipping."
+        fi
+    else
+        echo -e "\n${BLUE}[INFO]${NC} Skipping weight download (Monitoring/Lite mode selected)."
+    fi
+
+    # 7. Windows Integration
+    section_title "7. Configuring Windows Shortcuts"
     
     # Windows Paths
     [ -z "$WSL_DISTRO_NAME" ] && WSL_DISTRO_NAME="Ubuntu"
@@ -186,11 +227,12 @@ EOF
     create_wsl_shortcut "ChronoRootApp" "chronoRootApp" "logo.ico"
     create_wsl_shortcut "ChronoRootScreening" "chronoRootScreeningApp" "logo_screening.ico"
 
-    if [ "$env_choice" == "1" ]; then
+    # Conditional Segmentation Shortcut
+    if [ "$INSTALL_SEG_GUI" = true ]; then
         create_wsl_shortcut "ChronoRootSegmentation" "segmentationApp" "logo_seg.ico"
     fi
 
-    # 6. Cleanup
+    # 8. Cleanup
     if command_exists dos2unix; then
         dos2unix "$INSTALL_DIR"/*.sh >/dev/null 2>&1 || true
     fi

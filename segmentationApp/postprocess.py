@@ -10,6 +10,9 @@ import re
 import os
 import numpy as np
 import cv2
+import json
+import time
+from datetime import datetime
 
 def natural_key(string_):
     """Natural sorting for file names with numbers"""
@@ -68,7 +71,22 @@ def find_segmentation_folders(seg_path):
     
     return sorted(fold_dirs)
 
-def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=None):
+def update_metadata(metadata_path, data):
+    """Internal helper to update the metadata JSON."""
+    if not metadata_path:
+        return
+    metadata = {}
+    if os.path.exists(metadata_path):
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        metadata.update(data)
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=4)
+    else:
+        raise FileNotFoundError(f"Metadata file {metadata_path} not found.")
+        
+        
+def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=None, metadata_path=None):
     """
     Unified postprocessing function for both arabidopsis and tomato methods.
     
@@ -78,17 +96,12 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
         alpha: Temporal accumulation weight (default: 0.85 for arabidopsis, 0.99 for tomato)
         num_classes: Number of segmentation classes
         seg_path: Path to segmentation folder (default: path/Segmentation)
+        metadata_path: Path to metadata JSON file (optional)
     """
     
     # Set default alpha based on method
     if alpha is None:
         alpha = 0.85 if method == "arabidopsis" else 0.60
-    
-    # Get image list from original folder
-    images = loadPath(path, ext="*.png")
-    if not images:
-        print(f"No PNG images found in {path}")
-        return
     
     # Set segmentation path
     if seg_path is None:
@@ -99,11 +112,13 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
     
     if not folds:
         print(f"No segmentation folders found in {seg_path}")
-        return
+        return False
     
-    print(f"Found {len(folds)} fold(s): {folds}")
-    print(f"Using {method} postprocessing with alpha = {alpha}")
-    print(f"Processing {len(images)} images with {num_classes} classes")
+    print(f"Postprocessing {method} with alpha = {alpha}")
+    
+    # Images are loaded from the first fold directory
+    first_fold_path = seg_path if folds[0] == "." else os.path.join(seg_path, folds[0])
+    images = loadPath(first_fold_path, ext='*.png')
     
     # Initialize accumulator
     img = cv2.imread(images[0], 0)
@@ -116,6 +131,14 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
     os.makedirs(color_path, exist_ok=True)
     
     colormap = generate_colormap(num_classes)
+    
+    if metadata_path is not None:
+        data = {"postprocessing_progress": 0.0,
+                "last_postprocessing_time":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "postprocessing_average_time_per_image": 0.0}
+        update_metadata(metadata_path, data)
+    
+    t1 = time.time()
     
     # Process each image
     for image_idx, image_path in enumerate(images):
@@ -205,10 +228,22 @@ def postprocess(path, method="arabidopsis", alpha=None, num_classes=7, seg_path=
 
         if (image_idx + 1) % 10 == 0:
             print(f"  Processed {image_idx + 1}/{len(images)} images...")
+            t2 = time.time()
+            if metadata_path is not None:
+                data = {"postprocessing_progress": round((image_idx + 1) / len(images) * 100, 2),
+                        "last_postprocessing_time":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "postprocessing_average_time_per_image": round((t2 - t1) / (image_idx + 1), 2)}
+                update_metadata(metadata_path, data)
     
-    print(f"Postprocessing complete! Results saved to:")
-    print(f"  - Grayscale: {output_path}")
-    print(f"  - Color: {color_path}")
+    if metadata_path is not None:
+        t2 = time.time()
+        data = {"postprocessing_progress": 100.0,
+                "last_postprocessing_time":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "postprocessing_average_time_per_image": round((t2 - t1) / (image_idx + 1), 2)}
+        update_metadata(metadata_path, data)
+            
+    print("Postprocessing complete.")
+    return True
 
 def main():
     parser = argparse.ArgumentParser(description="Postprocess nnUNet segmentation results")

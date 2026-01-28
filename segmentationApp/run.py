@@ -1,1118 +1,1148 @@
 import os
 import sys
+import subprocess
+import json
+import shutil
+import glob
+from datetime import datetime
+from pathlib import Path
 
 # Suppress Qt and OpenGL warnings
 os.environ['QT_LOGGING_RULES'] = '*=false'
 os.environ['LIBGL_ALWAYS_INDIRECT'] = '1'
 
-import tempfile
-import subprocess
-import json
-import shutil
-import glob
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QTableWidget, QTableWidgetItem, 
                              QHeaderView, QProgressBar, QLabel, QFileDialog, QCheckBox,
-                             QMessageBox, QTextEdit, QComboBox, QInputDialog)
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
+                             QMessageBox, QTextEdit, QComboBox, QInputDialog, QAbstractItemView)
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QDir
 from PyQt5.QtGui import QColor
-from datetime import datetime
-from pathlib import Path
 
-class SegmentationWorker(QThread):
-    """Worker thread for running segmentation using nnUNet wrapper"""
-    finished = pyqtSignal(str, str)  # folder_path, message
-    error = pyqtSignal(str, str)     # folder_path, error_message
-    progress = pyqtSignal(str, str)  # folder_path, status_update
+# --- Constants ---
+APP_NAME = "chronoroot"
+GLOBAL_CONFIG_DIR = os.path.expanduser(f"~/.config/{APP_NAME}")
+GLOBAL_CONFIG_FILE = os.path.join(GLOBAL_CONFIG_DIR, "segmentationInterfaceConfig.json")
 
-    def __init__(self, input_path, robot_name, species="arabidopsis", fast_mode=False, conda_env="ChronoRoot"):
+# Ensure config directory exists
+os.makedirs(GLOBAL_CONFIG_DIR, exist_ok=True)
+
+def get_available_models():
+    """Scans the local models/ directory for available species/models."""
+    models_dir = Path(__file__).parent.resolve() / "models"
+    if not models_dir.exists():
+        return []
+    return [d.name for d in models_dir.iterdir() if d.is_dir()]
+
+class CLIWorker(QThread):
+    """Unified worker that runs the CLI backend"""
+    finished = pyqtSignal(str, str)
+    error = pyqtSignal(str, str)
+    progress = pyqtSignal(str, str)
+
+    def __init__(self, input_path, robot_name, model, alpha, 
+                 postprocess_only=False, resume=False, fast_mode=False, conda_env="ChronoRoot"):
         super().__init__()
         self.input_path = Path(input_path)
         self.robot_name = robot_name
-        self.species = species
+        self.model = model
+        self.alpha = alpha
+        self.resume = resume
+        self.postprocess_only = postprocess_only
         self.fast_mode = fast_mode
         self.conda_env = conda_env
-        self.script_dir = Path(__file__).parent.resolve()
-        self.seg_folder = self.input_path / 'Segmentation'
-        self.info_file = self.seg_folder / 'segmentation_info.json'
-
-    def _update_info_file(self, data_to_update):
-        """Helper to read, update, and write the JSON info file."""
-        try:
-            os.makedirs(self.seg_folder, exist_ok=True)
-            info_data = {}
-            if self.info_file.exists():
-                with open(self.info_file, 'r') as f:
-                    info_data = json.load(f)
-            info_data.update(data_to_update)
-            
-            with open(self.info_file, 'w') as f:
-                json.dump(info_data, f, indent=2)
-        except Exception as e:
-            self.progress.emit(str(self.input_path), f"Warning: Could not write info file: {e}")
+        self.process = None 
+        self._is_killed = False
 
     def run(self):
         try:
+            # Test if there is a torch installation in the conda env
+            if not self.postprocess_only:
+                test_cmd = [
+                    "conda", "run", "--no-capture-output", "-n", self.conda_env,
+                    "python", "-c", "import torch; print(torch.__version__)"
+                ]
+                test_process = subprocess.Popen(
+                    test_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                stdout, stderr = test_process.communicate()
+                if test_process.returncode != 0:
+                    self.error.emit(str(self.input_path), 
+                                    f"Conda environment '{self.conda_env}' is missing PyTorch. \nYou are running in monitor mode only.\nInstall the full ChronoRoot application to enable segmentation.")
+                    return 
+            
             folder_name = self.input_path.name
-            self.progress.emit(str(self.input_path), "Starting segmentation...")
+            op_type = "Postprocessing" if self.postprocess_only else "Segmentation"
+            self.progress.emit(str(self.input_path), f"Starting {op_type}...")
 
-            self._update_info_file({
-                'robot_name': self.robot_name,
-                'conda_env': self.conda_env,
-                'species': self.species,
-                'fast_mode': self.fast_mode,
-                'segmentation_start_time': datetime.now().isoformat(),
-                'folder_path': str(self.input_path),
-                'segmentation_status': 'started'
-            })
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+            cmd = [
+                "conda", "run", "--no-capture-output", "-n", self.conda_env,
+                "python", "cli.py",
+                str(self.input_path),
+                "--model", self.model,
+                "--alpha", str(self.alpha),
+                "--device", "cuda"
+            ]
 
-            model_name = "Arabidopsis" if self.species == "arabidopsis" else "Tomato"
-            model_path = self.script_dir / "models" / model_name
+            if self.postprocess_only:
+                cmd.append("--postprocess-only")
+            if self.resume:
+                cmd.append("--resume")
+            if self.fast_mode:
+                cmd.append("--fast")
 
-            if not model_path.exists():
-                self.error.emit(str(self.input_path), f"Model not found at: {model_path}")
-                return
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, # Merged streams to catch errors in real-time
+                text=True,
+                bufsize=1, # Line-buffered
+                env=env,
+                universal_newlines=True,
+                start_new_session=True
+            )
 
-            output_path = self.seg_folder / "Fold_0"
-            os.makedirs(output_path, exist_ok=True)
-
-            model_args = {
-                'model_path': str(model_path),
-                'device': 'cuda',
-                'verbose': False,
-                'use_gaussian': True,
-                'use_mirroring': not self.fast_mode,
-                'tile_step_size': 0.5
-            }
-            
-            # Using repr() ensures all objects (paths, dict) are
-            # serialized as valid Python code literals.
-            wrapper_script = f"""
-import sys
-import os
-sys.path.append({repr(str(self.script_dir))})
-from nnUNet_wrapper import nnUNetv2
-
-model_args = {repr(model_args)}
-model = nnUNetv2(**model_args)
-
-results = model.predict_from_folder(
-    input_dir={repr(str(self.input_path))},
-    output_dir={repr(str(output_path))},
-    save_as_png=True
-)
-print(f"Segmentation completed: {{len(results)}} images processed")
-            """
-            temp_script_path = None
-            try:
-                # Use tempfile for a clean, safe temporary script
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-                    f.write(wrapper_script)
-                    temp_script_path = f.name
+            for line in iter(self.process.stdout.readline, ''):
+                if self._is_killed:
+                    break
                 
-                conda_prefix = f"conda run -n {self.conda_env}"
-                # Quote the script path to handle spaces
-                cmd = f'{conda_prefix} python "{temp_script_path}"'
+                clean_line = line.strip()
+                if clean_line:
+                    self.progress.emit(str(self.input_path), clean_line)
 
-                self.progress.emit(str(self.input_path), "Running nnUNet...")
-                process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
-                                         stderr=subprocess.PIPE, text=True)
-                stdout, stderr = process.communicate()
-                
-                self.progress.emit(str(self.input_path), f"Command output: {stdout[:200]}...")
+            self.process.stdout.close()
+            rc = self.process.wait()
 
-                if process.returncode == 0:
-                    seg_files = len(list(output_path.glob('*.png')))
-                    if seg_files > 0:
-                        self._update_info_file({
-                            'segmentation_status': 'completed',
-                            'segmentation_completion_time': datetime.now().isoformat()
-                        })
-                        mode_str = " (fast mode)" if self.fast_mode else ""
-                        self.finished.emit(str(self.input_path),
-                                         f"Segmentation completed for {folder_name} ({self.species}{mode_str}): {seg_files} files")
-                    else:
-                        self.error.emit(str(self.input_path), f"Segmentation failed for {folder_name}: No output files generated")
-                else:
-                    error_msg = f"Segmentation failed for {folder_name} (return code {process.returncode}): {stderr[:300]}"
-                    self.error.emit(str(self.input_path), error_msg)
-
-            finally:
-                # Ensure temp file is always cleaned up
-                if temp_script_path and os.path.exists(temp_script_path):
-                    os.remove(temp_script_path)
-                    
-        except Exception as e:
-            self.error.emit(str(self.input_path), f"Error running segmentation: {str(e)}")
-    
-class PostprocessWorker(QThread):
-    """Worker thread for running postprocessing"""
-    finished = pyqtSignal(str, str)  # folder_path, message
-    error = pyqtSignal(str, str)     # folder_path, error_message
-    progress = pyqtSignal(str, str)  # folder_path, status_update
-
-    def __init__(self, input_path, robot_name, species="arabidopsis", alpha_parameter=0.9, conda_env="ChronoRoot"):
-        super().__init__()
-        self.input_path = Path(input_path)
-        self.robot_name = robot_name
-        self.species = species
-        self.alpha_parameter = alpha_parameter
-        self.conda_env = conda_env
-        self.seg_folder = self.input_path / 'Segmentation'
-        self.info_file = self.seg_folder / 'postprocess_info.json'
-
-    def _update_info_file(self, data_to_update):
-        """Helper to read, update, and write the JSON info file."""
-        try:
-            os.makedirs(self.seg_folder, exist_ok=True)
-            info_data = {}
-            if self.info_file.exists():
-                with open(self.info_file, 'r') as f:
-                    info_data = json.load(f)
-                    
-            info_data.update(data_to_update)
-            
-            with open(self.info_file, 'w') as f:
-                json.dump(info_data, f, indent=2)
-        except Exception as e:
-            self.progress.emit(str(self.input_path), f"Warning: Could not write info file: {e}")
-
-    def clean_postprocess_folders(self):
-        """Clean existing postprocess folders"""
-        try:
-            for folder in ['Ensemble', 'Ensemble_color']:
-                folder_path = self.seg_folder / folder
-                if folder_path.exists():
-                    shutil.rmtree(folder_path)
-        except Exception as e:
-            pass
-
-    def run(self):
-        try:
-            folder_name = self.input_path.name
-            self.progress.emit(str(self.input_path), "Starting postprocessing...")
-
-            fold_0_path = self.seg_folder / 'Fold_0'
-            if not fold_0_path.exists():
-                self.error.emit(str(self.input_path), f"Cannot postprocess {folder_name}: No segmentation folder found")
-                return
-
-            seg_files = len(list(fold_0_path.glob('*.png')))
-            if seg_files == 0:
-                self.error.emit(str(self.input_path), f"Cannot postprocess {folder_name}: No segmentation files found")
-                return
-
-            self.clean_postprocess_folders()
-            
-            self._update_info_file({
-                'robot_name': self.robot_name,
-                'species': self.species,
-                'alpha_parameter': self.alpha_parameter,
-                'postprocess_start_time': datetime.now().isoformat(),
-                'folder_path': str(self.input_path),
-                'postprocess_status': 'started'
-            })
-
-            script_dir = Path(__file__).parent.resolve()
-            postprocess_path = script_dir / "postprocess.py"
-            
-            alpha = self.alpha_parameter
-            if not alpha:
-                alpha = 0.85 if self.species == "arabidopsis" else 0.60
-            
-            conda_prefix = f"conda run -n {self.conda_env}"
-            
-            # This command is correct. It runs an existing script,
-            # so it doesn't need a temp file.
-            cmd = f'{conda_prefix} python "{postprocess_path}" "{self.input_path}" --method {self.species} --alpha {alpha} --seg_path Segmentation'
-
-            self.progress.emit(str(self.input_path), "Running postprocessing...")
-            process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, text=True)
-            stdout, stderr = process.communicate()
-
-            if process.returncode == 0:
-                ensemble_path = self.seg_folder / 'Ensemble'
-                output_files = len(list(ensemble_path.glob('*.png'))) if ensemble_path.exists() else 0
-                
-                if output_files > 0:
-                    self._update_info_file({
-                        'postprocess_status': 'completed',
-                        'postprocess_completion_time': datetime.now().isoformat()
-                    })
-                    self.finished.emit(str(self.input_path),
-                                     f"Postprocessing completed for {folder_name} ({self.species}, α={alpha}): {output_files} files")
-                else:
-                    self.error.emit(str(self.input_path), f"Postprocessing failed for {folder_name}: No output files generated")
+            if rc == 0:
+                self.finished.emit(str(self.input_path), f"{op_type} complete: {folder_name}")
             else:
-                error_msg = f"Postprocessing failed for {folder_name}: {stderr[:300]}"
-                self.error.emit(str(self.input_path), error_msg)
+                self.error.emit(str(self.input_path), f"Error (Code {rc}) - Check log above")
 
         except Exception as e:
-            self.error.emit(str(self.input_path), f"Error running postprocessing: {str(e)}")
+            self.error.emit(str(self.input_path), f"System Error: {str(e)}")
+            
+    def stop(self):
+        """Force kills the subprocess group safely."""
+        self._is_killed = True
+        if self.process:
+            try:
+                import signal
+                os.killpg(self.process.pid, signal.SIGTERM)
+            except Exception as e:
+                self.error.emit(str(self.input_path), f"Failed to terminate process: {str(e)}")
+                self.process.terminate()
+        self._mark_metadata_terminated()
+        self.finished.emit(str(self.input_path), "Process terminated by user.")
+
+    def _mark_metadata_terminated(self):
+        """Writes 'Error: Terminated' to the metadata file."""
+        meta_file = self.input_path / 'Segmentation' / 'segmentation_metadata.json'
+        
+        # We only want to edit the file if it already exists
+        if not meta_file.exists():
+            return
+
+        try:
+            with open(meta_file, 'r') as f:
+                data = json.load(f)
+            
+            if data['segmentation_status'] == "Success":
+                data['postprocessing_status'] = "Error: Terminated"
+            else:
+                data['segmentation_status'] = "Error: Terminated"
+
+            with open(meta_file, 'w') as f:
+                json.dump(data, f, indent=4)
+                
+        except Exception as e:
+            self.error.emit(str(self.input_path), f"Failed to mark termination in metadata: {str(e)}")
+
 
 class nnUNetMonitorUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.robots = {}  # robot_name -> {path: str, folders: dict}
-        self.folder_data = {}  # folder_path -> data dict
-        self.processing_queue = []  # Simple list for serial processing
-        self.alpha_parameter = 0.9  # Default alpha value
-        self.conda_env = "ChronoRoot"  # Default conda environment
-        self.fast_mode = False  # Default fast mode setting
-        self.species = "arabidopsis"  # Default species
+        # State
+        self.robots = {}  
+        self.robot_paths = {} 
+        self.folder_data = {}
+        self.processing_queue = []
+        self.current_worker = None
         
-        self.current_segmentation_worker = None
-        self.current_postprocess_worker = None
+        # Configuration Defaults
+        self.alpha_parameter = 0.85
+        self.conda_env = "ChronoRoot"
+        self.fast_mode = False
+        self.species = "arabidopsis"
         
         self.init_ui()
         self.load_settings()
         self.setup_timer()
         
-        self.table_cache = {} 
-        
     def init_ui(self):
         self.setWindowTitle("nnUNet Segmentation Monitor")
-        self.setGeometry(100, 100, 1200, 600)
+        self.setGeometry(100, 100, 1400, 600) 
         
-        # Main widget and layout
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
         
-        # Header section
+        # --- Header ---
         header_layout = QHBoxLayout()
         
-        # Load robot button
         self.load_button = QPushButton("Load Robot")
+        self.load_button.setToolTip("Select and load one or more robot folders to monitor")
         self.load_button.clicked.connect(self.load_robot)
-        self.load_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                padding: 10px;
-                font-size: 14px;
-                font-weight: bold;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
+        self.load_button.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; padding: 6px; font-weight: bold; }")
         
-        # Status labels
+        # New: Remove Robot Button
+        self.remove_robot_button = QPushButton("Remove Robot")
+        self.remove_robot_button.setToolTip("Unload the currently filtered robot from the view") 
+        self.remove_robot_button.clicked.connect(self.remove_robot)
+        self.remove_robot_button.setStyleSheet("QPushButton { background-color: #607D8B; color: white; padding: 6px;}")
+
         self.robot_count_label = QLabel("Robots: 0")
         self.queue_info_label = QLabel("Queue: 0 | Processing: None")
         
-        # Alpha parameter button (updated with loaded value)
         self.alpha_button = QPushButton(f"Alpha: {self.alpha_parameter}")
+        self.alpha_button.setToolTip("Click to adjust the Alpha parameter for postprocessing") 
         self.alpha_button.clicked.connect(self.set_alpha_parameter)
-        self.alpha_button.setStyleSheet("background-color: #2196F3; color: white;")
-        
-        # Conda environment button (updated with loaded value)
+        self.alpha_button.setStyleSheet("QPushButton { background-color: #2196F3; color: white;}")
+
         self.conda_button = QPushButton(f"Conda: {self.conda_env}")
+        self.conda_button.setToolTip("Set the Conda environment name to be used for segmentation")
         self.conda_button.clicked.connect(self.set_conda_env)
-        self.conda_button.setStyleSheet("background-color: #4CAF50; color: white;")
         
-        # Fast mode checkbox (replaces nnUNet path)
         self.fast_mode_checkbox = QCheckBox("Fast Mode")
-        self.fast_mode_checkbox.setChecked(self.fast_mode)
-        self.fast_mode_checkbox.setToolTip("Disable test-time augmentation for faster processing")
+        self.fast_mode_checkbox.setToolTip("Enable fast mode (by disabling test-time augmentations)")
         self.fast_mode_checkbox.stateChanged.connect(self.update_fast_mode)
-        layout.addWidget(self.fast_mode_checkbox)
+
+        # New: Hide Empty Folders Checkbox
+        self.hide_empty_checkbox = QCheckBox("Hide Empty Folders")
+        self.hide_empty_checkbox.setToolTip("Hide folders that contain no images or data")
+        self.hide_empty_checkbox.stateChanged.connect(self.refresh_data) 
         
-        # Species selection
-        layout.addWidget(QLabel("Species:"))
         self.species_combo = QComboBox()
-        self.species_combo.addItems(["arabidopsis", "tomato"])
-        self.species_combo.setCurrentText(self.species)
+        self.species_combo.addItems(get_available_models() or ["No models found"])
         self.species_combo.currentTextChanged.connect(self.update_species)
-        layout.addWidget(self.species_combo)
         
-        # Queue control button
         self.clear_queue_button = QPushButton("Clear Queue")
+        self.clear_queue_button.setToolTip("Remove all pending tasks from the processing queue") 
         self.clear_queue_button.clicked.connect(self.clear_queue)
-        self.clear_queue_button.setStyleSheet("background-color: #f44336; color: white;")
+        self.clear_queue_button.setStyleSheet("QPushButton { background-color: #f44336; color: white;}")
         
-        # Manual refresh button
-        self.manual_refresh_button = QPushButton("Refresh Now")
-        self.manual_refresh_button.clicked.connect(self.manual_refresh)
-        self.manual_refresh_button.setStyleSheet("background-color: #9C27B0; color: white;")
-        
-        # Auto-refresh toggle
-        self.auto_refresh_button = QPushButton("Auto-Refresh: ON")
-        self.auto_refresh_button.clicked.connect(self.toggle_auto_refresh)
         self.auto_refresh_enabled = True
         
-        header_layout.addWidget(self.load_button)
-        header_layout.addWidget(self.robot_count_label)
-        header_layout.addWidget(QLabel("|"))
-        header_layout.addWidget(self.queue_info_label)
-        header_layout.addWidget(self.alpha_button)
-        header_layout.addWidget(self.species_combo)
-        header_layout.addWidget(self.fast_mode_checkbox)
-        header_layout.addWidget(self.clear_queue_button)
+        header_items = [
+            self.load_button, self.remove_robot_button, 
+            self.robot_count_label, QLabel("|"), self.queue_info_label,
+            self.alpha_button, QLabel("Model:"), self.species_combo, 
+            self.fast_mode_checkbox, self.hide_empty_checkbox,
+            self.clear_queue_button, self.conda_button
+        ]
+        for item in header_items:
+            header_layout.addWidget(item) if isinstance(item, QWidget) else None
         header_layout.addStretch()
-        header_layout.addWidget(self.manual_refresh_button)
-        header_layout.addWidget(self.auto_refresh_button)
-        header_layout.addWidget(self.conda_button)
-        
         layout.addLayout(header_layout)
         
-        # Filter section
+        # --- Filters ---
         filter_layout = QHBoxLayout()
-        
         self.robot_filter = QComboBox()
         self.robot_filter.addItem("All Robots")
         self.robot_filter.currentTextChanged.connect(self.update_table)
         
         self.status_filter = QComboBox()
         self.status_filter.addItems(["All Status", "Not Started", "Queued", "Segmenting", 
-                                    "Segmented", "Postprocessing", "Complete", "Error"])
+                                    "Stalled", "Segmented", "Postprocessing", 
+                                    "Complete", "Different Alpha", "Different Model", "Error"])
         self.status_filter.currentTextChanged.connect(self.update_table)
         
-        filter_layout.addWidget(QLabel("Filter by Robot:"))
+        filter_layout.addWidget(QLabel("Filter Robot:"))
         filter_layout.addWidget(self.robot_filter)
-        filter_layout.addWidget(QLabel("Filter by Status:"))
+        filter_layout.addWidget(QLabel("Filter Status:"))
         filter_layout.addWidget(self.status_filter)
         filter_layout.addStretch()
-        
         layout.addLayout(filter_layout)
         
-        # Table for folder information
+        # --- Table ---
         self.table = QTableWidget()
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(10) 
+        # Updated Headers to match new logic
         self.table.setHorizontalHeaderLabels([
-            "Robot", "Folder Name", "Total Images", "Segmentation %", 
-            "Postprocess %", "Status", "Alpha Used", "Actions", "Delete"
+            "Robot", "Folder Name", "Images", "Segmentation %", 
+            "Postprocessing %", "Model - Alpha", "Status", "Actions", 
+            "Remove View", "Clear Results"
         ])
-        
-        # Make table read-only
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         
-        # Set column widths
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.Fixed)
-        header.setSectionResizeMode(4, QHeaderView.Fixed)
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
-        
-        self.table.setColumnWidth(3, 120)
-        self.table.setColumnWidth(4, 120)
+        header.setSectionResizeMode(0, QHeaderView.Stretch) # Robot Name stretches
+        self.table.setColumnWidth(1, 100)  # Folder Name
+        self.table.setColumnWidth(2, 60)  # Images
+        self.table.setColumnWidth(3, 120)  # Segmentation %
+        self.table.setColumnWidth(4, 120)  # Postprocessing %
+        self.table.setColumnWidth(5, 120) # Model - Alpha
+        self.table.setColumnWidth(6, 140) # Status
+        self.table.setColumnWidth(7, 320) # Actions (Wide for text)
+        self.table.setColumnWidth(8, 100) # Remove View
+        self.table.setColumnWidth(9, 100) # Clear Results
         
         layout.addWidget(self.table)
         
-        # Log section
+        # --- Log ---
         self.log_text = QTextEdit()
-        self.log_text.setMaximumHeight(120)
-        self.log_text.setStyleSheet("background-color: #f0f0f0; font-family: monospace; font-size: 10px;")
-        layout.addWidget(QLabel("Log:"))
+        self.log_text.setMaximumHeight(100)
+        self.log_text.setStyleSheet("QTextEdit { background-color: #f0f0f0; font-family: monospace; font-size: 10px;}")
         layout.addWidget(self.log_text)
         
+        # --- End of UI Setup ---    
+        return 
+    
+    # --- Logic ---
+    
+    def analyze_folder(self, folder_path, robot_name):
+        """
+        Analyzes folder status.
+        Legacy paths: Segmentation/Fold_0 (Seg), Segmentation/Ensemble (Post)
+        """
+        data = {
+            'path': folder_path, 
+            'robot': robot_name, 
+            'total_images': 0,
+            'seg_progress': 0,
+            'post_progress': 0,
+            'status': 'Not Started', 
+            'stored_alpha': None,
+            'model': None
+        }
+        
+        # --- 1. Determine Image Count & Metadata ---
+        meta_file = Path(folder_path) / 'Segmentation' / 'segmentation_metadata.json'
+        meta = None
+        
+        # Try reading metadata first
+        if meta_file.exists():
+            try:
+                with open(meta_file, 'r') as f:
+                    meta = json.load(f)
+                    data['total_images'] = meta.get('n_images', 0)                    
+                    data['stored_alpha'] = meta.get('alpha_used', None)
+                    data['model'] = meta.get('model', None)
+            except: pass
+
+        # Fallback to file count
+        if data['total_images'] == 0:
+            pngs = glob.glob(os.path.join(folder_path, '*.png'))
+            data['total_images'] = len(pngs)
+
+        if data['total_images'] == 0:
+            data['status'] = 'No Images'
+            return data
+
+        # --- 2. Determine Status ---
+        
+        # Check if currently queued/running
+        is_queued = any(item['path'] == folder_path for item in self.processing_queue)
+        is_running = (self.current_worker is not None and 
+                      os.path.abspath(self.current_worker.input_path) == os.path.abspath(folder_path))
+
+        if is_running:            
+            if self.current_worker.postprocess_only:
+                data['status'] = 'Postprocessing'
+                data['seg_progress'] = 100.0
+                if meta:
+                     data['post_progress'] = meta.get('postprocessing_progress', 0.0)
+                else:
+                     data['post_progress'] = 0.0
+            else:
+                data['status'] = 'Segmenting'
+                if meta:
+                    data['seg_progress'] = meta.get('segmentation_progress', 0.0)
+                    if meta.get('segmentation_status') == 'Success':
+                         data['seg_progress'] = 100.0
+                else:
+                    data['seg_progress'] = 0.0
+                data['post_progress'] = 0.0
+
+            data['stored_alpha'] = self.current_worker.alpha
+            data['model'] = self.current_worker.model
+            return data
+        
+        if is_queued:
+            data['status'] = 'Queued'
+            data['post_progress'] = 0.0
+            for item in self.processing_queue:
+                if item['path'] == folder_path:
+                    data['stored_alpha'] = item['alpha']
+                    data['model'] = item['model']
+                    if item['operation'] == 'postprocess':
+                        data['seg_progress'] = 100.0
+                    elif item['operation'] == 'resume':
+                        data['seg_progress'] = meta.get('segmentation_progress', 0.0) if meta else 0.0
+                    else:
+                        data['seg_progress'] = 0.0
+            return data
+        
+        elif meta:
+            segmentation_status = meta.get('segmentation_status', 'Not started')
+            last_segmentation_time = meta.get('last_segmentation_time', None)
+            segmentation_progress = meta.get('segmentation_progress', 0.0)
+            segmentation_average_time = meta.get('segmentation_average_time_per_image', 0)
+            
+            postprocessing_status = meta.get('postprocessing_status', 'Not started')
+            last_postprocessing_time = meta.get('last_postprocessing_time', None)
+            postprocessing_progress = meta.get('postprocessing_progress', 0.0)
+            postprocessing_average_time = meta.get('postprocessing_average_time_per_image', 0)
+            
+            data['stored_alpha'] = meta.get('alpha_used', None)
+            data['model'] = meta.get('model', None)
+            
+            # Check for errors first
+            if "Error" in segmentation_status:
+                data['status'] = 'Error (Seg)'
+                data['seg_progress'] = segmentation_progress
+                data['post_progress'] = 0.0
+                return data
+            if "Error" in postprocessing_status:
+                data['status'] = 'Error (Post)'
+                data['seg_progress'] = 100.0
+                data['post_progress'] = postprocessing_progress
+                return data
+            
+            if segmentation_status == "Started":
+                current_time = datetime.now()
+                if last_segmentation_time:
+                    last_time = datetime.strptime(last_segmentation_time, "%Y-%m-%d %H:%M:%S")
+                    delta = (current_time - last_time).total_seconds()
+                    if delta > segmentation_average_time  * 10: 
+                        data['status'] = 'Stalled'
+                        data['seg_progress'] = segmentation_progress
+                        data['post_progress'] = 0.0
+                    else:
+                        data['status'] = 'Segmenting'
+                        data['seg_progress'] = segmentation_progress
+                        data['post_progress'] = 0.0
+                else:
+                    # check segmentation date
+                    segmentation_date = meta['segmentation_date']
+                    # failsafe if it is from the last 5 minutes, assume running
+                    seg_time = datetime.strptime(segmentation_date, "%Y-%m-%d %H:%M:%S")
+                    delta = (current_time - seg_time).total_seconds()
+                    if delta < 300:
+                        data['status'] = 'Segmenting'
+                        data['seg_progress'] = segmentation_progress
+                        data['post_progress'] = 0.0
+                    else:
+                        data['status'] = 'Stalled'
+                        data['seg_progress'] = segmentation_progress
+                        data['post_progress'] = 0.0
+                return data
+            
+            elif segmentation_status == "Success" and postprocessing_status == "Started":
+                current_time = datetime.now()
+                if last_postprocessing_time:
+                    last_time = datetime.strptime(last_postprocessing_time, "%Y-%m-%d %H:%M:%S")
+                    delta = (current_time - last_time).total_seconds()
+                    if delta > postprocessing_average_time * 10:
+                        data['status'] = 'Stalled'
+                        data['seg_progress'] = 100.0
+                        data['post_progress'] = postprocessing_progress
+                    else:
+                        data['status'] = 'Postprocessing'
+                        data['seg_progress'] = 100.0
+                        data['post_progress'] = postprocessing_progress
+                else:
+                    # check postprocessing date
+                    postprocessing_date = meta['postprocessing_date']
+                    # failsafe if it is from the last 30 seconds, assume running
+                    post_time = datetime.strptime(postprocessing_date, "%Y-%m-%d %H:%M:%S")
+                    delta = (current_time - post_time).total_seconds()
+                    if delta < 30:
+                        data['status'] = 'Postprocessing'
+                        data['seg_progress'] = 100.0
+                        data['post_progress'] = postprocessing_progress
+                    else:
+                        data['status'] = 'Error (Post)'
+                        data['seg_progress'] = 100.0
+                        data['post_progress'] = postprocessing_progress
+                
+                return data
+            
+            if not is_running and segmentation_status == "Success" and postprocessing_status == "Success":
+                data['seg_progress'] = 100.0
+                data['post_progress'] = 100.0
+                data['status'] = "Complete"
+                
+                if data['stored_alpha'] is not None and abs(data['stored_alpha'] - self.alpha_parameter) > 0.01:
+                    data['status'] = 'Different Alpha'
+                    if data['model'] is not None and data['model'] != self.species:
+                        data['status'] = 'Different Model and Alpha'
+                elif data['model'] is not None and data['model'] != self.species:
+                    data['status'] = 'Different Model'
+                
+                return data
+            
+        else:
+            # --- Legacy Fallback Logic ---
+            # Check for Fold_0 (Segmentation)
+            fold0_path = os.path.join(folder_path, "Segmentation", "Fold_0")
+            seg_count = len(glob.glob(os.path.join(fold0_path, "*.png"))) if os.path.exists(fold0_path) else 0
+            
+            # Check for Ensemble (Postprocessing)
+            ensemble_path = os.path.join(folder_path, "Segmentation", "Ensemble")
+            post_count = len(glob.glob(os.path.join(ensemble_path, "*.png"))) if os.path.exists(ensemble_path) else 0
+            
+            # Legacy Status Determination
+            if post_count >= data['total_images']:
+                data['status'] = "Complete (Legacy)"
+                data['seg_progress'] = 100.0
+                data['post_progress'] = 100.0
+            elif seg_count >= data['total_images']:
+                data['status'] = "Segmented (Legacy)"
+                data['seg_progress'] = 100.0
+                data['post_progress'] = int((post_count / data['total_images']) * 100)
+            elif seg_count > 0:
+                data['status'] = "Incomplete (Legacy)"
+                data['seg_progress'] = int((seg_count / data['total_images']) * 100)
+                data['post_progress'] = 0.0
+            else:
+                data['status'] = 'Not Started'
+
+        return data
+
+    def update_table(self):
+        self.table.setUpdatesEnabled(False)
+        try:
+            """Renders the analyzed folder data into the table."""
+            filtered_rows = []
+            robot_filter = self.robot_filter.currentText()
+            status_filter = self.status_filter.currentText()
+            
+            for key, data in self.folder_data.items():
+                if robot_filter != "All Robots" and data['robot'] != robot_filter:
+                    continue
+                
+                s = data['status']
+                if status_filter != "All Status":
+                    if status_filter == "Error" and "Error" not in s: continue
+                    elif status_filter == "Complete" and "Complete" not in s: continue
+                    elif status_filter == "Queued" and s != "Queued": continue
+                    elif status_filter == "Stalled" and s != "Stalled": continue
+                    elif status_filter == "Different Model and Alpha" and s != "Different Model and Alpha": continue
+                    elif status_filter == "Different Alpha" and s != "Different Alpha": continue
+                    elif status_filter == "Different Model" and s != "Different Model": continue
+                    elif status_filter not in ["Error", "Complete"] and s != status_filter: continue
+                
+                filtered_rows.append(data)
+
+            self.table.setRowCount(len(filtered_rows))
+
+            # Status Color Map
+            colors = {
+                'Complete': QColor(200, 255, 200),         
+                'Complete (Legacy)': QColor(210, 255, 210),
+                'Segmented': QColor(200, 230, 255),
+                'Segmented (Legacy)': QColor(200, 230, 255),     
+                'Segmenting': QColor(255, 255, 224),       
+                'Postprocessing': QColor(230, 200, 255),   
+                'Queued': QColor(255, 255, 200),           
+                'Stalled': QColor(255, 200, 100),          
+                'Different Alpha': QColor(255, 240, 150), 
+                'Different Model': QColor(255, 240, 150),
+                'Different Model and Alpha': QColor(255, 240, 150),
+                'Error (Seg)': QColor(255, 200, 200),      
+                'Error (Post)': QColor(255, 200, 200),
+                'Incomplete (Legacy)': QColor(255, 220, 180),  
+                'No Images': QColor(240, 240, 240)         
+            }
+
+            for row, data in enumerate(filtered_rows):
+                self.table.setItem(row, 0, QTableWidgetItem(data['robot']))
+                self.table.setItem(row, 1, QTableWidgetItem(os.path.basename(data['path'])))
+                self.table.setItem(row, 2, QTableWidgetItem(str(data['total_images'])))
+                
+                # Segmentation %
+                p_bar = QProgressBar()
+                p_bar.setValue(int(data['seg_progress']))
+                p_bar.setAlignment(Qt.AlignCenter)
+                self.table.setCellWidget(row, 3, p_bar)
+
+                # Postprocessing %
+                p_bar_post = QProgressBar()
+                p_bar_post.setValue(int(data['post_progress']))
+                p_bar_post.setAlignment(Qt.AlignCenter)
+                self.table.setCellWidget(row, 4, p_bar_post)
+
+                # Model - Alpha
+                alpha = f"{data['stored_alpha']:.2f}" if data['stored_alpha'] is not None else "Unknown"
+                model = f"{data['model']}" if 'model' in data and data['model'] is not None else "N/A"
+                ma_item = QTableWidgetItem(f"{model} - {alpha}")
+                ma_item.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(row, 5, ma_item)
+                
+                # Status
+                s_item = QTableWidgetItem(data['status'])
+                bg_color = colors.get(data['status'], QColor(255, 255, 255))
+                s_item.setBackground(bg_color)
+                if data['status'] == 'Stalled': s_item.setForeground(QColor(200, 0, 0)) # Red text for visibility
+                self.table.setItem(row, 6, s_item)
+
+                # Col 6: Context Actions
+                self._set_row_action(row, data)
+                
+                # Col 7: Remove from View (UI only)
+                rm_btn = QPushButton("Remove")
+                rm_btn.setToolTip("Stop monitoring this folder (does not delete files)") 
+                rm_btn.setFixedSize(80, 25)
+                rm_btn.setStyleSheet("QPushButton { color: #555;}")
+                rm_btn.clicked.connect(lambda _, p=data['path']: self.remove_folder_from_ui(p))
+                
+                w_rm = QWidget()
+                l_rm = QHBoxLayout(w_rm)
+                l_rm.setContentsMargins(0, 0, 0, 0) 
+                l_rm.setAlignment(Qt.AlignCenter)
+                l_rm.addWidget(rm_btn)
+                self.table.setCellWidget(row, 8, w_rm)
+
+                # Col 8: Clear Results (Disk deletion)
+                del_btn = QPushButton("Clear Results")
+                del_btn.setToolTip("Permanently delete the 'Segmentation' output folder")
+                del_btn.setFixedSize(90, 25)
+                del_btn.setStyleSheet("QPushButton { background-color: #ffebee; border: 1px solid #ffcdd2; color: #c62828; }")
+                del_btn.clicked.connect(lambda _, p=data['path']: self.confirm_clear_results(p))
+                
+                w_del = QWidget()
+                l_del = QHBoxLayout(w_del)
+                l_del.setContentsMargins(0, 0, 0, 0) 
+                l_del.setAlignment(Qt.AlignCenter)  
+                l_del.addWidget(del_btn)
+                self.table.setCellWidget(row, 9, w_del)
+        finally:
+            self.table.setUpdatesEnabled(True)
+    
+    def _set_row_action(self, row, data):
+        """Sets action buttons, supporting dual-choice for configuration mismatches."""
+        status = data['status']
+        path = data['path']
+        robot = data['robot']
+        alpha = self.alpha_parameter
+        model = self.species
+        
+        # Container Widget
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5) 
+        layout.setAlignment(Qt.AlignCenter)
+        
+        buttons_to_add = []
+
+        if status == 'Different Model' or status == 'Different Model and Alpha':
+            # Choice 1: Full Rerun (Update Model + Alpha)
+            btn_seg = QPushButton("Rerun Pipeline")
+            btn_seg.setToolTip(f"Rerun Segmentation ({model}) & Postprocessing ({alpha})")
+            btn_seg.setFixedSize(110, 25)
+            btn_seg.setStyleSheet("QPushButton { background-color: #FF5722; color: white; font-weight: bold;}")
+            btn_seg.clicked.connect(lambda: self.add_to_queue(path, robot, 'both', model, alpha))
+            buttons_to_add.append(btn_seg)
+            
+            # Choice 2: Postprocess Only (Ignore Model, Update Alpha)
+            btn_post = QPushButton("Postproc Only")
+            btn_post.setToolTip(f"Keep existing masks, rerun postprocessing with alpha {alpha}")
+            btn_post.setFixedSize(110, 25)
+            btn_post.setStyleSheet("QPushButton { background-color: #FFC107; color: black;}")
+            btn_post.clicked.connect(lambda: self.add_to_queue(path, robot, 'postprocess', model, alpha))
+            buttons_to_add.append(btn_post)
+
+        # SCENARIO: Alpha Mismatch Only (Model is correct)
+        elif status == 'Different Alpha':
+            btn = QPushButton("Update Alpha")
+            btn.setToolTip(f"Rerun postprocessing with new alpha: {alpha}")
+            btn.setFixedSize(225, 25) 
+            btn.setStyleSheet("QPushButton { background-color: #FFEB3B; color: black;}")
+            btn.clicked.connect(lambda: self.add_to_queue(path, robot, 'postprocess', model, alpha))
+            buttons_to_add.append(btn)
+
+        # SCENARIO: Stalled
+        elif status == 'Stalled':
+            btn = QPushButton("Resume")
+            btn.setToolTip("Resume segmentation from where it stalled") 
+            btn.setFixedSize(225, 25)
+            btn.setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold;}")
+            btn.clicked.connect(lambda: self.add_to_queue(path, robot, 'resume', model, alpha))
+            buttons_to_add.append(btn)
+
+        # SCENARIO: Standard Start 
+        elif status in ['Not Started']:
+            btn = QPushButton("Start Pipeline")
+            btn.setToolTip(f"Run full segmentation ({model}) and postprocessing ({alpha})") 
+            btn.setFixedSize(225, 25)
+            btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold;}")
+            btn.clicked.connect(lambda: self.add_to_queue(path, robot, 'both', model, alpha))
+            buttons_to_add.append(btn)
+            
+        # SCENARIO: Error in Segmentation, allow full rerun or resume
+        elif status == 'Error (Seg)':
+            btn_full = QPushButton("Restart Pipeline")
+            btn_full.setToolTip(f"Rerun full segmentation ({model}) & postprocessing ({alpha})")
+            btn_full.setFixedSize(110, 25)
+            btn_full.setStyleSheet("QPushButton { background-color: #F44336; color: white; font-weight: bold;}")
+            btn_full.clicked.connect(lambda: self.add_to_queue(path, robot, 'both', model, alpha))
+            buttons_to_add.append(btn_full)
+            
+            btn_resume = QPushButton("Resume")
+            btn_resume.setToolTip("Resume segmentation from last correctly processed image")
+            btn_resume.setFixedSize(110, 25)
+            btn_resume.setStyleSheet("QPushButton { background-color: #FF5722; color: white;}")
+            btn_resume.clicked.connect(lambda: self.add_to_queue(path, robot, 'resume', model, alpha))
+            buttons_to_add.append(btn_resume)
+        
+        # SCENARIO: Standard Rerun
+        elif status in ['Segmented', 'Segmented (Legacy)', 'Error (Post)', 'Complete (Legacy)']:
+            btn = QPushButton("Rerun Postprocessing")
+            btn.setToolTip(f"Re-calculate postprocessing using Alpha {alpha}")
+            btn.setFixedSize(225, 25)
+            btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white;}")
+            btn.clicked.connect(lambda: self.add_to_queue(path, robot, 'postprocess', model, alpha))
+            buttons_to_add.append(btn)
+
+        # SCENARIO: Queued
+        elif status == 'Queued':
+            btn = QPushButton("Cancel")
+            btn.setToolTip("Remove this item from the processing queue")
+            btn.setFixedSize(225, 25)
+            btn.clicked.connect(lambda: self.remove_from_queue(path))
+            buttons_to_add.append(btn)
+
+        # SCENARIO: Running
+        elif 'Processing' in status or 'Segmenting' in status or 'Postprocessing' in status:
+            # if running locally allow to kill
+            if (self.current_worker and os.path.abspath(self.current_worker.input_path) == os.path.abspath(path)):
+                btn = QPushButton("Kill Process")
+                btn.setToolTip("Force stop the currently running process")
+                btn.setFixedSize(225, 25)
+                btn.setStyleSheet("QPushButton { background-color: #f44336; color: white;}")
+                btn.clicked.connect(lambda: self.current_worker.stop())
+                buttons_to_add.append(btn)
+            else:
+                lbl = QLabel("Running...")
+                lbl.setAlignment(Qt.AlignCenter)
+                self.table.setCellWidget(row, 7, lbl) 
+                self.table.setItem(row, 7, None)
+                return
+
+        # --- Render ---
+        if buttons_to_add:
+            self.table.setItem(row, 7, None) 
+            for btn in buttons_to_add:
+                layout.addWidget(btn)
+            self.table.setCellWidget(row, 7, container)
+        else:
+            self.table.removeCellWidget(row, 7)
+            item = QTableWidgetItem("—")
+            item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 7, item)
+            
+    # --- Standard Boilerplate methods (Load, Save, Queue, etc.) ---
+
     def setup_timer(self):
-        """Setup timer with less frequent updates when idle"""
         self.timer = QTimer()
         self.timer.timeout.connect(self.timer_update)
-        
-        # Use different intervals based on activity
-        if self.current_segmentation_worker or self.current_postprocess_worker or self.processing_queue:
-            self.timer.start(500)  # 0.5 seconds when active
-        else:
-            self.timer.start(2000)  # 2 seconds when idle
-        
+        self.timer.start(2000)
+
     def timer_update(self):
-        """Handle both refresh and queue processing"""
-        # Adjust timer frequency based on activity
-        is_active = bool(self.current_segmentation_worker or self.current_postprocess_worker or self.processing_queue)
-        current_interval = self.timer.interval()
-        
-        if is_active and current_interval != 500:
-            self.timer.setInterval(500)
-        elif not is_active and current_interval != 2000:
-            self.timer.setInterval(2000)
+        # Throttle logic: fast update if working, slow if idle
+        is_working = bool(self.current_worker or self.processing_queue)
+        self.timer.setInterval(1000 if is_working else 3000)
         
         if self.auto_refresh_enabled:
             self.refresh_data()
         self.process_queue()
-        
-    def manual_refresh(self):
-        """Manual refresh of all data"""
-        self.refresh_data()
-        self.log_message("Manual refresh completed")
-        
-    def set_alpha_parameter(self):
-        """Set the alpha parameter for postprocessing"""
-        value, ok = QInputDialog.getDouble(self, 'Alpha Parameter', 
-                                         'Enter alpha value for postprocessing (0.0-1.0):', 
-                                         self.alpha_parameter, 0.0, 1.0, 2)
-        if ok:
-            self.alpha_parameter = value
-            self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
-            self.save_settings()
-            self.log_message(f"Alpha parameter set to {self.alpha_parameter}")
-    
-    def set_conda_env(self):
-        """Set the conda environment name"""
-        env_name, ok = QInputDialog.getText(self, 'Conda Environment', 
-                                          'Enter conda environment name:', 
-                                          text=self.conda_env)
-        if ok and env_name.strip():
-            self.conda_env = env_name.strip()
-            self.conda_button.setText(f"Conda: {self.conda_env}")
-            self.save_settings()
-            self.log_message(f"Conda environment set to '{self.conda_env}'")
-    
-    def update_species(self, text):
-        """Update the species setting"""
-        self.species = text
-        # Update alpha default based on species
-        if self.species == "arabidopsis":
-            self.alpha_parameter = 0.85
-            self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
-        else:  # tomato
-            self.alpha_parameter = 0.60
-            self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
-        self.save_settings()
-        self.log_message(f"Species set to: {self.species}")
-    
-    def update_fast_mode(self, state):
-        """Update fast mode setting"""
-        self.fast_mode = (state == Qt.Checked)
-        mode_str = "enabled" if self.fast_mode else "disabled"
-        self.save_settings()
-        self.log_message(f"Fast mode {mode_str}")
-        
-    def save_settings(self):
-        """Save configuration to file"""
-        try:
-            config = {
-                'conda_env': self.conda_env,
-                'alpha': self.alpha_parameter,
-                'species': self.species,
-                'fast_mode': self.fast_mode
-            }
-            with open('config.json', 'w') as f:
-                json.dump(config, f, indent=2)
-        except Exception as e:
-            self.log_message(f"Failed to save config: {str(e)}")
 
-    def load_settings(self):
-        """Load configuration from file"""
-        if os.path.exists('config.json'):
-            with open('config.json', 'r') as f:
-                config = json.load(f)
-                self.conda_env = config.get('conda_env', 'ChronoRoot')
-                self.species = config.get('species', 'arabidopsis')
-                self.alpha_parameter = config.get('alpha', 0.85)
-                self.fast_mode = config.get('fast_mode', False)
-                
-                # Update UI elements
-                self.conda_button.setText(f"Conda: {self.conda_env}")
-                self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
-                self.species_combo.setCurrentText(self.species)
-                self.fast_mode_checkbox.setChecked(self.fast_mode)
-                
-                # Scan loaded robots
-                for robot_name in self.robots.keys():
-                    self.scan_robot_folders(robot_name)
-                    self.log_message(f"Loaded robot: {robot_name}")
-            
-    def toggle_auto_refresh(self):
-        """Toggle auto-refresh on/off"""
-        self.auto_refresh_enabled = not self.auto_refresh_enabled
-        if self.auto_refresh_enabled:
-            self.auto_refresh_button.setText("Auto-Refresh: ON")
-            self.auto_refresh_button.setStyleSheet("background-color: #4CAF50; color: white;")
-            self.log_message("Auto-refresh enabled")
-        else:
-            self.auto_refresh_button.setText("Auto-Refresh: OFF")
-            self.auto_refresh_button.setStyleSheet("background-color: #f44336; color: white;")
-            self.log_message("Auto-refresh disabled")
-    
-    def load_segmentation_info(self, folder_path):
-        """Load segmentation info from file"""
-        try:
-            info_file = os.path.join(folder_path, 'Segmentation', 'segmentation_info.json')
-            if os.path.exists(info_file):
-                with open(info_file, 'r') as f:
-                    return json.load(f)
-        except:
-            pass
-        return None
-
-    def load_postprocess_info(self, folder_path):
-        """Load postprocessing info from file"""
-        try:
-            info_file = os.path.join(folder_path, 'Segmentation', 'postprocess_info.json')
-            if os.path.exists(info_file):
-                with open(info_file, 'r') as f:
-                    return json.load(f)
-        except:
-            pass
-        return None
-    
-    def delete_segmentation_folder(self, folder_path):
-        """Delete the segmentation folder completely"""
-        try:
-            seg_folder = os.path.join(folder_path, 'Segmentation')
-            if os.path.exists(seg_folder):
-                shutil.rmtree(seg_folder)
-                self.log_message(f"Deleted segmentation folder for {os.path.basename(folder_path)}")
-                return True
-        except Exception as e:
-            self.log_message(f"Error deleting segmentation folder: {str(e)}")
-            QMessageBox.warning(self, "Delete Error", f"Could not delete segmentation folder: {str(e)}")
-            return False
-        return True
-    
     def load_robot(self):
-        """Load a new robot folder"""
-        folder_path = QFileDialog.getExistingDirectory(self, "Select Robot Folder")
-        if folder_path:
-            robot_name, ok = QInputDialog.getText(self, 'Robot Name', 
-                                                f'Enter name for robot (default: {os.path.basename(folder_path)}):')
-            if not ok:
-                return
-            if not robot_name:
-                robot_name = os.path.basename(folder_path)
-            
-            # Check if robot already exists
-            if robot_name in self.robots:
-                reply = QMessageBox.question(self, 'Robot Exists', 
-                                           f'Robot "{robot_name}" already exists. Replace?',
-                                           QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-                if reply == QMessageBox.No:
-                    return
-            
-            self.robots[robot_name] = {'path': folder_path, 'folders': {}}
-            self.scan_robot_folders(robot_name)
-            self.update_robot_filter()
-            self.log_message(f"Loaded robot: {robot_name} from {folder_path}")
-    
-    def scan_robot_folders(self, robot_name):
-        """Scan for folders containing images in a specific robot"""
-        if robot_name not in self.robots:
-            return
-            
-        robot_path = self.robots[robot_name]['path']
+        """
+        Opens a custom file dialog allowing multiple folder selection.
+        Always uses the folder name as the Robot Name (no prompts).
+        """
+                
+        # 1. Setup Custom Dialog for Multi-Select
+        dialog = QFileDialog(self, "Select Robot Folder(s)")
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
         
-        try:
-            folders = [f for f in os.listdir(robot_path) 
-                      if os.path.isdir(os.path.join(robot_path, f))]
-            
-            self.robots[robot_name]['folders'] = {}
-            for folder in folders:
-                folder_path = os.path.join(robot_path, folder)
-                full_folder_key = f"{robot_name}::{folder_path}"
-                folder_data = self.analyze_folder(folder_path, robot_name)
-                self.robots[robot_name]['folders'][folder] = folder_data
-                self.folder_data[full_folder_key] = folder_data
-            
-            self.update_table()
-            
-        except Exception as e:
-            self.log_message(f"Error scanning robot {robot_name}: {str(e)}")
-    
-    def analyze_folder(self, folder_path, robot_name):
-        data = {
-            'path': folder_path,
-            'robot': robot_name,
-            'total_images': 0,
-            'segmentation_progress': 0,
-            'postprocess_progress': 0,
-            'status': 'Not Started',
-            'last_error': '',
-            'stored_alpha': None,
-            'needs_re_postprocess': False,
-        }
-        
-        # Count source images (what needs to be segmented)
-        image_extensions = ['*.png']
-        total_images = sum(
-            len(glob.glob(os.path.join(folder_path, ext))) + 
-            len(glob.glob(os.path.join(folder_path, ext.upper())))
-            for ext in image_extensions
-        )
-        data['total_images'] = total_images
-        
-        if total_images == 0:
-            data['status'] = 'No Images'
-            return data
-        
-        # Check if in queue (highest priority)
-        if any(item['path'] == folder_path for item in self.processing_queue):
-            data['status'] = 'Queued'
-            return data
-        
-        # Check filesystem state
-        seg_folder = os.path.join(folder_path, 'Segmentation')
-        
-        if not os.path.exists(seg_folder):
-            data['status'] = 'Not Started'
-            return data
-        
-        # Check for errors
-        error_files = glob.glob(os.path.join(seg_folder, '*.error'))
-        if error_files:
-            data['status'] = 'Error'
-            try:
-                with open(error_files[0], 'r') as f:
-                    data['last_error'] = f.read()
-            except:
-                data['last_error'] = 'Unknown error'
-            return data
-        
-        # Try to load postprocess info if it exists
-        try:
-            postprocess_info_file = os.path.join(seg_folder, 'postprocess_info.json')
-            if os.path.exists(postprocess_info_file):
-                with open(postprocess_info_file, 'r') as f:
-                    post_info = json.load(f)
-                    data['stored_alpha'] = post_info.get('alpha_parameter')
-        except Exception as e:
-            pass  # No postprocess info yet
-        
-        # Count segmentation outputs
-        fold_0_path = os.path.join(seg_folder, 'Fold_0')
-        seg_files = len(glob.glob(os.path.join(fold_0_path, "*.png")))
-        data['segmentation_progress'] = min(100, int((seg_files / data['total_images']) * 100)) if data['total_images'] > 0 else 0
-        
-        # Check if currently segmenting
-        flag = self.current_segmentation_worker and str(self.current_segmentation_worker.input_path) == folder_path
-        if flag or (seg_files < data['total_images']):
-            data['status'] = 'Segmenting'
-            return data
-        
-        # Count postprocess outputs
-        ensemble_path = os.path.join(seg_folder, 'Ensemble')
-        post_files = 0
-        if os.path.exists(ensemble_path):
-            post_files = len(glob.glob(os.path.join(ensemble_path, "*.png")))
-            data['postprocess_progress'] = min(100, int((post_files / data['total_images']) * 100)) if data['total_images'] > 0 else 0
+        # Enable multi-selection in the non-native dialog view
+        for view in dialog.findChildren(QAbstractItemView):
+            view.setSelectionMode(QAbstractItemView.ExtendedSelection)
 
-        flag = self.current_postprocess_worker and str(self.current_postprocess_worker.input_path) == folder_path
-        if flag or (post_files < data['total_images'] and post_files > 0):
-            data['status'] = 'Postprocessing'
-            return data
+        # 2. Execute and Process
+        if dialog.exec_():
+            folder_paths = dialog.selectedFiles()
+            
+            # Filter valid directories
+            folder_paths = [p for p in folder_paths if os.path.isdir(p)]
+            
+            if not folder_paths:
+                return
+
+            loaded_count = 0
+            
+            # 3. Iterate and Load (Same logic for 1 or 100 folders)
+            for folder_path in folder_paths:
+                # Normalize path removes trailing slashes so basename works correctly
+                r_name = os.path.basename(os.path.normpath(folder_path))
                 
-        # Determine if needs re-processing based on alpha
-        if post_files > 0:
-            if data['postprocess_progress'] == 100:
-                data['status'] = 'Complete'
-                
-                # Check if needs re-processing:
-                # 1. No stored alpha = needs reprocessing (old version or failed save)
-                # 2. Different alpha = needs reprocessing
-                if data['stored_alpha'] is None:
-                    data['needs_re_postprocess'] = True  # No record of what alpha was used
-                else:
-                    try:
-                        stored_alpha_float = float(data['stored_alpha'])
-                        if abs(stored_alpha_float - self.alpha_parameter) > 0.001:
-                            data['needs_re_postprocess'] = True
-                    except (ValueError, TypeError):
-                        data['needs_re_postprocess'] = True  # Invalid stored value
-            else:
-                data['status'] = 'Postprocessing'
-        elif seg_files > 0:
-            if data['segmentation_progress'] == 100:
-                data['status'] = 'Segmented'
-            else:
-                data['status'] = 'Segmenting'
-            data['needs_re_postprocess'] = False
-        else:
-            data['status'] = 'Not Started'
-            data['needs_re_postprocess'] = False
+                # Register and Discover
+                self.robots[r_name] = {'path': folder_path}
+                self.discover_robot_paths(r_name)
+                loaded_count += 1
             
-        return data
-    
-    def update_robot_filter(self):
-        """Update robot filter dropdown"""
-        current_selection = self.robot_filter.currentText()
-        self.robot_filter.clear()
-        self.robot_filter.addItem("All Robots")
-        for robot_name in self.robots.keys():
-            self.robot_filter.addItem(robot_name)
+            if loaded_count > 0:
+                self.log_message(f"Loaded {loaded_count} robot(s).")
+                self.update_robot_filter()
+
+    def discover_robot_paths(self, robot_name):
+        """Performs disk discovery (os.listdir) and populates the monitoring list."""
+        if robot_name not in self.robots: return
+        r_path = self.robots[robot_name]['path']
         
-        # Restore selection
-        index = self.robot_filter.findText(current_selection)
-        if index >= 0:
-            self.robot_filter.setCurrentIndex(index)
+        found_paths = set()
+        try:
+            items = os.listdir(r_path)
+            for item in items:
+                full_path = os.path.join(r_path, item)
+                if os.path.isdir(full_path):
+                    found_paths.add(full_path)
+        except Exception as e:
+            self.log_message(f"Discovery Error: {e}")
+            return
+
+        # Initialize or update the checklist
+        self.robot_paths[robot_name] = found_paths
         
-        self.robot_count_label.setText(f"Robots: {len(self.robots)}")
-    
-    def update_table(self):
-        robot_filter = self.robot_filter.currentText()
-        status_filter = self.status_filter.currentText()
+        # Immediately analyze the newly found paths
+        self.scan_robot_folders(robot_name)
         
-        # Filter data
-        filtered_data = []
-        for key, data in self.folder_data.items():
-            if robot_filter != "All Robots" and data['robot'] != robot_filter:
-                continue
-            if status_filter != "All Status" and data['status'] != status_filter:
-                continue
-            filtered_data.append((key, data))
+    def scan_robot_folders(self, robot_name):
+        if robot_name not in self.robot_paths: return
         
-        # Only resize if row count changed
-        if self.table.rowCount() != len(filtered_data):
-            self.table.setRowCount(len(filtered_data))
-            self.table_cache.clear()  # Clear cache on resize
+        paths_to_check = self.robot_paths[robot_name]
+        data_changed = False # Flag to track changes
         
-        # Define color scheme
-        status_colors = {
-            'Complete': QColor(144, 238, 144),
-            'Segmented': QColor(255, 255, 0),
-            'Segmenting': QColor(173, 216, 230),
-            'Postprocessing': QColor(173, 216, 230),
-            'Queued': QColor(255, 255, 0),
-            'Error': QColor(255, 182, 193),
-            'Not Started': QColor(211, 211, 211),
-            'No Images': QColor(245, 245, 245)
-        }
-        
-        for row, (folder_key, data) in enumerate(filtered_data):
-            # Create cache key
-            cache_key = f"{row}_{folder_key}"
-            cached_data = self.table_cache.get(cache_key, {})
+        for f_path in paths_to_check:
+            # Analyze (Reads metadata/counts files)
+            folder_data = self.analyze_folder(f_path, robot_name)
             
-            # Only update cells that have changed
-            folder_path = data['path']
-            folder_name = os.path.basename(folder_path)
+            # Update Data Store
+            key = f"{robot_name}::{f_path}"
             
-            # Update text cells only if changed
-            if cached_data.get('robot') != data['robot']:
-                self.table.setItem(row, 0, QTableWidgetItem(data['robot']))
-                
-            if cached_data.get('folder_name') != folder_name:
-                self.table.setItem(row, 1, QTableWidgetItem(folder_name))
-                
-            if cached_data.get('total_images') != data['total_images']:
-                self.table.setItem(row, 2, QTableWidgetItem(str(data['total_images'])))
+            # Only mark as changed if the data is actually different
+            if key not in self.folder_data or self.folder_data[key] != folder_data:
+                self.folder_data[key] = folder_data
+                data_changed = True
             
-            # Update progress bars only if values changed
-            if cached_data.get('segmentation_progress') != data['segmentation_progress']:
-                seg_progress = self.table.cellWidget(row, 3)
-                if not seg_progress or not isinstance(seg_progress, QProgressBar):
-                    seg_progress = QProgressBar()
-                    self.table.setCellWidget(row, 3, seg_progress)
-                seg_progress.setValue(data['segmentation_progress'])
-            
-            if cached_data.get('postprocess_progress') != data['postprocess_progress']:
-                post_progress = self.table.cellWidget(row, 4)
-                if not post_progress or not isinstance(post_progress, QProgressBar):
-                    post_progress = QProgressBar()
-                    self.table.setCellWidget(row, 4, post_progress)
-                post_progress.setValue(data['postprocess_progress'])
-            
-            # Update status only if changed
-            if cached_data.get('status') != data['status']:
-                status_item = QTableWidgetItem(data['status'])
-                status_item.setBackground(status_colors.get(data['status'], QColor(255, 255, 255)))
-                if data['last_error']:
-                    status_item.setToolTip(data['last_error'])
-                self.table.setItem(row, 5, status_item)
-            
-            # Alpha column - show different states clearly
-            alpha_value = data.get('stored_alpha')
-            if alpha_value is not None:
-                try:
-                    alpha_text = f"{float(alpha_value):.2f}"
-                except (ValueError, TypeError):
-                    alpha_text = "Invalid"
-            else:
-                # Show different text based on status
-                if data['status'] == 'Complete':
-                    alpha_text = "Unknown"  # Was processed but no alpha recorded
-                elif data['status'] == 'Segmented':
-                    alpha_text = "—"  # Not yet processed
-                else:
-                    alpha_text = "—"
-            
-            alpha_item = QTableWidgetItem(alpha_text)
-            
-            # Highlight cases that need attention
-            if data.get('needs_re_postprocess', False):
-                alpha_item.setBackground(QColor(255, 255, 0))  # Yellow
-                if alpha_value is None:
-                    alpha_item.setToolTip(f"No alpha recorded. Current setting: {self.alpha_parameter:.2f}")
-                else:
-                    alpha_item.setToolTip(f"Current setting: {self.alpha_parameter:.2f}, Used: {alpha_text}")
-            
-            self.table.setItem(row, 6, alpha_item)
-            
-            # Update action button only if status changed
-            if cached_data.get('status') != data['status'] or cached_data.get('needs_re_postprocess') != data.get('needs_re_postprocess'):
-                self._update_action_button(row, data, folder_path)
-            
-            # Delete button rarely changes, only create if not exists
-            if not self.table.cellWidget(row, 8):
-                delete_button = QPushButton("Delete")
-                delete_button.setStyleSheet("background-color: #f44336; color: white;")
-                delete_button.clicked.connect(
-                    lambda checked, p=folder_path: self.confirm_delete_segmentation(p)
-                )
-                self.table.setCellWidget(row, 8, delete_button)
-            
-            # Update cache
-            self.table_cache[cache_key] = data.copy()
-    
-    def _update_action_button(self, row, data, folder_path):
-        status = data['status']
-        
-        if status in ['Not Started', 'Error']:
-            action_widget = QPushButton("Add to Queue")
-            action_widget.clicked.connect(
-                lambda checked, p=folder_path, r=data['robot']: 
-                self.add_to_queue(p, r, 'both')
-            )
-        elif status == 'Segmented':
-            action_widget = QPushButton("Postprocess")
-            action_widget.setStyleSheet("background-color: #ff9800; color: white;")
-            action_widget.clicked.connect(
-                lambda checked, p=folder_path, r=data['robot']: 
-                self.add_to_queue(p, r, 'postprocess')
-            )
-        elif status == 'Complete' and data.get('needs_re_postprocess'):
-            action_widget = QPushButton("Re-process")
-            action_widget.setStyleSheet("background-color: #ff9800; color: white;")
-            action_widget.clicked.connect(
-                lambda checked, p=folder_path, r=data['robot']: 
-                self.add_to_queue(p, r, 'postprocess')
-            )
-        elif status == 'Queued':
-            action_widget = QPushButton("Remove")
-            action_widget.clicked.connect(
-                lambda checked, p=folder_path: self.remove_from_queue(p)
-            )
-        elif status in ['Segmenting', 'Postprocessing']:
-            action_widget = QLabel("Processing...")
-            action_widget.setStyleSheet("color: #2196F3; font-weight: bold;")
-        else:
-            action_widget = QLabel("—")
-        
-        self.table.setCellWidget(row, 7, action_widget)
-    
-    def confirm_delete_segmentation(self, folder_path):
-        """Confirm and delete segmentation folder"""
-        folder_name = os.path.basename(folder_path)
-        reply = QMessageBox.question(
-            self, 
-            'Confirm Delete', 
-            f'Delete the entire segmentation folder for "{folder_name}"?\n\n'
-            f'This will remove all segmentation and postprocessing results.\n'
-            f'This action cannot be undone.',
-            QMessageBox.Yes | QMessageBox.No, 
-            QMessageBox.No
-        )
+        # Only trigger the UI redraw if something actually changed
+        if data_changed:
+            self.update_table()
+
+    def remove_robot(self):
+        """Removes the currently selected robot from the UI."""
+        target_robot = self.robot_filter.currentText()
+        if target_robot == "All Robots":
+            QMessageBox.warning(self, "Selection Error", "Please select a specific robot using the filter to remove it from the view.")
+            return
+
+        reply = QMessageBox.question(self, 'Remove Robot', 
+                                     f"Remove '{target_robot}' from view?",
+                                     QMessageBox.Yes | QMessageBox.No)
         
         if reply == QMessageBox.Yes:
-            if self.delete_segmentation_folder(folder_path):
-                self.log_message(f"Deleted segmentation folder for {folder_name}")
-                self.refresh_data()
-    
-    def add_to_queue(self, folder_path, robot_name, operation_type):
-        """Add folder to processing queue"""
-        folder_name = os.path.basename(folder_path)
-        
-        if operation_type == 'both':
-            seg_folder = os.path.join(folder_path, 'Segmentation')
-            if os.path.exists(seg_folder):
-                post_info = self.load_postprocess_info(folder_path)
-                stored_alpha = post_info.get('alpha_parameter', 'Unknown') if post_info else 'Unknown'
-                current_alpha = self.alpha_parameter
-                
-                reply = QMessageBox.question(
-                    self, 
-                    'Segmentation Folder Exists', 
-                    f'"{folder_name}" already has a segmentation folder.\n\n'
-                    f'To proceed, the existing segmentation will be DELETED:\n'
-                    f'• Current Alpha: {current_alpha}\n'
-                    f'• Previous Alpha: {stored_alpha}\n\n'
-                    f'Delete existing segmentation and restart?\n'
-                    f'This action cannot be undone.',
-                    QMessageBox.Yes | QMessageBox.No, 
-                    QMessageBox.No
-                )
-                
-                if reply == QMessageBox.No:
-                    self.log_message(f"Cancelled adding {folder_name} to queue - user chose to keep existing segmentation")
-                    return
-                
-                if not self.delete_segmentation_folder(folder_path):
-                    self.log_message(f"Failed to delete existing segmentation for {folder_name}")
-                    return
-        
-        queue_item = {'path': folder_path, 'robot': robot_name, 'operation': operation_type}
-        if queue_item not in self.processing_queue:
-            self.processing_queue.append(queue_item)
-            operation_text = "segmentation + postprocess" if operation_type == 'both' else operation_type
-            self.log_message(f"Added {folder_name} ({robot_name}) to queue for {operation_text}")
-            self.update_queue_info()
-            self.refresh_data()
-    
-    def remove_from_queue(self, folder_path):
-        """Remove folder from processing queue"""
-        self.processing_queue = [item for item in self.processing_queue if item['path'] != folder_path]
-        self.log_message(f"Removed {os.path.basename(folder_path)} from queue")
-        self.update_queue_info()
-        self.refresh_data()
-    
-    def clear_queue(self):
-        """Clear the processing queue"""
-        if self.processing_queue:
-            reply = QMessageBox.question(self, 'Clear Queue', 
-                                       'Clear the processing queue?\n\nNote: Currently running operations cannot be stopped.',
-                                       QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            # 1. Clear Data
+            keys_to_remove = [k for k, v in self.folder_data.items() if v['robot'] == target_robot]
+            for k in keys_to_remove:
+                del self.folder_data[k]
             
-            if reply == QMessageBox.Yes:
-                self.processing_queue.clear()
-                self.log_message("Queue cleared (running operations will continue)")
-                self.update_queue_info()
-                self.refresh_data()
-    
-    def process_queue(self):
-        """Process the next item in queue if not currently processing"""
-        if not self.current_segmentation_worker and not self.current_postprocess_worker and self.processing_queue:
-            next_item = self.processing_queue.pop(0)
-            folder_path = next_item['path']
-            robot_name = next_item['robot']
-            operation = next_item['operation']
+            # 2. Clear Checklist
+            if target_robot in self.robot_paths:
+                del self.robot_paths[target_robot]
             
-            if operation == 'both':
-                self.start_segmentation(folder_path, robot_name, chain_postprocess=True)
-            elif operation == 'segment':
-                self.start_segmentation(folder_path, robot_name, chain_postprocess=False)
-            elif operation == 'postprocess': # This will now work
-                self.start_postprocess(folder_path, robot_name)
+            # 3. Clear Registry
+            if target_robot in self.robots:
+                del self.robots[target_robot]
             
-            self.update_queue_info()
-            self.refresh_data()
-    
-    def start_segmentation(self, folder_path, robot_name, chain_postprocess=False):
-        """Start segmentation worker"""
-        self.current_segmentation_worker = SegmentationWorker(
-            folder_path, robot_name, self.species, self.fast_mode, self.conda_env
-        )
-        self.current_segmentation_worker.finished.connect(
-            lambda path, msg: self.on_segmentation_finished(path, msg, chain_postprocess)
-        )
-        self.current_segmentation_worker.error.connect(self.on_segmentation_error)
-        self.current_segmentation_worker.progress.connect(self.on_progress_update)
-        self.current_segmentation_worker.start()
-        
-        mode_str = " (fast)" if self.fast_mode else ""
-        self.log_message(f"Started segmentation for {os.path.basename(folder_path)} ({robot_name}) - {self.species}{mode_str}")
-    
-    def start_postprocess(self, folder_path, robot_name):
-        """Start postprocess worker"""
-        self.current_postprocess_worker = PostprocessWorker(
-            folder_path, robot_name, self.species, self.alpha_parameter, self.conda_env
-        )
-        self.current_postprocess_worker.finished.connect(self.on_postprocess_finished)
-        self.current_postprocess_worker.error.connect(self.on_postprocess_error)
-        self.current_postprocess_worker.progress.connect(self.on_progress_update)
-        self.current_postprocess_worker.start()
-        
-        self.log_message(f"Started postprocessing for {os.path.basename(folder_path)} ({robot_name}) - {self.species}, α={self.alpha_parameter}")
-    
-    def update_queue_info(self):
-        """Update queue information display"""
-        queue_size = len(self.processing_queue)
-        current = "None"
-        if self.current_segmentation_worker:
-            current = f"Segmenting: {os.path.basename(self.current_segmentation_worker.input_path)}"
-        elif self.current_postprocess_worker:
-            current = f"Postprocessing: {os.path.basename(self.current_postprocess_worker.input_path)}"
-        
-        self.queue_info_label.setText(f"Queue: {queue_size} | Processing: {current}")
-    
-    def on_segmentation_finished(self, folder_path, message, chain_postprocess=False):
-        """Handle segmentation completion"""
-        self.log_message(message)
-        robot_name = self.current_segmentation_worker.robot_name
-        self.current_segmentation_worker = None
-        
-        if chain_postprocess:
-            fold_0_path = os.path.join(folder_path, 'Segmentation', 'Fold_0')
-            if os.path.exists(fold_0_path):
-                seg_files = len(glob.glob(os.path.join(fold_0_path, '*.png')))
-                if seg_files > 0:
-                    self.start_postprocess(folder_path, robot_name)
-                else:
-                    self.log_message(f"Skipping postprocessing for {os.path.basename(folder_path)} - segmentation produced no files")
-                    self.update_queue_info()
-            else:
-                self.log_message(f"Skipping postprocessing for {os.path.basename(folder_path)} - segmentation folder missing")
-                self.update_queue_info()
-        else:
-            self.update_queue_info()
-        
-        self.refresh_data()
-    
-    def on_segmentation_error(self, folder_path, message):
-        """Handle segmentation error"""
-        self.log_message(f"SEGMENTATION ERROR: {message}")
-        
-        try:
-            seg_folder = os.path.join(folder_path, 'Segmentation')
-            os.makedirs(seg_folder, exist_ok=True)
-            error_file = os.path.join(seg_folder, 'segmentation.error')
-            with open(error_file, 'w') as f:
-                f.write(f"{datetime.now()}: {message}")
-        except:
-            pass
-        
-        self.current_segmentation_worker = None
-        self.update_queue_info()
-        self.refresh_data()
-    
-    def on_postprocess_finished(self, folder_path, message):
-        """Handle postprocessing completion"""
-        self.log_message(message)
-        self.current_postprocess_worker = None
-        self.update_queue_info()
-        self.refresh_data()
-    
-    def on_postprocess_error(self, folder_path, message):
-        """Handle postprocessing error"""
-        self.log_message(f"POSTPROCESS ERROR: {message}")
-        
-        try:
-            seg_folder = os.path.join(folder_path, 'Segmentation')
-            error_file = os.path.join(seg_folder, 'postprocess.error')
-            with open(error_file, 'w') as f:
-                f.write(f"{datetime.now()}: {message}")
-        except:
-            pass
-        
-        self.current_postprocess_worker = None
-        self.update_queue_info()
-        self.refresh_data()
-    
-    def on_progress_update(self, folder_path, status):
-        """Handle progress updates from workers"""
-        self.log_message(f"{os.path.basename(folder_path)}: {status}")
-    
-    def refresh_data(self):
-        """Refresh folder data and update table"""
-        if self.auto_refresh_enabled:
-            for robot_name in self.robots.keys():
-                self.scan_robot_folders(robot_name)
-    
-    def log_message(self, message):
-        """Add message to log"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.append(f"[{timestamp}] {message}")
-        scrollbar = self.log_text.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+            self.update_robot_filter()
+            self.update_table()
 
+    def remove_folder_from_ui(self, path):
+        """Removes a folder from the monitoring list (robot_paths)."""
+        # 1. Find which robot owns this path
+        target_robot = None
+        for r_name, paths in self.robot_paths.items():
+            if path in paths:
+                target_robot = r_name
+                break
+        
+        # 2. Remove from the checklist (stop monitoring)
+        if target_robot:
+            self.robot_paths[target_robot].discard(path)
+        
+        # 3. Remove from current data view
+        key_to_remove = None
+        for k, v in self.folder_data.items():
+            if v['path'] == path:
+                key_to_remove = k
+                break
+        
+        if key_to_remove:
+            del self.folder_data[key_to_remove]
+        
+        # 4. If a robot has no more paths, remove it entirely
+        if target_robot and not self.robot_paths[target_robot]:
+            del self.robot_paths[target_robot]
+            if target_robot in self.robots:
+                del self.robots[target_robot]
+        
+        self.update_robot_filter()
+        self.update_table()
+
+    def confirm_clear_results(self, path):
+        """Destructive action: Deletes Segmentation folder and metadata."""
+        msg = (f"Confirm Action for: {os.path.basename(path)}\n\n"
+               "This will delete all generated masks in the 'Segmentation' folder "
+               "and reset the metadata.\n\n"
+               "This cannot be undone.\n"
+               "Source images will NOT be affected.")
+               
+        reply = QMessageBox.question(self, 'Delete Segmentation Results', msg, 
+                                     QMessageBox.Yes | QMessageBox.No)
+        
+        if reply == QMessageBox.Yes:
+            # Delete Segmentation Folder
+            seg_dir = os.path.join(path, 'Segmentation')
+            if os.path.exists(seg_dir):
+                try:
+                    shutil.rmtree(seg_dir)
+                    self.log_message(f"Deleted segmentation folder: {os.path.basename(path)}")
+                except Exception as e:
+                    self.log_message(f"Error deleting folder: {e}")
+            
+            # Refresh to update status to "Not Started"
+            self.refresh_data()
+            
+    def add_to_queue(self, path, robot, op, model, alpha):
+        item = {'path': path, 'robot': robot, 'operation': op, 'model': model, 'alpha': alpha}
+        if item not in self.processing_queue:
+            self.processing_queue.append(item)
+            self.log_message(f"Added to queue: {os.path.basename(path)} ({op}), alpha={alpha})")
+            self.refresh_data()
+        self.update_queue_label()
+
+    def remove_from_queue(self, path):
+        self.processing_queue = [x for x in self.processing_queue if x['path'] != path]
+        self.refresh_data()
+        self.update_queue_label()
+
+    def ensure_legacy_metadata(self, folder_path):
+        """
+        Creates metadata for legacy folders so the CLI knows segmentation is done.
+        """
+        meta_file = Path(folder_path) / 'Segmentation' / 'segmentation_metadata.json'
+        if meta_file.exists():
+            return
+
+        # Check legacy segmentation folder
+        fold0_path = os.path.join(folder_path, "Segmentation", "Fold_0")
+        pngs = glob.glob(os.path.join(fold0_path, "*.png")) if os.path.exists(fold0_path) else []
+        
+        if not pngs: return # Cannot verify legacy segmentation
+        
+        # Create minimal metadata
+        meta = {
+            "input_path": folder_path,
+            "output_path": folder_path,
+            "model": self.species, 
+            "fast_mode": self.fast_mode,
+            "segmentation_status": "Success", # Crucial for skipping segmentation
+            "segmentation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "n_images": len(pngs),
+            "processed_images": len(pngs),
+            "processed_files": "All",
+            "segmentation_progress": 100.0,
+            "postprocessing_progress": 0.0,
+            "average_time_per_image": 0.0,
+            "postprocessing_status": "Not started"
+        }
+        
+        try:
+            with open(meta_file, 'w') as f:
+                json.dump(meta, f, indent=4)
+            self.log_message(f"Created legacy metadata for {os.path.basename(folder_path)}")
+        except Exception as e:
+            self.log_message(f"Failed to create legacy metadata: {e}")
+            
+    def process_queue(self):
+        if self.current_worker or not self.processing_queue: return
+        
+        item = self.processing_queue.pop(0)
+        if item['operation'] == 'postprocess':
+            self.ensure_legacy_metadata(item['path'])
+            
+        self.current_worker = CLIWorker(
+            item['path'], item['robot'], self.species, item['alpha'],
+            postprocess_only=(item['operation'] == 'postprocess'),
+            resume=(item['operation'] == 'resume'),
+            fast_mode=self.fast_mode, conda_env=self.conda_env
+        )
+        self.current_worker.finished.connect(self.on_worker_done)
+        self.current_worker.error.connect(self.on_worker_done)
+        self.current_worker.progress.connect(
+            lambda p, m: self.log_message(f"[{os.path.basename(p)}] {m}")
+        )
+        self.current_worker.start()
+        self.update_queue_label()
+
+    def on_worker_done(self, path, msg):
+        self.log_message(msg)
+        
+        # Wait for the thread to fully exit its run() method before unreferencing it.
+        if self.current_worker is not None:
+            self.current_worker.quit()
+            self.current_worker.wait() 
+        
+        self.current_worker = None
+        self.refresh_data()
+        self.update_queue_label()
+
+    def update_queue_label(self):
+        q_len = len(self.processing_queue)
+        curr = f"Processing: {self.current_worker.input_path.name}" if self.current_worker else "Idle"
+        self.queue_info_label.setText(f"Queue: {q_len} | {curr}")
+
+    def refresh_data(self):
+        for r_name in self.robots:
+            self.scan_robot_folders(r_name)
+
+    def update_robot_filter(self):
+        curr = self.robot_filter.currentText()
+        self.robot_filter.clear()
+        self.robot_filter.addItem("All Robots")
+        self.robot_filter.addItems(list(self.robots.keys()))
+        self.robot_filter.setCurrentText(curr)
+        self.robot_count_label.setText(f"Robots: {len(self.robots)}")
+
+    def set_alpha_parameter(self):
+        val, ok = QInputDialog.getDouble(self, 'Alpha', 'Value:', self.alpha_parameter, 0.0, 1.0, 2)
+        if ok: 
+            self.alpha_parameter = val
+            self.alpha_button.setText(f"Alpha: {val}")
+            self.save_settings()
+
+    def set_conda_env(self):
+        text, ok = QInputDialog.getText(self, 'Conda Env', 'Name:', text=self.conda_env)
+        if ok: 
+            self.conda_env = text
+            self.conda_button.setText(f"Conda Environment: {text}")
+            self.save_settings()
+
+    def update_fast_mode(self, state):
+        self.fast_mode = (state == Qt.Checked)
+        self.save_settings()
+
+    def update_species(self, text):
+        self.species = text
+        if "arabidopsis" in text.lower(): self.alpha_parameter = 0.85
+        elif "tomato" in text.lower(): self.alpha_parameter = 0.60
+        self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
+        self.save_settings()
+
+    def save_settings(self):
+        try:
+            with open(GLOBAL_CONFIG_FILE, 'w') as f:
+                json.dump({'conda_env': self.conda_env, 'alpha': self.alpha_parameter, 
+                           'species': self.species, 'fast_mode': self.fast_mode}, f)
+        except: pass
+
+    def load_settings(self):
+        if os.path.exists(GLOBAL_CONFIG_FILE):
+            try:
+                with open(GLOBAL_CONFIG_FILE, 'r') as f:
+                    c = json.load(f)
+                    self.conda_env = c.get('conda_env', 'ChronoRoot')
+                    self.species = c.get('species', 'arabidopsis')
+                    self.alpha_parameter = c.get('alpha', 0.85)
+                    self.fast_mode = c.get('fast_mode', False)
+                    
+                    self.conda_button.setText(f"Conda Environment: {self.conda_env}")
+                    self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
+                    self.species_combo.setCurrentText(self.species)
+                    self.fast_mode_checkbox.setChecked(self.fast_mode)
+            except: pass
+
+    def clear_queue(self):
+        self.processing_queue.clear()
+        self.update_queue_label()
+        self.refresh_data()
+
+    def log_message(self, msg):
+        ts = datetime.now().strftime("%H:%M:%S")
+        self.log_text.append(f"[{ts}] {msg}")
+    
+    def closeEvent(self, event):
+        """
+        Intercepts the window close event.
+        If a worker is running, it blocks the close and asks for confirmation.
+        """
+        if self.current_worker and self.current_worker.isRunning():
+            reply = QMessageBox.question(
+                self, 
+                'Process Running',
+                (f"A task is currently running:\n\n"
+                 f"Folder: {os.path.basename(str(self.current_worker.input_path))}\n\n"
+                 f"Are you sure you want to quit? This will FORCE KILL the process."),
+                QMessageBox.Yes | QMessageBox.No, 
+                QMessageBox.No
+            )
+
+            if reply == QMessageBox.Yes:
+                self.log_message("Force quitting application...")
+                
+                # 1. Kill the subprocess
+                self.current_worker.stop()
+                
+                # 2. Wait for thread to clean up (max 3 seconds to avoid freezing)
+                self.current_worker.wait(3000)
+                
+                event.accept()  # Close the window
+            else:
+                event.ignore()  # Cancel the close, keep window open
+        else:
+            event.accept()
+
+    def setup_tooltip_style(self):
+        """
+        Applies a homogeneous style to all QToolTips globally.
+        We apply this to QApplication to ensure it overrides system defaults.
+        """
+        tooltip_style = """
+        QToolTip {
+            background-color: #333333;
+            color: #ffffff;
+            border: 1px solid #cccccc;
+            padding: 5px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-family: sans-serif;
+        }
+        """
+        # Access the global application instance
+        app = QApplication.instance()
+        if app:
+            # Append to existing app styles rather than overwriting
+            app.setStyleSheet(app.styleSheet() + tooltip_style)
+        
 def main():
     app = QApplication(sys.argv)
     window = nnUNetMonitorUI()
