@@ -96,7 +96,47 @@ main() {
         print_success "Image already exists."
     fi
 
-    # 6. Windows Integration (CMD WRAPPER FIX)
+    # 6. Download Weights (NEW SECTION)
+    echo ""
+    echo "The segmentation models are required for the Full analysis pipeline."
+    read -p "Would you like to download/update the segmentation weights now? [Y/n]: " download_choice
+    
+    # Default to 'Yes' if empty
+    if [[ -z "$download_choice" || "$download_choice" =~ ^[Yy]$ ]]; then
+        WEIGHTS_SCRIPT="$REPO_DIR/segmentationApp/download_weights.sh"
+        if [ -f "$WEIGHTS_SCRIPT" ]; then
+            chmod +x "$WEIGHTS_SCRIPT"
+            print_info "Syncing models from Hugging Face..."
+
+            # Create temp directory for the isolated pip install
+            TEMP_HF_HOME=".tmp_hf_env"
+            mkdir -p "$TEMP_HF_HOME"
+
+            # Execute container
+            apptainer exec $GPU_FLAG \
+                --bind "$TEMP_HF_HOME:/tmp/hf_env" \
+                --bind "/mnt/c:/mnt/c" --bind "/init:/init" --bind "/run/WSL:/run/WSL" \
+                --bind "/home/$USER:/home/$USER" --bind "/run/user/$(id -u):/run/user/$(id -u)" \
+                --env PIP_USER=true \
+                --env PYTHONUSERBASE=/tmp/hf_env \
+                "$IMAGE_PATH" \
+                bash -c "export PATH=/tmp/hf_env/bin:\$PATH && source /opt/conda/etc/profile.d/conda.sh && conda activate ChronoRoot && pip install huggingface_hub==1.3.4 && $WEIGHTS_SCRIPT"
+                
+            if [ $? -eq 0 ]; then
+                print_success "Weights synchronized successfully."
+            else
+                print_error "Weight download failed."
+            fi
+
+            rm -rf "$TEMP_HF_HOME"
+        else
+            print_error "Weights download script not found."
+        fi
+    else
+        print_info "Skipping weight download."
+    fi
+
+    # 7. Windows Integration (CMD WRAPPER FIX)
     print_info "Configuring Shortcuts & Icons..."
 
     [ -z "$WSL_DISTRO_NAME" ] && WSL_DISTRO_NAME="Ubuntu"
@@ -205,7 +245,7 @@ EOF
 
     dos2unix "$INSTALL_DIR"/*.sh 2>/dev/null
 
-    # 7. Force Icon Refresh
+    # 8. Force Icon Refresh
     print_info "Flushing Windows Icon Cache..."
     cmd.exe /c "ie4uinit.exe -show" 2>/dev/null || true
 

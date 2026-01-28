@@ -1,8 +1,8 @@
 # ChronoRoot 2.0 - Segmentation Module
 
-This directory contains the AI-powered segmentation module for ChronoRoot 2.0, designed to automatically identify plant root structures from images.
+[![Hugging Face Models](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Models-yellow)](https://huggingface.co/ngaggion/models)
 
------
+This directory contains the AI-powered segmentation module for ChronoRoot 2.0, designed to automatically identify plant root structures from images.
 
 ## Overview
 
@@ -13,30 +13,29 @@ The segmentation module uses a deep learning model to analyze infrared images an
 3.  **Seed** (pre- and post-germination structures)
 4.  **Hypocotyl** (stem region between root-shoot junction and cotyledons)
 5.  **Leaves** (including both cotyledons and true leaves)
-6.  **Petiole** (leaf attachment structures)
+6.  **Petiole** (leaf attachment structures, not available in Tomato model)
 
 This application provides both a graphical user interface (GUI) and command-line interface (CLI) to manage and run segmentation and post-processing tasks on large datasets.
 
 ### Directory Structure
 
-```
+```text
 segmentationApp/
 ├── bash_usage.sh             # Example bash script for demo processing
 ├── cli.py                    # Command-line interface for quick processing
 ├── config.json               # Stores user settings (Conda env, alpha, etc.)
+├── download_weights.sh       # SCRIPT: Syncs model weights from Hugging Face
 ├── models/                   # Contains pre-trained nnUNet models
-│   ├── Arabidopsis/
-│   │   ├── dataset_fingerprint.json
+│   ├── Arabidopsis/          # (Populated after running download_weights.sh)
 │   │   ├── dataset.json
-│   │   ├── fold_0/
-│   │   │   └── checkpoint_final.pth
-│   │   └── plans.json
+│   │   ├── plans.json
+│   │   └── fold_0/
+│   │       └── checkpoint_final.pth
 │   └── Tomato/
-│       ├── dataset_fingerprint.json
 │       ├── dataset.json
-│       ├── fold_0/
-│       │   └── checkpoint_final.pth
-│       └── plans.json
+│       ├── plans.json
+│       └── fold_0/
+│           └── checkpoint_final.pth
 ├── nnUNet_wrapper.py         # Internal script for nnUNet
 ├── postprocess.py            # Script for temporal post-processing
 ├── README.md                 # This file
@@ -44,119 +43,134 @@ segmentationApp/
 ├── screenshots/
 │   └── MainScreen.png        # Screenshot of the GUI interface
 └── trainerOrganization/      # Tools for training custom models
-    ├── CreateArabidopsisDataset.ipynb  # Dataset preparation for Arabidopsis
-    ├── CreateTomatoDataset.ipynb        # Dataset preparation for Tomato
-    ├── dataset_Arabidopsis.json        # Dataset configuration
-    ├── dataset_Tomato.json              # Dataset configuration
-    └── train.sh                         # Training script for nnUNet
+    ├── CreateArabidopsisDataset.ipynb
+    ├── CreateTomatoDataset.ipynb
+    ├── dataset_Arabidopsis.json
+    ├── dataset_Tomato.json
+    ├── PredToNii.ipynb
+    └── train.sh
+
 ```
 
------
+## Model Installation and Updates
+
+To keep the repository lightweight and ensure version control efficiency, **model weights are hosted externally on Hugging Face**. 
+
+### Automatic Installation
+
+If you used the main ChronoRoot installer (Apptainer, WSL, or Local), the weights were likely downloaded automatically during setup.
+
+### Manual Installation / Updating
+
+If the `models/` folder is empty, or if you want to check for model updates, run the included helper script:
+
+```bash
+# Make the script executable (first time only)
+chmod +x download_weights.sh
+
+# Download/Update weights
+./download_weights.sh
+
+```
+
+This script handles the connection to Hugging Face, checks for newer versions of the models, and places them correctly into the `models/` directory.
+
+---
 
 ## How to Use (GUI Interface)
 
-This module is designed to be run through the main graphical interface.
+![Main Interface](screenshots/MainScreen.png)
 
+### Workflow Steps
+
+1. **Launch the App:**
+2. 
 ```bash
-# Run the GUI interface using Docker
+# Run the GUI interface using Docker/Apptainer
 segmentation
 
 # Or run directly with Python
 python run.py
 ```
 
-The GUI provides a complete workflow for processing your data:
+2. **Set Parameters (Top Bar):**
+   * **Alpha:** Set the alpha value for temporal post-processing.
+   * **Species:** Select the model (e.g., "arabidopsis" or "tomato"). Changing this automatically updates Alpha to a recommended default.
+   * **Fast Mode:** Check this to skip certain heavy computations for quicker results.
+   * **Hide Empty Folders:** Check this to filter out folders that contain no images.
+   * **Conda:** Enter the name of your Conda environment if you have a different local installation (default: `ChronoRoot`).
 
-  * **Multi-robot support**: Load and monitor multiple robot datasets.
-  * **Queue management**: Add folders to a processing queue.
-  * **Real-time progress**: Live progress bars for segmentation and post-processing.
-  * **Parameter control**: Set the Conda environment, species, fast mode, and post-processing `alpha` value directly in the UI.
-  * **Status monitoring**: Clear visual indicators for folder status (Not Started, Segmented, Complete, Error).
+3. **Load Robot:** Click **"Load Robot"** and select one or more root folders containing your experiment data (e.g., `/path/to/Robot_1/`).
+4. **Monitor & Process:**
+   * **Tooltips:** Hover over any button in the interface to see a detailed explanation of its function.
+   * **Context-Aware Actions:** The "Actions" column updates dynamically based on the folder's status:
+     * **Start Pipeline:** Runs full segmentation and post-processing for new folders.
+     * **Resume Pipeline:** Resumes processing from the last checkpoint if a folder is "Stalled".
+     * **Rerun Postprocessing:** Re-calculates temporal consistency using the current Alpha setting (skips the heavy segmentation step).
+     * **Mismatch Handling:** If you change the Model or Alpha settings, the interface detects the mismatch and offers specific options:
+       * *Rerun Pipeline:* Completely re-does segmentation with the new model.
+       * *Postproc Only:* Keeps the existing masks but updates the post-processing with the new Alpha.
+   * **Queue Management:** Use "Cancel" to remove individual items from the queue, or "Clear Queue" in the top bar to reset all pending tasks.
+   * **Cleanup:** Use **Remove** to hide a folder from the view, or **Clear Results** to permanently delete the generated segmentation files from the disk.
 
-![Main Interface](screenshots/MainScreen.png)
-
-### Workflow
-
-1.  **Launch the App:** Run `python run.py`.
-2.  **Set Parameters (Top Bar):**
-      * **Conda:** Enter the name of your Conda environment.
-      * **Alpha:** Set the alpha value for temporal post-processing (see below).
-      * **Species:** Select "arabidopsis" or "tomato".
-      * **Fast Mode:** Check this for faster processing (less augmentation).
-3.  **Load Robot:** Click **"Load Robot"** and select the *root folder* containing your experiment data (e.g., `/path/to/Robot_1/`).
-4.  **Process Data:**
-      * The table will fill with all sub-folders.
-      * Find folders with the status **"Not Started"** and click their **"Add to Queue"** button. This will schedule them for segmentation and post-processing.
-      * If a folder is **"Segmented"** but you want to re-run post-processing (e.g., with a new alpha), click **"Postprocess"**.
-      * If a folder is **"Complete"** but the stored alpha doesn't match the current setting, a **"Re-process"** button will appear.
-
------
+Follow the Segmentation Tutorial in our website for a complete walkthrough: [ChronoRoot Segmentation Tutorial](https://chronoroot.github.io/tutorials/segmentation/)
 
 ## Command-Line Interface (CLI)
 
 For faster processing without the GUI overhead, use the CLI tool `cli.py`. This is ideal for batch processing or integration into automated pipelines.
 
-### Basic Usage
-
-```bash
-# Basic segmentation (arabidopsis by default)
-python cli.py /path/to/images
-
-# Specify species (arabidopsis or tomato)
-python cli.py /path/to/images --species tomato
-
-# Fast mode (disable test-time augmentation for 2-3x speedup)
-python cli.py /path/to/images --fast
-
-# Segmentation + post-processing
-python cli.py /path/to/images --postprocess
-
-# Custom alpha value for post-processing
-python cli.py /path/to/images --postprocess --alpha 0.9
-
-# Post-processing only (if segmentation already done)
-python cli.py /path/to/images --postprocess-only --alpha 0.85
-
-# Verbose output
-python cli.py /path/to/images --verbose
-```
-
-### CLI Options
-
 | Option | Description | Default |
-|--------|-------------|---------|
-| `input` | Path to folder containing images | Required |
-| `--species` | Model to use: `arabidopsis` or `tomato` | `arabidopsis` |
-| `--device` | Computing device: `cuda`, `cpu`, or `mps` | `cuda` |
-| `--fast` | Enable fast mode (no augmentation) | `False` |
-| `--verbose` | Show detailed processing information | `False` |
-| `--postprocess` | Run post-processing after segmentation | `False` |
-| `--postprocess-only` | Skip segmentation, only run post-processing | `False` |
-| `--alpha` | Temporal smoothing parameter (0.0-1.0) | `0.85` (arab.) / `0.99` (tomato) |
-| `--num-classes` | Number of segmentation classes | `7` |
+| --- | --- | --- |
+| `input` | Path to the folder containing PNG images. | **Required** |
+| `--model`, `-m` | The specific model to use (must match a folder in `models/`). | **Required** |
+| `--alpha`, `-a` | Temporal consistency parameter (0.0 - 1.0). | `0.85` (Arabidopsis) `0.60` (Tomato) |
+| `--device` | Computing device to use. | `cuda` |
+| `--output`, `-o` | Custom output directory. | `input` folder |
+| `--fast` | Enable fast mode (disables test-time augmentation/mirroring). | `False` |
+| `--postprocess-only` | Skip segmentation and run only the temporal post-processing. | `False` |
+| `--resume` | Resume a stopped run using existing metadata. | `False` |
 
 ### Example Workflows
 
-**Process a single experiment:**
+**1. Process a single experiment (Standard)**
+This runs both segmentation and post-processing automatically.
+
 ```bash
-python cli.py /data/Robot_1/Experiment_001 --species arabidopsis --postprocess
+python cli.py /data/Robot_1/Camera_001 --model Arabidopsis
+
 ```
 
-**Batch process multiple folders:**
+**2. Resume an interrupted run**
+If a previous run crashed or was stopped, use `--resume` to skip images that were already successfully segmented.
+
+```bash
+python cli.py /data/Robot_1/Camera_001 --model Arabidopsis --resume
+
+```
+
+**3. Batch process multiple folders (Fast Mode)**
+
 ```bash
 for folder in /data/Robot_1/*; do
-    python cli.py "$folder" --fast --postprocess --alpha 0.9
+    python cli.py "$folder" --model Tomato --fast --alpha 0.6
 done
+
 ```
 
-**Re-run post-processing with different alpha:**
+**4. Re-run post-processing only**
+Useful if you want to tweak the `--alpha` parameter without re-running the heavy segmentation step.
+
 ```bash
-python cli.py /data/Robot_1/Experiment_001 --postprocess-only --alpha 0.7
+python cli.py /data/Robot_1/Camera_001 --model Tomato --postprocess-only --alpha 0.7
+
 ```
 
-See `bash_usage.sh` for a complete demo workflow example.
+**5. See help**
 
------
+```bash
+python cli.py --help
+
+```
 
 ## Output Format
 
@@ -168,11 +182,9 @@ The segmentation produces multi-class masks where each pixel value represents a 
   * `3`: Seed
   * `4`: Hypocotyl
   * `5`: Leaves
-  * `6`: Petiole
+  * `6`: Petiole (not available in Tomato model)
 
 The final outputs are saved in the `Segmentation/Ensemble` folder within each data directory.
-
------
 
 ## Temporal Post-processing (The "Alpha" Value)
 
@@ -185,76 +197,44 @@ The **`alpha`** value controls this smoothing:
 
 Modifications on the post-processing script can allow the usage of different methods if needed. E.g. Tomato contains a different post-processing method that better suits its growth dynamics, as the plant moves faster and has more sudden changes in structure, where it does not stores the previous segmentations but the class presented to have class stability over time.
 
------
-
 ## About the AI Model (nnUNet)
 
 This tool uses **nnUNet** ("no-new-Net"), a powerful, self-configuring framework for biomedical image segmentation. As configured to use with Docker, the nnUNet environment should already be set as "base". If you are running the app in a different Conda environment, ensure that nnUNet is installed and properly configured and set up the environment name in the GUI.
 
   * **Official nnUNet Repository:** [https://github.com/MIC-DKFZ/nnUNet](https://github.com/MIC-DKFZ/nnUNet)
 
------
 
 ## Training Custom Models
 
+For a complete, step-by-step guide on creating your own datasets and training new models, please visit our **[Training Tutorial](https://chronoroot.github.io/tutorials/training_on_your_images/)**.
+
+**Workflow Summary:**
+
+1. **Silver Standard Generation:** Use the existing model to generate initial masks for your new videos.
+2. **Active Sampling:** Select only the most informative "failure frames" for manual correction.
+3. **Annotation:** Refine labels using ITK-SNAP (NIfTI format).
+4. **Organization:** Structure the data for nnU-Net v2 using our provided Jupyter notebooks.
+5. **Training:** Run the standard nnU-Net 5-fold cross-validation.
+
 ### Dataset Access
 
-The complete annotated ChronoRoot 2.0 dataset is publicly available on HuggingFace:
-
-🤗 **Dataset:** [https://huggingface.co/datasets/ngaggion/ChronoRoot2](https://huggingface.co/datasets/ngaggion/ChronoRoot2)
-
-The dataset is organized by robot and video folder, containing both raw images and their corresponding annotations.
-
-### Dataset Preparation
-
-The `trainerOrganization/` folder contains Jupyter notebooks that help convert the raw dataset into the nnUNet format:
-
-1. **Download the dataset** from HuggingFace
-2. **Run the appropriate notebook:**
-   - `CreateArabidopsisDataset.ipynb` for Arabidopsis data
-   - `CreateTomatoDataset.ipynb` for Tomato data
-
-These notebooks will:
-- Organize images into the nnUNet folder structure
-- Generate proper train/test splits
-- Ensure images from the same video stay in the same split (no data leakage)
-- `CreateTomatoDataset.ipynb` will also include the creation of a complete training set using both the Tomato and Arabidopsis datasets for better generalization, but removing the "Petiole" class and updating both "Petiole" and "Leaves" to a single "Aerial" class.
-
-### Training Process
-
-Once your dataset is prepared, use the provided training script:
-
-```bash
-# Set nnUNet environment variables
-export nnUNet_raw="/app/Segmentation/ChronoRoot_nnUNet/nnUNet_raw"
-export nnUNet_preprocessed="/app/Segmentation/ChronoRoot_nnUNet/nnUNet_preprocessed"
-export nnUNet_results="/app/Segmentation/ChronoRoot_nnUNet/nnUNet_results"
-
-# Plan and preprocess dataset (dataset ID 789 for ChronoRoot)
-nnUNetv2_plan_and_preprocess -d 789 --verify_dataset_integrity
-
-# Train on 5 folds (standard nnUNet cross-validation)
-nnUNetv2_train 789 2d 0 
-nnUNetv2_train 789 2d 1 
-nnUNetv2_train 789 2d 2 
-nnUNetv2_train 789 2d 3 
-nnUNetv2_train 789 2d 4
-```
-
-After training, copy your model files to the `models/` directory following the structure described below.
------
+Our complete annotated dataset (Arabidopsis & Tomato) is available on HuggingFace 🤗 for reference or pre-training: [https://huggingface.co/datasets/ngaggion/ChronoRoot2](https://huggingface.co/datasets/ngaggion/ChronoRoot2)
 
 ## Replacing or Adding Models
 
-The `models/` directory contains the pre-trained nnUNet models. This folder structure is a direct copy of a standard nnUNet `nnUNet_results` directory.
+The `download_weights.sh` script manages the official ChronoRoot models. However, if you have trained your own custom nnU-Net model, you can add it manually:
 
-  * The provided models (Arabidopsis and Tomato) are **nnUNet residual M models**.
-  * The app uses the `plans.json` file to configure the AI and the `checkpoint_final.pth` file in the `fold_0/` directory as the trained model.
+**Structure:**
 
-You can replace or add new models (e.g., for a different species) by:
+* `models/`
+  * `YourNewSpecies/`
+    * `dataset.json` (The metadata file from your training)
+    * `plans.json` (CRITICAL: Configuration file specific to your training run)
+    * `fold_0/`
+    * `checkpoint_final.pth` (The trained model weights)
 
-1.  Training a new nnUNet model (see Training Custom Models section above).
-2.  Creating a new folder inside `models/` (e.g., `models/Maize/`).
-3.  Copying your `dataset.json`, `plans.json`, and the `fold_0/` directory (containing `checkpoint_final.pth`) from your nnUNet results into this new folder.
+**To add a model:**
 
-**Important:** The `plans.json` file is critical. If you ever change the model checkpoint, you **must** also use the matching `plans.json` file from that specific training run.
+1. Create a new folder in `models/` (e.g., `models/Maize/`).
+2. Copy the three required files (`dataset.json`, `plans.json`, and the `fold_0` folder) from your training output directory (`nnUNet_results`) into this new folder.
+3. Restart the application; the new model will appear in the dropdown menu.
