@@ -192,7 +192,7 @@ main() {
                 --env PYTHONUSERBASE=/tmp/hf_env \
                 --env PATH=/tmp/hf_env/bin:$PATH \
                 "$IMAGE_PATH" \
-                bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate ChronoRoot && pip install huggingface_hub[cli]==0.27.1 && $WEIGHTS_SCRIPT"
+                bash -c "source /opt/conda/etc/profile.d/conda.sh && conda activate ChronoRoot && pip install huggingface_hub==1.3.4 && $WEIGHTS_SCRIPT"
                 
             if [ $? -eq 0 ]; then
                 print_success "Weights synchronized successfully."
