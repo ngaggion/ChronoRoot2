@@ -1,6 +1,2 @@
 models/Arabidopsis/*
-<<<<<<< HEAD
 models/Tomato/*
-=======
-models/Tomato/*
->>>>>>> fadd599 (Fix error catch when postprocessing unfinished analysis)
