@@ -114,7 +114,12 @@ if __name__ == "__main__":
                     # Run analysis
                     n_limit = conf['Limit'] if conf['Limit'] != 0 else None
                     pfile = os.path.join(target_res, 'Results_raw.csv')
-                    dataWork(conf, pfile, target_res, N_exp=n_limit)
+                    
+                    try:
+                        dataWork(conf, pfile, target_res, N_exp=n_limit)
+                    except Exception as e:
+                        print(f"Error processing {pfile}, experiment may have not finished yet. Error: {e}")
+                        continue
 
                     # 4. Generate Plot Name with path components
                     plot_label = f"{os.path.basename(exp_dir)}_{os.path.basename(rpi)}_{os.path.basename(cam)}_{os.path.basename(plant)}"
