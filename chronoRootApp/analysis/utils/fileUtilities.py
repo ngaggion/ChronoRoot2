@@ -109,7 +109,8 @@ def getImages(conf):
                 
     # Check if there is no images, then look for a file called "segmentation_metadata.json"
     if len(images) == 0:
-        metadata_path = os.path.join(conf['Images'], 'segmentation_metadata.json')
+        metadata_path = os.path.join(conf['Images'], 'Segmentation', 'segmentation_metadata.json')
+        print("No images found in the specified folder. Looking for segmentation metadata file at: ", metadata_path)
         if os.path.exists(metadata_path):
             with open(metadata_path, 'r') as f:
                 metadata = json.load(f)

@@ -102,6 +102,7 @@ Usage:
                     if meta.get("segmentation_status") == "Success":
                         print("Previous segmentation complete. Skipping to postprocessing.")
                         args.postprocess_only = True
+                                                
                     elif isinstance(meta.get("processed_files"), list):
                         processed_files = set(meta["processed_files"])
                         print(f"Resuming: {len(processed_files)} images found in metadata.")
@@ -158,13 +159,32 @@ Usage:
             print(f"Segmentation failed: {e}")
             sys.exit(1)
 
+    # check if resume and postprocessing only
+    if args.resume and args.postprocess_only:
+        try:
+            with open(metadata_file, 'r') as f:
+                meta = json.load(f)
+                     # Check if the postprocessing was also completed
+            if meta.get("postprocessing_status") == "Success":
+                # if the model and the alpha are the same, we can skip postprocessing
+                print("Previous postprocessing also complete.")
+                print(f"Previous model: {meta.get('model')}, Current model: {args.model}")
+                print(f"Previous alpha: {meta.get('alpha_used')}, Current alpha: {args.alpha}")
+                if (meta.get("model") == args.model and 
+                    meta.get("alpha_used") == args.alpha):
+                    print("Postprocessing also complete with same parameters. Exiting.")
+                    sys.exit(0)     
+        except Exception as e:
+            print(f"Error reading metadata for postprocessing: {e}")
+            sys.exit(1)
+    
     print(f"\n--- Stage 2: Temporal Postprocessing (α={args.alpha}) ---")
     update_metadata(metadata_file, {
         "postprocessing_status": "Started",
         "postprocessing_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "alpha_used": args.alpha
     })
-    
+            
     try:
         finished = postprocess(
             path=str(input_path), 

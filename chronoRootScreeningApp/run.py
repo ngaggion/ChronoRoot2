@@ -456,7 +456,7 @@ class AnalysisTab(QWidget):
         
         # Check if there is no images, then look for a file called "segmentation_metadata.json"
         if not images:
-            metadata_path = os.path.join(video_folder, 'segmentation_metadata.json')
+            metadata_path = os.path.join(video_folder, 'Segmentation', 'segmentation_metadata.json')
             if os.path.exists(metadata_path):
                 with open(metadata_path, 'r') as f:
                     metadata = json.load(f)
@@ -578,7 +578,7 @@ class AnalysisTab(QWidget):
         
         # Check if there is no images, then look for a file called "segmentation_metadata.json"
         if not images:
-            metadata_path = os.path.join(video_folder, 'segmentation_metadata.json')
+            metadata_path = os.path.join(video_folder, 'Segmentation', 'segmentation_metadata.json')
             if os.path.exists(metadata_path):
                 with open(metadata_path, 'r') as f:
                     metadata = json.load(f)
