@@ -460,8 +460,8 @@ class AnalysisTab(QWidget):
             if os.path.exists(metadata_path):
                 with open(metadata_path, 'r') as f:
                     metadata = json.load(f)
-                images = glob.glob(os.path.join(metadata["images_path"], "*.png")) 
-                video_folder = metadata["images_path"]
+                images = glob.glob(os.path.join(metadata["input_path"], "*.png")) 
+                video_folder = metadata["input_path"]
 
         if not images:
             QMessageBox.warning(
@@ -582,8 +582,8 @@ class AnalysisTab(QWidget):
             if os.path.exists(metadata_path):
                 with open(metadata_path, 'r') as f:
                     metadata = json.load(f)
-                images = glob.glob(os.path.join(metadata["images_path"], "*.png")) 
-                video_folder = metadata["images_path"]
+                images = glob.glob(os.path.join(metadata["input_path"], "*.png")) 
+                video_folder = metadata["input_path"]
 
         if not images:
             QMessageBox.warning(

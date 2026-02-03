@@ -581,7 +581,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             if os.path.exists(metadata_path):
                 with open(metadata_path, 'r') as f:
                     metadata = json.load(f)
-                images = glob.glob(os.path.join(metadata["images_path"], "*.png")) 
+                images = glob.glob(os.path.join(metadata["input_path"], "*.png")) 
                 
         if not images:
             QtWidgets.QMessageBox.warning(
@@ -673,7 +673,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             if os.path.exists(metadata_path):
                 with open(metadata_path, 'r') as f:
                     metadata = json.load(f)
-                images = glob.glob(os.path.join(metadata["images_path"], "*.png")) 
+                images = glob.glob(os.path.join(metadata["input_path"], "*.png")) 
         
         if not images:
             QtWidgets.QMessageBox.warning(

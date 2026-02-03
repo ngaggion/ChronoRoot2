@@ -114,7 +114,7 @@ def getImages(conf):
         if os.path.exists(metadata_path):
             with open(metadata_path, 'r') as f:
                 metadata = json.load(f)
-            images_path = metadata.get('images_path', None)
+            images_path = metadata.get('input_path', None)
             if images_path and os.path.exists(images_path):
                 images = loadPath(images_path, ext="*.png")
                 conf['ImagePath'] = images_path
