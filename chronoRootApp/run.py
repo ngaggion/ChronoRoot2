@@ -26,8 +26,8 @@ import shutil
 import glob
 import os
 from PIL import Image
-from analysis.utils.fileUtilities import convertFromPathSafe
-
+from analysis.utils.fileUtilities import convertFromPathSafe, getImages
+        
 def natural_keys(text):
     return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', text)]
 
@@ -647,56 +647,62 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         metadata_path = os.path.join(path, "metadata.json")
         subprocess.Popen(["python", "1_analysis.py", "--config", metadata_path, "--rerun"])
 
+    def reviewPlant(self):
+        path = self.selected_plant
+        if not path or not os.path.exists(path):
+            return
+
+        try:
+            import plant_viewer
+            
+            # Load data using the helper function
+            images, segs, bbox, conf = plant_viewer.load_plant_data(path)
+            
+            # Create and show window
+            # We attach it to 'self' so it doesn't get garbage collected
+            self.review_window = plant_viewer.ChronoViewWindow(images, segs, bbox, conf, parent=None)
+            self.review_window.show()
+            
+        except FileNotFoundError as e:
+            QtWidgets.QMessageBox.warning(self, "Error", str(e))
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to open review tool:\n{str(e)}")
+
     def preview(self):
-        """Preview with validation for images and segmentation"""
-        
-        # Save fields first
+        # 1. Save fields
         self.saveFieldsIntoJson()
         
-        # Get and validate video folder path
+        # 2. Validate folder
         video_folder = self.videoField.text()
-        
-        if not video_folder:
-            QtWidgets.QMessageBox.warning(None, 'Error', 'Please specify a video folder first!')
+        if not video_folder or not os.path.exists(video_folder):
+            QtWidgets.QMessageBox.warning(None, 'Error', 'Please specify a valid video folder.')
             return
-        
-        if not os.path.exists(video_folder):
-            QtWidgets.QMessageBox.warning(None, 'Error', 'Video folder does not exist!\nPlease check the path to the folder.')
+            
+        # 3. Load Config
+        config_path = os.path.join(self.projectField.text(), "project_config.json")
+        try:
+            with open(config_path, 'r') as f:
+                conf = json.load(f)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(None, 'Error', f'Could not load config:\n{e}')
             return
-        
-        # Check for PNG images
-        images = glob.glob(os.path.join(video_folder, "*.png"))
-        
-        # Check if there is no images, then look for a file called "segmentation_metadata.json"
-        if not images:
-            metadata_path = os.path.join(video_folder, 'Segmentation', 'segmentation_metadata.json')
-            if os.path.exists(metadata_path):
-                with open(metadata_path, 'r') as f:
-                    metadata = json.load(f)
-                images = glob.glob(os.path.join(metadata["input_path"], "*.png")) 
-        
-        if not images:
-            QtWidgets.QMessageBox.warning(
-                None, 'Error', 
-                'No images found in the video folder!\nPlease check the path to the folder where the images are located.'
-            )
-            return
-        
-        # Check for segmentation files in Segmentation/Ensemble folder
-        seg_folder = os.path.join(video_folder, "Segmentation", "Ensemble")
-        seg_files = glob.glob(os.path.join(seg_folder, "*.png")) if os.path.exists(seg_folder) else []
-        
-        if not seg_files:
-            # Images exist but no segmentation found
-            QtWidgets.QMessageBox.warning(
-                None, 'Error',
-                f'Found {len(images)} images but no segmentation files!\n The images may not have been properly segmented.'
-            )
-            return
-        
-        # Launch preview
-        subprocess.Popen(["python", "1_analysis.py", "--preview", "--config", os.path.join(self.projectField.text(), "project_config.json")])
 
+        # 4. Load Images & Launch
+        try:
+            import plant_viewer            
+            images, segFiles = getImages(conf)
+            
+            if not images:
+                QtWidgets.QMessageBox.warning(None, 'Error', 'No images found.')
+                return
+
+            # Launch Window (BBox=None for full image)
+            self.preview_window = plant_viewer.ChronoViewWindow(images, segFiles, None, conf, parent=None)
+            self.preview_window.show()
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(None, 'Error', f'Failed to launch preview:\n{e}')
+        
     def PostProcess(self):
         self.saveFieldsIntoJson()
         subprocess.Popen(["python", "2_postprocess.py", "--config", os.path.join(self.projectField.text(), "project_config.json")])
@@ -704,10 +710,6 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
     def report(self):
         self.saveFieldsIntoJson()
         subprocess.Popen(["python", "3_generateReport.py", "--config", os.path.join(self.projectField.text(), "project_config.json")])   
-    
-    def reviewPlant(self):
-        path = self.selected_plant
-        subprocess.Popen(["python", "4_reviewPlant.py", "--path", path])
 
     def syncProjectFolderField(self):
         projectFolder = self.projectField.text()

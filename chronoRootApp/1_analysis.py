@@ -19,111 +19,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 from analysis.plantAnalysis import plantAnalysis
 import argparse
 import json 
-import cv2
-import numpy as np
 
-from analysis.utils.fileUtilities import getImages
-
-def preview(conf):
-    """
-    Function to preview the sequence of images
-    Uses a openCV window to show the sequence of images
-    The sequence of images is a set of png files, obtained by getImages function
-    Includes a scrollbar to advance in the sequence of images
-    Ensure that the window is in focus to use the scrollbar
-    Ensure that the image is not too big to fit in the screen
-    Allows to close the window with the 'c' key
-    Allows to overlay the segmentation in red, over the image, with the 's' key 
-    Allows to continue scrolling with segmentation overlayed
-    """
-
-    images, segFiles = getImages(conf)
-    
-    N = len(images)
-
-    n = len(images)
-    n2 = len(segFiles)
-    
-    n = min(n, n2)
-
-    # Limit the images loaded to the maximum specified in conf
-    processingLimit = conf.get('processingLimit', None)
-    if processingLimit != 0:
-        n = min(n, processingLimit * 24 * 4)
-        N = min(n, N)
-    
-    images = images[:n]
-    segFiles = segFiles[:n]
-
-    # Timestep in minutes
-    timeStep = conf['timeStep'] # minutes per frame
-    # Create a vector to know at which time the frame was taken
-    time = np.arange(0, n*timeStep, timeStep) # in minutes
-    
-    minutes = (time % 60).astype('int') # in minutes
-    hours = ((time/60) % 24).astype('int') # in hours
-    days = (time // 1440).astype('int') # in days
-
-    cv2.namedWindow('Preview Image (show segmentation with "s" key)', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Preview Image (show segmentation with "s" key)', 800,800)
-    cv2.createTrackbar('Preview Image', 'Preview Image (show segmentation with "s" key)', 0, N-1, lambda x: None)
-
-    useSeg = False
-
-    while True:
-        i = cv2.getTrackbarPos('Preview Image', 'Preview Image (show segmentation with "s" key)')
-        img = cv2.imread(images[i])
-
-        if useSeg:
-            seg = cv2.imread(segFiles[i], 0)
-            
-            # Convert grayscale image to color if it's not already
-            if len(img.shape) == 2:
-                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-            
-            # Define colors for each segment (B,G,R format)
-            colors = {
-                1: (0, 0, 255),     # Red
-                2: (0, 255, 0),     # Green
-                3: (255, 0, 0),     # Blue
-                4: (0, 255, 255),   # Yellow
-            }
-            
-            # Apply colors for values 1-4
-            for val, color in colors.items():
-                mask = (seg == val)
-                img[mask] = color
-            
-            # Handle values 5 and above with purple
-            high_vals_mask = (seg >= 5)
-            img[high_vals_mask] = (255, 0, 255)  # Purple for values 5+
-
-        #Draw the day, hour and minute at the top left corner
-        cv2.putText(img, "Day: %2d" % days[i], (5, 100), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 255, 0), 5)
-        cv2.putText(img, "Time: %2d:%2d" % (hours[i], minutes[i]), (5, 200), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 255, 0), 5)
-
-        cv2.imshow('Preview Image (show segmentation with "s" key)', img)
-        key = cv2.waitKey(1)
-
-        if key == 27:
-            break
-        # close by clicking the X button
-        try:
-            if cv2.getWindowProperty('Preview Image (show segmentation with "s" key)', cv2.WND_PROP_VISIBLE) < 1:
-                break
-        except cv2.error:
-            break
-        
-        if key == ord('c'):
-            break
-        elif key == ord('s'):
-            useSeg = not useSeg
-
-    cv2.destroyAllWindows()
-    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture')
-    parser.add_argument('--preview', action='store_true', default=False, help='Previews the sequence of images')
     parser.add_argument('--config', type=str, help='Path to the configuration file (default: config.json)')
     parser.add_argument('--rerun', action='store_true', default=False, help='Reruns the analysis, even if the results already exist')
     parser.add_argument('--restart', action='store_true', default=False, help='Reruns the analysis from scratch, ignoring any previous bounding box or root start point')
@@ -136,23 +34,20 @@ if __name__ == "__main__":
         del conf['bounding box']
         del conf['seed']
     
-    if not args.preview:
-        try:
-            conf['fileKey'] = conf["Experiment"]
-        except:
-            conf['fileKey'] = conf["identifierField"]
-            conf['Experiment'] = conf["identifierField"]
-            
-        conf['sequenceLabel'] = conf['Experiment'] + "_" + conf['Images'] + "_" + str(conf['plant'])
-        conf['Plant'] = 'Arabidopsis thaliana'
+    try:
+        conf['fileKey'] = conf["Experiment"]
+    except:
+        conf['fileKey'] = conf["identifierField"]
+        conf['Experiment'] = conf["identifierField"]
         
-        if not conf.get('videoHasQRbutton', True):
-            pixel_size = float(conf['knownDistance']) / float(conf['pixelDistance'])
-            conf['pixel_size'] = pixel_size
-            
-        if 'bounding box' in conf and args.rerun:
-            plantAnalysis(conf, True)
-        else:
-            plantAnalysis(conf, False)
+    conf['sequenceLabel'] = conf['Experiment'] + "_" + conf['Images'] + "_" + str(conf['plant'])
+    conf['Plant'] = 'Arabidopsis thaliana'
+    
+    if not conf.get('videoHasQRbutton', True):
+        pixel_size = float(conf['knownDistance']) / float(conf['pixelDistance'])
+        conf['pixel_size'] = pixel_size
+        
+    if 'bounding box' in conf and args.rerun:
+        plantAnalysis(conf, True)
     else:
-        preview(conf)
+        plantAnalysis(conf, False)
