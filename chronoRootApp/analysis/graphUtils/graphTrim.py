@@ -1,10 +1,3 @@
-"""
-Graph trimming operations to clean up artifacts from graph creation.
-Removes zero-weight edges, simplifies chains, and merges duplicate nodes.
-"""
-
-import numpy as np
-
 def trimGraph(graph, skeleton, skeleton_overlay):
     """
     Clean up graph by removing artifacts and simplifying structure.
@@ -12,13 +5,7 @@ def trimGraph(graph, skeleton, skeleton_overlay):
     Operations performed:
     1. Remove zero-weight edges and resulting isolated nodes
     2. Merge degree-2 nodes (simplify chains into single edges)
-    3. Merge nodes that are very close together (<3 pixels)
-    
-    POTENTIAL ISSUES:
-    - May remove legitimate short branches if they have zero weight
-    - Close node merging threshold (3 pixels) may need tuning
-    - Chain simplification loses intermediate spatial information
-    
+        
     Args:
         graph: NetworkX graph with node attributes (pos, type, age) 
                and edge attributes (weight, color, root_type)
@@ -31,14 +18,13 @@ def trimGraph(graph, skeleton, skeleton_overlay):
         skeleton_overlay: Updated overlay with merged segments
     """
     
-    # OPERATION 1: Remove zero-weight edges and isolated nodes
+    # Remove zero-weight edges 
     graph = remove_zero_weight_edges(graph)
     
-    # OPERATION 2: Simplify chains by merging degree-2 nodes
+    # Simplify chains 
     graph, skeleton_overlay = merge_chain_nodes(graph, skeleton_overlay)
     
     return graph, skeleton, skeleton_overlay
-
 
 def remove_zero_weight_edges(graph):
     """
@@ -51,35 +37,28 @@ def remove_zero_weight_edges(graph):
     Returns:
         graph: Graph with zero-weight edges removed
     """
-    edges_to_remove = []
-    nodes_to_check = set()
     
-    # Find all zero-weight edges
+    edges_to_remove = []
+    nodes_to_remove = set()
+    
+    # Identify zero-weight edges
     for u, v, data in graph.edges(data=True):
         if data.get('weight', 0) == 0:
             edges_to_remove.append((u, v))
-            nodes_to_check.add(u)
-            nodes_to_check.add(v)
-    
+            
+            # Match old logic: if removing this edge leaves a node isolated
+            # (or if it was a tip), mark for removal.
+            if graph.degree(u) <= 1: nodes_to_remove.add(u)
+            if graph.degree(v) <= 1: nodes_to_remove.add(v)
+            
     if edges_to_remove:
-        print(f"Removing {len(edges_to_remove)} zero-weight edges.")
-    
-    # Remove zero-weight edges
-    graph.remove_edges_from(edges_to_remove)
-    
-    # Find and remove isolated nodes (degree 0)
-    nodes_to_remove = []
-    for node in nodes_to_check:
-        if node in graph.nodes and graph.degree(node) == 0:
-            nodes_to_remove.append(node)
-    
-    if nodes_to_remove:
-        print(f"Removing {len(nodes_to_remove)} isolated nodes.")
+        graph.remove_edges_from(edges_to_remove)
         
-    graph.remove_nodes_from(nodes_to_remove)
+    # Clean up isolated nodes
+    isolated = [n for n in nodes_to_remove if n in graph and graph.degree(n) == 0]
+    graph.remove_nodes_from(isolated)
     
     return graph
-
 
 def merge_chain_nodes(graph, skeleton_overlay):
     """
@@ -99,56 +78,48 @@ def merge_chain_nodes(graph, skeleton_overlay):
     """
     nodes_to_remove = []
     
-    # Find all degree-2 nodes (nodes in the middle of a chain)
+    # Iterate over nodes (snapshot of list to allow modification)
     for node in list(graph.nodes()):
+        if node in nodes_to_remove: continue
+        
         neighbors = list(graph.neighbors(node))
         
         if len(neighbors) == 2:
-            neighbor1, neighbor2 = neighbors
+            n1, n2 = neighbors
             
-            # Check if neighbors are already connected (would create duplicate edge)
-            if graph.has_edge(neighbor1, neighbor2):
-                # They're already connected - just remove this node
-                # This happens if there's a triangle in the graph
-                nodes_to_remove.append(node)
+            # --- LOOP PROTECTION (Matches 'if edge is None' from old code) ---
+            if graph.has_edge(n1, n2):
+                # A direct link already exists. Merging 'node' would collapse
+                # a parallel path (bubble/loop). Skip this merge.
                 continue
+            # ---------------------------------------------------------------
+
+            edge1 = graph.edges[node, n1]
+            edge2 = graph.edges[node, n2]
             
-            # Get edge data from both edges
-            edge1_data = graph.edges[node, neighbor1]
-            edge2_data = graph.edges[node, neighbor2]
+            w1 = edge1.get('weight', 0)
+            w2 = edge2.get('weight', 0)
+            c1 = edge1.get('color', 0)
+            c2 = edge2.get('color', 0)
             
-            weight1 = edge1_data.get('weight', 0)
-            weight2 = edge2_data.get('weight', 0)
-            color1 = edge1_data.get('color', 0)
-            color2 = edge2_data.get('color', 0)
-            
-            # Create new direct edge between neighbors
-            # Weight is sum of both edges
-            # Color/class: prefer the non-zero weight edge's color
-            if weight1 == 0:
-                new_color = color2
-                # Update skeleton overlay: merge segments
-                skeleton_overlay[skeleton_overlay == color1] = color2
-            elif weight2 == 0:
-                new_color = color1
-                skeleton_overlay[skeleton_overlay == color2] = color1
+            # Determine new color (Propagate dominant ID)
+            if w1 == 0:
+                new_color = c2
+                skeleton_overlay[skeleton_overlay == c1] = c2
+            elif w2 == 0:
+                new_color = c1
+                skeleton_overlay[skeleton_overlay == c2] = c1
             else:
-                # Both have weight, use second edge's color
-                new_color = color2
-                skeleton_overlay[skeleton_overlay == color1] = color2
+                new_color = c2
+                skeleton_overlay[skeleton_overlay == c1] = c2
+
+            # Add shortcut edge
+            graph.add_edge(n1, n2, 
+                           weight=w1 + w2, 
+                           color=new_color,
+                           root_type=edge2.get('root_type', 0))
             
-            graph.add_edge(
-                neighbor1, 
-                neighbor2,
-                weight=weight1 + weight2,
-                color=new_color,
-                root_type=edge2_data.get('root_type', 0)
-            )
-            
-            # Mark this intermediate node for removal
             nodes_to_remove.append(node)
-    
-    # Remove all intermediate nodes
+            
     graph.remove_nodes_from(nodes_to_remove)
-    
     return graph, skeleton_overlay
