@@ -434,7 +434,8 @@ def dataWork(df, first_day, last_day):
     # Handle data that starts after first_day (fill gaps with zeros)
     elif beginning > first_day:
         rows = pd.DataFrame()
-        rows['Date'] = pd.date_range(start=first_day, end=beginning, freq='15T')
+        # CHANGED: '15T' -> '15min' (Compatible with Pandas < 2.2 and > 2.2)
+        rows['Date'] = pd.date_range(start=first_day, end=beginning, freq='15min')
         for col in ['Number of lateral roots', 'Mean tip angle', 'Mean emergence angle', 
                     'First LR tip', 'First LR emergence']:
             rows[col] = 0
@@ -448,7 +449,8 @@ def dataWork(df, first_day, last_day):
     # Handle data that ends before last_day (extend with last values)
     elif end < last_day:
         rows = pd.DataFrame()
-        rows['Date'] = pd.date_range(start=end, end=last_day, freq='15T')
+        # CHANGED: '15T' -> '15min' (Compatible with Pandas < 2.2 and > 2.2)
+        rows['Date'] = pd.date_range(start=end, end=last_day, freq='15min')
         for col in ['Number of lateral roots', 'Mean tip angle', 'Mean emergence angle', 
                     'First LR tip', 'First LR emergence']:
             rows[col] = df[col].iloc[-1]

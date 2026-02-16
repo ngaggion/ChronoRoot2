@@ -268,12 +268,15 @@ def process_video(params: Dict[str, Any]):
     t = 0
     excluded_tracks = set()  # Keep track of merged objects
     
-    dataframe = pd.DataFrame(columns=["UID", "Group", "ElapsedHours", "Area",
-                                  "Perim.", "Slice", "SeedPos", "Date",
-                                  "HypocotylLength", "MainRootLength", "TotalRootLength", 
-                                  "DenseRootArea", 
-                                  "BoundingBox_X", "BoundingBox_Y", "BoundingBox_Width", "BoundingBox_Height",
-                                  "ImageFile"])
+    # Use list instead of DataFrame for accumulation 
+    all_data_rows = []
+    column_names = ["UID", "Group", "ElapsedHours", "Area",
+                    "Perim.", "Slice", "SeedPos", "Date",
+                    "HypocotylLength", "MainRootLength", "TotalRootLength", 
+                    "DenseRootArea", 
+                    "BoundingBox_X", "BoundingBox_Y", "BoundingBox_Width", "BoundingBox_Height",
+                    "ImageFile"]
+
 
     # Calculate pixel size from calibration method
     pixel_size = 0.004  # Default value in case something fails
@@ -483,29 +486,23 @@ def process_video(params: Dict[str, Any]):
         if params['show_tracking']:
             cv2.imwrite(os.path.join(vis_dir, f"tracking_{img_file}"), vis_image)
 
-        # Update dataframe
+        # --- OPTIMIZATION: Extend the list instead of DataFrame concat ---
         if rows:
-            df = pd.DataFrame(rows, columns=dataframe.columns)
-            dataframe = pd.concat([dataframe, df], ignore_index=True)
+            all_data_rows.extend(rows)
         t += 1
 
+    # --- Create DataFrame ONCE at the end ---
+    dataframe = pd.DataFrame(all_data_rows, columns=column_names)
+
     # Post-processing
-    dataframe = dataframe.sort_values(by=['SeedPos', 'Slice']).reset_index(drop=True)
-    dataframe['SeedPos'] = dataframe['SeedPos'].astype(int) - np.min(dataframe['SeedPos'])
+    if not dataframe.empty:
+        dataframe = dataframe.sort_values(by=['SeedPos', 'Slice']).reset_index(drop=True)
+        # Ensure SeedPos can be converted to int safely
+        try:
+             dataframe['SeedPos'] = dataframe['SeedPos'].astype(int) - np.min(dataframe['SeedPos'].astype(int))
+        except:
+             pass # Handle cases where SeedPos might be empty
 
-    """
-    # Remove seeds that are too big at first appearance
-    seeds_to_remove = []
-    for seed in dataframe['UID'].unique():
-        seed_df = dataframe[dataframe['UID'] == seed]
-        if seed_df.iloc[0]['Area'] > 0.06:
-            seeds_to_remove.append(seed)
-
-    if seeds_to_remove:
-        print(f"Removing {len(seeds_to_remove)} seeds that are too big at first appearance")
-        dataframe = dataframe[~dataframe['UID'].isin(seeds_to_remove)]
-    """
-    
     # Remove unknown group seeds after all processing
     dataframe = dataframe[dataframe['Group'] != 'Unknown']
 
@@ -566,8 +563,8 @@ def main():
                     help='Pixel distance corresponding to known physical distance')
 
     # Optional arguments
-    parser.add_argument('--time-delta', type=float, default=1.0,
-                    help='Time between slices in hours')
+    parser.add_argument('--time-delta', type=float, default=15,
+                    help='Time between slices in minutes')
     parser.add_argument('--show-tracking', action='store_true',
                     help='Flag to show tracking visualization')
 

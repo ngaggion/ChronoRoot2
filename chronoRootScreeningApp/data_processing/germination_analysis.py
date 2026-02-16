@@ -14,7 +14,7 @@ class GerminationAnalyzer:
         self.plot_dirs = self._setup_directories()
         
         # Analysis parameters
-        self.TIME_WINDOW = 1
+        self.TIME_WINDOW = 1  # Convert minutes to hours
         self.ROLL_WINDOW = max(5, int(round(2.5 / self.TIME_WINDOW)))
         self.DETECTION_WINDOW = max(10, int(round(5 / self.TIME_WINDOW)))
         self.store_for_each_video = store_for_each_video
@@ -34,6 +34,7 @@ class GerminationAnalyzer:
         data['Group'] = data['Group'].str.replace('/', '_')
         data['UID'] = data['UID'].str.replace('/', '_')
         data['UID'] = data['UID'].astype(str)
+        
         return data[data['Group'] != 'Unknown']
     
     def _setup_directories(self):
@@ -76,14 +77,19 @@ class GerminationAnalyzer:
             'Statistics': self.statistics
         }
     
+  
     def _detect_germination(self, group):
         """Detect germination events based on growth patterns."""
+        group = group.copy()
+        group = group.sort_values('ElapsedHours')
         group['GrowthRate'] = (group['Perim.']
                              .rolling(window=self.ROLL_WINDOW, min_periods=1)
                              .mean() - group['Perim.'].mean())
+        
         group['RateChange'] = group['GrowthRate'].diff().fillna(0)
         group['ShortTermChange'] = group['GrowthRate'].diff(periods=self.DETECTION_WINDOW)
         group['LongTermChange'] = group['GrowthRate'].diff(periods=self.DETECTION_WINDOW * 2)
+        
         group['TrendDirection'] = (group['RateChange']
                                  .apply(np.sign)
                                  .rolling(window=self.DETECTION_WINDOW, min_periods=1)
@@ -97,9 +103,24 @@ class GerminationAnalyzer:
     def _process_raw_data(self):
         """Process raw measurements to detect germination events."""
         data = self.data.copy()
+        processed = data.groupby(data['UID']).apply(self._detect_germination)
+
+        if 'UID' not in processed.columns:
+            if 'UID' in processed.index.names:
+                processed = processed.reset_index(level='UID')
+            elif isinstance(processed.index, pd.MultiIndex):
+                processed = processed.reset_index(level=0)
+            else:
+                processed = processed.reset_index() 
+            if 'UID' not in processed.columns:
+                for candidate in ['level_0', 'index']:
+                    if candidate in processed.columns:
+                        processed = processed.rename(columns={candidate: 'UID'})
+                        break
+
+        processed = processed.reset_index(drop=True)
+        data = processed
         
-        # Calculate germination metrics
-        data = data.groupby('UID', group_keys=False).apply(self._detect_germination)
         data['ElapsedHours'] = data['ElapsedHours'] + self.add_time_before_photo
         
         # Get unique combinations of Group and Video
@@ -108,8 +129,11 @@ class GerminationAnalyzer:
                             .set_index(['Group', 'Video'])['SeedCount']
                             .to_dict())
         
+        germinated_mask = data['Germinated'] == True
+        germ_subset = data[germinated_mask].copy()
+
         # Summarize germination events
-        germ_data = (data[data['Germinated']]
+        germ_data = (germ_subset
                     .groupby(['Group', 'UID', 'Video'])
                     .agg({
                         'ElapsedHours': 'min',

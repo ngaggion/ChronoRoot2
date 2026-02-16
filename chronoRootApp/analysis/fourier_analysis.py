@@ -87,7 +87,7 @@ class DataProcessor:
             N = N0 + valid_duration
 
             # Extract and process speed data
-            mSpeed = data[root].to_numpy()
+            mSpeed = np.array(data[root], copy=True)
             mSpeed = np.nan_to_num(mSpeed, 0.0)
 
             if normalize:

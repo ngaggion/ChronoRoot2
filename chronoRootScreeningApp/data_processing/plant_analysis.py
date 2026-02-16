@@ -25,7 +25,7 @@ class PlantGrowthAnalyzer:
             output_dir: Directory for saving outputs
             conda_env: Conda environment name for FPCA analysis (default: "FDA")
         """
-        self.data = data
+        self.data = data.copy() if data is not None else None
         self.base_dir = output_dir
         self.plot_dirs = {}
         self.add_time_before_photo = add_time_before_photo
@@ -113,9 +113,16 @@ class PlantGrowthAnalyzer:
                 uid_data = self.data[self.data['UID'] == uid]
                 lengths.append(len(uid_data))
     
+            # Safety check if no data
+            if not lengths:
+                raise ValueError(f"No data available for {parameter}")
+                
+            max_len = max(lengths)
+
             for uid in self.data['UID'].unique():
                 uid_data = self.data[self.data['UID'] == uid]
-                is_valid, cleaned_series = self._validate_time_series(uid_data, parameter, lengths)
+                # Pass max_len directly to avoid re-calculating
+                is_valid, cleaned_series = self._validate_time_series(uid_data, parameter, max_len)
                 if is_valid:
                     cleaned_data_list.append(cleaned_series)
             
@@ -196,16 +203,17 @@ class PlantGrowthAnalyzer:
             
         return results
     
-    def _validate_time_series(self, uid_data, parameter, lengths):
+    def _validate_time_series(self, uid_data, parameter, max_len):
         """Validates a single time series for a specific parameter."""
 
         # Check if the length of the time series is at least 2/3 of the maximum length
-        if len(uid_data) < max(lengths):
+        # Note: Logic changed slightly to accept max_len as arg for efficiency
+        if len(uid_data) < max_len:
             return False, None
         
-        elapsed_hours = uid_data['ElapsedHours'].values
-        parameter_values = uid_data[parameter].values
-        full_date = uid_data['Date'].values
+        elapsed_hours = uid_data['ElapsedHours'].values.copy()
+        parameter_values = uid_data[parameter].values.copy()
+        full_date = uid_data['Date'].values.copy()
         
         # Basic validation checks
         if max(parameter_values) < 0.1 and 'Length' in parameter:
@@ -253,6 +261,7 @@ class PlantGrowthAnalyzer:
         processed_data_list = []
         
         for uid in data['UID'].unique():
+            # Working on a copy is safer
             uid_data = data[data['UID'] == uid].copy()
             
             # Process each day separately
@@ -262,6 +271,8 @@ class PlantGrowthAnalyzer:
             
             day_data_list = []
             for start, end in zip(day_starts, day_ends):
+                if start >= end: continue # Skip empty slices
+                
                 day_data = uid_data.iloc[start:end].copy()
                 
                 # Group by hour within this day
@@ -274,11 +285,13 @@ class PlantGrowthAnalyzer:
                 
                 # Add DayChange column after aggregation
                 hourly_data['DayChange'] = False
-                if len(day_data_list) > 0:  # If not the first day
+                if len(day_data_list) > 0 and len(hourly_data) > 0:  # If not the first day
                     hourly_data.iloc[0, hourly_data.columns.get_loc('DayChange')] = True
 
                 day_data_list.append(hourly_data)
             
+            if not day_data_list: continue
+
             # Combine all days for this UID
             uid_hourly = pd.concat(day_data_list, ignore_index=True)
             
@@ -298,6 +311,9 @@ class PlantGrowthAnalyzer:
             uid_hourly['SyncHour'] = sequential_hours
             processed_data_list.append(uid_hourly)
         
+        if not processed_data_list:
+             raise ValueError(f"No valid data generated after hourly processing for {parameter}")
+
         # Combine all processed data
         result = pd.concat(processed_data_list, ignore_index=True)
         
@@ -311,9 +327,8 @@ class PlantGrowthAnalyzer:
         result = result.sort_values(['UID', 'SyncHour'])
         
         # Calculate growth rate per hour
-        result['GrowthRate'] = result.groupby('UID')[parameter].diff()
-        # Fill na values with 0, for the first hour
-        result['GrowthRate'] = result['GrowthRate'].fillna(0)
+        # Use fillna(0) to handle the first NaN value
+        result['GrowthRate'] = result.groupby('UID')[parameter].diff().fillna(0)
         
         return result
     
@@ -358,12 +373,14 @@ class PlantGrowthAnalyzer:
         )
         
         # Add vertical lines every DayChange
-        for idx in data[data['DayChange']].index:
+        day_change_indices = data.index[data['DayChange']]
+        for idx in day_change_indices:
             plt.axvline(data.loc[idx, 'SyncHour'], color='green', alpha=0.3, linestyle='--')
         
         # X-ticks should be at the vertical grid lines ad DayChange
-        x_ticks = data[data['DayChange']]['SyncHour'].values
-        plt.xticks(x_ticks)
+        if len(day_change_indices) > 0:
+            x_ticks = data.loc[day_change_indices, 'SyncHour'].values
+            plt.xticks(x_ticks)
 
         plt.title(f'{parameter} Growth')
         plt.xlabel('Time (hours) \n (0 = first midnight)')
@@ -381,7 +398,7 @@ class PlantGrowthAnalyzer:
         )
         
         # Add vertical lines every DayChange
-        for idx in data[data['DayChange']].index:
+        for idx in day_change_indices:
             plt.axvline(data.loc[idx, 'SyncHour'], color='green', alpha=0.3, linestyle='--')
         
         ax.set_title(f'{parameter} Growth Rate')
@@ -390,8 +407,9 @@ class PlantGrowthAnalyzer:
         ax.grid(True, alpha=0.3)
 
         # X-ticks should be at the vertical grid lines ad DayChange
-        x_ticks = data[data['DayChange']]['SyncHour'].values
-        ax.set_xticks(x_ticks)
+        if len(day_change_indices) > 0:
+            x_ticks = data.loc[day_change_indices, 'SyncHour'].values
+            ax.set_xticks(x_ticks)
 
         plt.tight_layout()
         plot_path = os.path.join(self.plot_dirs['plots'], f'Summarized_{parameter}')
@@ -413,6 +431,7 @@ class PlantGrowthAnalyzer:
         for group in data['Group'].unique():
             plt.figure(figsize=(8, 4))
             group_data = data[data['Group'] == group]
+            day_change_indices = group_data.index[group_data['DayChange']]
             
             # Plot parameter values
             plt.subplot(211)
@@ -429,12 +448,13 @@ class PlantGrowthAnalyzer:
             plt.grid(True, alpha=0.3)
             
             # Add vertical lines every DayChange
-            for idx in group_data[group_data['DayChange']].index:
+            for idx in day_change_indices:
                 plt.axvline(group_data.loc[idx, 'SyncHour'], color='green', alpha=0.3, linestyle='--')
             
             # X-ticks should be at the vertical grid lines ad DayChange
-            x_ticks = group_data[group_data['DayChange']]['SyncHour'].values
-            plt.xticks(x_ticks)
+            if len(day_change_indices) > 0:
+                x_ticks = group_data.loc[day_change_indices, 'SyncHour'].values
+                plt.xticks(x_ticks)
 
             # Plot all individual time series
             plt.subplot(212)
@@ -453,12 +473,13 @@ class PlantGrowthAnalyzer:
             plt.legend([],[], frameon=False)
             
             # Add vertical lines every DayChange
-            for idx in group_data[group_data['DayChange']].index:
+            for idx in day_change_indices:
                 plt.axvline(group_data.loc[idx, 'SyncHour'], color='green', alpha=0.3, linestyle='--')
             
             # X-ticks should be at the vertical grid lines ad DayChange
-            x_ticks = group_data[group_data['DayChange']]['SyncHour'].values
-            plt.xticks(x_ticks)
+            if len(day_change_indices) > 0:
+                x_ticks = group_data.loc[day_change_indices, 'SyncHour'].values
+                plt.xticks(x_ticks)
 
             plt.tight_layout()
             plot_path = os.path.join(self.plot_dirs['plots'], f'{parameter}_{group}')
@@ -480,7 +501,7 @@ class PlantGrowthAnalyzer:
             file_path = name + fmt
             plt.savefig(file_path, bbox_inches='tight', dpi=300)
             saved_paths[fmt[1:]] = file_path
-        plt.close()
+        plt.close('all') 
         return saved_paths
 
     def run_fpca_analysis(self, parameter, components=2, normalize=False):
