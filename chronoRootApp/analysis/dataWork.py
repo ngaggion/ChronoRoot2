@@ -16,15 +16,23 @@ import warnings
 
 def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5):
     """
-    Process root measurement data with improved time handling
-    
-    Parameters:
-    -----------
-
-    time_tolerance : float
-        Fraction of timeStep to use as tolerance for considering samples as "on time"
-        Default 0.5 means samples within 50% of expected timeStep are considered valid
+    Process root measurement data.
+    COMPATIBILITY: Works with both Pandas < 2.0 (using 'H'/'T') and Pandas 2.2+ (using 'h'/'min').
     """
+    
+    # --- CROSS-VERSION COMPATIBILITY CHECK ---
+    # We define the frequency aliases dynamically to avoid errors on mixed versions.
+    try:
+        # Try to parse the modern lowercase alias (Pandas 2.2+)
+        pd.tseries.frequencies.to_offset('h')
+        FREQ_HOUR = 'h'
+        FREQ_MIN = 'min'
+    except (ValueError, TypeError):
+        # Fallback for ancient Pandas versions that strict-require uppercase
+        FREQ_HOUR = 'H'
+        FREQ_MIN = 'T'
+    # -----------------------------------------
+
     data = pd.read_csv(pfile)
     shape = data.shape
     N = shape[0]
@@ -110,9 +118,13 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     
     # Reads the pixel size
     path = os.path.abspath(os.path.join(folder, 'metadata.json'))
-    with open(path) as f:
-        metadata = json.load(f)
-    pixel_size = metadata['pixel_size']
+    try:
+        with open(path) as f:
+            metadata = json.load(f)
+        pixel_size = metadata['pixel_size']
+    except (FileNotFoundError, KeyError):
+        print(f"Warning: Could not read pixel_size from {path}, defaulting to 1.0")
+        pixel_size = 1.0
     
     # Beginning of the data processing
     mainRoot = data['MainRootLength'].to_numpy().astype('float')
@@ -137,7 +149,6 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     hypocotylLength = np.nan_to_num(hypocotylLength, nan=0.0)
 
     # Remove spurious lateral roots at the beginning
-    # The space are six hours (24 timepoints with 15 min timeStep)
     space = int((6 * 60) / timeStep)  # 6 hours worth of timeSteps
 
     for t in range(space, len(numlateralRoots)):
@@ -192,7 +203,10 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     try:
         data = data.drop(columns=['FileName', 'Frame', 'MainRootLength', 'LateralRootsLength', 'TotalLength', 'HypocotylLength'])
     except:
-        data = data.drop(columns=['FileName', 'MainRootLength', 'LateralRootsLength', 'TotalLength', 'HypocotylLength'])
+        try:
+            data = data.drop(columns=['FileName', 'MainRootLength', 'LateralRootsLength', 'TotalLength', 'HypocotylLength'])
+        except KeyError:
+             pass
     
     # Create elapsed time column, in hours
     data['ElapsedTime (h)'] = ((data['Date'] - data['Date'][0]).dt.total_seconds() / 3600).round(2)
@@ -206,8 +220,11 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     data = data.set_index('Date')
     data.index.name = 'Date'
     
-    reference_timestamp = data.index[0].floor('H')
-    hour_data = data.resample('60T', origin=reference_timestamp).mean()
+    # --- USE DYNAMIC ALIAS HERE ---
+    reference_timestamp = data.index[0].floor(FREQ_HOUR)
+    
+    # --- USE DYNAMIC ALIAS HERE (e.g., '60min' or '60T') ---
+    hour_data = data.resample(f'60{FREQ_MIN}', origin=reference_timestamp).mean()
     
     # Handle N_exp for hourly data
     if N_exp is not None:
@@ -216,8 +233,10 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
         if len(hour_data) < expected_hour_count:
             missing_hours = expected_hour_count - len(hour_data)
             last_hour = hour_data.index[-1]
+            
+            # --- USE DYNAMIC ALIAS HERE ---
             new_hours = pd.date_range(start=last_hour + pd.Timedelta(hours=1), 
-                                     periods=missing_hours, freq='60T')
+                                     periods=missing_hours, freq=f'60{FREQ_MIN}')
             new_data = pd.DataFrame(index=new_hours)
             for column in hour_data.columns:
                 new_data[column] = hour_data[column].iloc[-1]
@@ -240,7 +259,7 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     totalRootsGrad = np.gradient(data['TotalLength (mm)'].to_numpy(), edge_order=2)
     hypocotylGrad = np.gradient(data['HypocotylLength (mm)'].to_numpy(), edge_order=2) 
     
-    # Calculate ratios with proper division handling
+    # Calculate ratios
     total_length = data['TotalLength (mm)'].to_numpy()
     main_length = data['MainRootLength (mm)'].to_numpy()
     
