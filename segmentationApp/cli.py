@@ -68,7 +68,12 @@ Usage:
     proc_group.add_argument('--alpha', '-a', type=float, 
                             help='Temporal alpha (0.0-1.0). Default: Arabidopsis=0.85, Tomato=0.60')
     proc_group.add_argument('--output', '-o', help='Custom output path. Default: Input folder.')
-    proc_group.add_argument('--device', default='cuda', choices=['cuda', 'cpu'], help='Default: cuda')
+    proc_group.add_argument(
+        '--device',
+        default='auto',
+        choices=['auto', 'cuda', 'mps', 'cpu'],
+        help="Compute device. 'auto' prefers cuda > mps > cpu. Default: auto"
+    )
     proc_group.add_argument('--fast', action='store_true', help='Disable mirroring for speed.')
 
     # Execution Flow

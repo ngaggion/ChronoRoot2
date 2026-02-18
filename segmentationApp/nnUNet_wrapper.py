@@ -17,33 +17,56 @@ class nnUNetv2:
     Designed for 2D architectures.
     """
     
-    def __init__(self, model_path: str, device: str = 'cuda', verbose: bool = False, use_gaussian: bool = True,
+    def __init__(self, model_path: str, device: str = 'auto', verbose: bool = False, use_gaussian: bool = True,
                 use_mirroring: bool = True, tile_step_size: float = 0.5):
         """
         Initialize the nnUNet predictor.
         
         Args:
             model_path: Path to trained model folder (contains fold_X subdirectories)
-            device: 'cuda' or 'cpu'
+            device: 'auto', 'cuda', 'mps', or 'cpu'
             verbose: Print detailed information during processing
         """
         self.model_path = Path(model_path)
-        self.device = torch.device(device)
+        self.device = self._resolve_device(device)
         self.predictor = None
         self.verbose = verbose
         self.use_gaussian = use_gaussian
         self.use_mirroring = use_mirroring
         self.tile_step_size = tile_step_size
 
-        # Check GPU availability
-        if device == 'cuda' and not torch.cuda.is_available():
-            print("CUDA not available, falling back to CPU")
-            self.device = torch.device('cpu')
-            self.perform_everything_on_device = False
-        else:
-            self.perform_everything_on_device = True
+        self.perform_everything_on_device = self.device.type != 'cpu'
         
         self._initialize_predictor()
+
+    def _resolve_device(self, device: str) -> torch.device:
+        """
+        Resolve a requested device string into a valid torch.device.
+        Preference order for 'auto': cuda > mps > cpu
+        """
+        req = (device or "auto").lower().strip()
+
+        if req == "auto":
+            if torch.cuda.is_available():
+                return torch.device("cuda")
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                return torch.device("mps")
+            return torch.device("cpu")
+
+        if req == "cuda":
+            if torch.cuda.is_available():
+                return torch.device("cuda")
+            print("CUDA not available, falling back to CPU")
+            return torch.device("cpu")
+
+        if req == "mps":
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                return torch.device("mps")
+            print("MPS not available, falling back to CPU")
+            return torch.device("cpu")
+
+        # Default: cpu (and tolerate torch.device('cpu') style inputs)
+        return torch.device(req if req in {"cpu"} else "cpu")
     
     def _initialize_predictor(self):
         """Initialize the nnUNet predictor from trained model folder."""

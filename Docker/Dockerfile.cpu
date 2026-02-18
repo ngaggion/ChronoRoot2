@@ -1,0 +1,10 @@
+FROM chronorootbase:cpu
+
+WORKDIR /
+
+# MKDIR the /DATA directory for mounting data volumes
+RUN mkdir -p /DATA
+
+# Clone the ChronoRoot2 repository into /app
+RUN git clone https://github.com/ngaggion/ChronoRoot2.git /app
+

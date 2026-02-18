@@ -38,12 +38,13 @@ Before installing, ensure your system meets the following criteria:
 
 | Component | Requirement |
 | :--- | :--- |
-| **OS** | **Linux** (Ubuntu 20.04+), **Windows 10** (via WSL2), or **macOS** (Docker only) |
+| **OS** | **Linux** (Ubuntu 20.04+), **Windows 10** (via WSL2), or **macOS** (Docker; native Apple Silicon support is experimental) |
 | **RAM** | 8 GB minimum (16 GB recommended) |
 | **Storage** | ~15 GB (Disk space for images/containers) |
 | **GPU** | NVIDIA GPU with CUDA 11.0+ (Highly recommended for Segmentation) |
 
-> **Note on macOS:** Native installation is not supported. Mac users must use the Docker method.
+> **Note on macOS:** Upstream recommends Docker. On Apple Silicon (arm64), the official Docker image may run under amd64 emulation,
+> which can break GUI components. This repo also provides an **experimental** native Apple Silicon environment file for CPU/MPS usage.
 
 ## Installation & Getting Started
 
@@ -76,6 +77,32 @@ wget https://raw.githubusercontent.com/chronoroot/ChronoRoot2/master/installer_c
 bash installer_conda_wsl.sh
 ```
 
+#### **C. For macOS (Apple Silicon / arm64) — Experimental**
+
+Native macOS support is not part of the upstream installers, but you can create a working environment on Apple Silicon.
+Segmentation can run on **CPU** or **MPS** (Apple GPU) depending on your PyTorch build.
+
+```bash
+cd ChronoRoot2
+conda env create -f environment_macos_arm64.yml
+conda activate ChronoRoot
+```
+
+Run the apps:
+
+```bash
+cd segmentationApp && python run.py
+cd chronoRootApp && python run.py
+cd chronoRootScreeningApp && python run.py
+```
+
+CLI segmentation (recommended for stability):
+
+```bash
+cd segmentationApp
+python cli.py /path/to/images --model Arabidopsis --device auto
+```
+
 ### Option 2: Apptainer / Singularity
 
 *Best for: HPC Clusters or users preferring single-file containers.*
@@ -105,6 +132,11 @@ If you are using Docker, you will interact with the software via the terminal.
 ```bash
 docker pull ngaggion/chronoroot:latest
 ```
+
+**macOS (Apple Silicon) note:** the official image is typically **linux/amd64**. If you experience GUI crashes under emulation, consider:
+- Using **CLI segmentation** (`segmentationApp/cli.py`)
+- Running on a **Linux amd64** machine (lab server / cluster)
+- Building a **CPU-only arm64 Docker image** locally (see `Docker/README.md`)
 
 **2. Run the Container:**
 
