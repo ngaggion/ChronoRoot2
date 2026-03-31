@@ -21,7 +21,7 @@ from .utils.getROIandSeed import getROIandSeed
 from .imageUtils.seg import extract_root_segmentation, extract_skeleton
 from .imageUtils.plot import saveImages
 from .graphUtils.save import saveGraph, saveProps
-from .graphUtils.graph import createGraph
+from .graphUtils.graph_mc import createGraph
 from .graphUtils.graphTrim import trimGraph
 from .graphUtils.graphTrack import graphInit, matchGraphs
 from .rsmlUtils.rsml import createTree, saveRSML
@@ -121,7 +121,7 @@ def plantAnalysis(conf, replicate=False):
             
             # Try to extract root segmentation
             try:
-                root_mask, hypocotyl_skeleton, hypocotyl_length, found_root = extract_root_segmentation(
+                root_mask, hypocotyl_skeleton, hypocotyl_length, found_root, mc_filtered_mask = extract_root_segmentation(
                     segmentation_paths[frame_idx], 
                     roi_bounds, 
                     current_root_base,
@@ -151,14 +151,16 @@ def plantAnalysis(conf, replicate=False):
                 frame_errors.append(0)
                 continue
             
+            skeleton_color = skeleton.copy() * mc_filtered_mask.copy()  # Color skeleton by multiclass mask
+            
             # Try to create graph structure
             graph, updated_root_base, skeleton_overlay = createGraph(
-                skeleton.copy(), 
+                skeleton_color.copy(), 
                 current_root_base, 
                 end_points, 
                 branch_points
             )
-            #graph, skeleton, skeleton_overlay = trimGraph(graph, skeleton, skeleton_overlay)
+
             try:
                 graph = graphInit(graph)
                 rsml_tree, lateral_root_count = createTree(conf, frame_idx, images, graph, skeleton, skeleton_overlay)
@@ -227,7 +229,7 @@ def plantAnalysis(conf, replicate=False):
             
             frame_failed = False
             
-            new_root_mask, new_hypocotyl_skeleton, new_hypocotyl_length, found_root = extract_root_segmentation(
+            new_root_mask, new_hypocotyl_skeleton, new_hypocotyl_length, found_root, mc_filtered_mask = extract_root_segmentation(
                 segmentation_paths[frame_idx],
                 roi_bounds,
                 current_root_base,
@@ -246,9 +248,11 @@ def plantAnalysis(conf, replicate=False):
                     analysis_log.append(f'Frame {frame_idx}: Error in skeletonization\n')
             
             if not frame_failed:
+                new_skeleton_color = new_skeleton.copy() * mc_filtered_mask.copy()  # Color skeleton by multiclass mask
+                
                 try:
                     new_graph, updated_root_base, new_skeleton_overlay = createGraph(
-                        new_skeleton.copy(),
+                        new_skeleton_color.copy(),
                         current_root_base,
                         end_points,
                         branch_points
@@ -257,12 +261,11 @@ def plantAnalysis(conf, replicate=False):
                     frame_failed = True
                     analysis_log.append(f'Frame {frame_idx}: Error in graph creation - {str(e)}\n')
             
+            
             if not frame_failed:
                 try:
-                    new_graph, new_skeleton, new_skeleton_overlay = trimGraph(
-                        new_graph,
-                        new_skeleton.copy(),
-                        new_skeleton_overlay
+                    new_graph, = trimGraph(
+                        new_graph
                     )
                 except Exception as e:
                     frame_failed = True

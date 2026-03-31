@@ -1,30 +1,22 @@
-def trimGraph(graph, skeleton, skeleton_overlay):
+def trimGraph(graph):
     """
     Clean up graph by removing artifacts and simplifying structure.
     
     Operations performed:
     1. Remove zero-weight edges and resulting isolated nodes
-    2. Merge degree-2 nodes (simplify chains into single edges)
-        
+            
     Args:
         graph: NetworkX graph with node attributes (pos, type, age) 
                and edge attributes (weight, color, root_type)
-        skeleton: Binary skeleton image
-        skeleton_overlay: Skeleton with color-coded segments
-        
+
     Returns:
         graph: Cleaned graph
-        skeleton: Updated skeleton
-        skeleton_overlay: Updated overlay with merged segments
     """
     
     # Remove zero-weight edges 
     graph = remove_zero_weight_edges(graph)
     
-    # Simplify chains 
-    graph, skeleton_overlay = merge_chain_nodes(graph, skeleton_overlay)
-    
-    return graph, skeleton, skeleton_overlay
+    return graph
 
 def remove_zero_weight_edges(graph):
     """

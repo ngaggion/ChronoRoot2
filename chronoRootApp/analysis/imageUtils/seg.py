@@ -131,7 +131,7 @@ def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, 
     components_by_area = [(cv2.contourArea(component), component) for component in connected_components]
     
     if len(components_by_area) == 0:
-        return binary_mask, hypocotyl_skeleton, hypocotyl_length, False
+        return binary_mask, hypocotyl_skeleton, hypocotyl_length, False, binary_mask
     
     # Sort components by area (largest first)
     components_by_area.sort(key=lambda x: x[0], reverse=True)
@@ -152,10 +152,28 @@ def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, 
             cv2.drawContours(component_mask, [component], -1, 255, -1)
             filtered_mask = cv2.bitwise_and(component_mask, binary_mask.copy())
             
-            return filtered_mask, hypocotyl_skeleton, hypocotyl_length, True
+            # Create a temporary mask where Main Root (1) becomes 2, and Lateral (2) becomes 1.
+            # This forces the dilation (a local maximum filter) to prioritize the Main Root. 
+            temp_mc_mask = np.zeros_like(multi_class_mask)
+            temp_mc_mask[multi_class_mask == 1] = 2
+            temp_mc_mask[multi_class_mask == 2] = 1
+            
+            # Dilate the swapped mask
+            mc_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+            dilated_temp = cv2.dilate(temp_mc_mask, mc_kernel)
+            
+            # Swap the values back to their original meanings
+            dilated_mc_mask = np.zeros_like(multi_class_mask)
+            dilated_mc_mask[dilated_temp == 2] = 1
+            dilated_mc_mask[dilated_temp == 1] = 2
+            
+            # Return the dilated multiclass mask filtered by the valid binary component
+            mc_filtered_mask = dilated_mc_mask * (filtered_mask > 0).astype(np.uint8)
+
+            return filtered_mask, hypocotyl_skeleton, hypocotyl_length, True, mc_filtered_mask
     
     # No component found near root base
-    return binary_mask, hypocotyl_skeleton, hypocotyl_length, False
+    return binary_mask, hypocotyl_skeleton, hypocotyl_length, False, binary_mask
 
 def extract_hypocotyl_length(multi_class_mask):
     # Filter Mask for Hypocotyls (Class 4)
