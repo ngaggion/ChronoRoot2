@@ -21,7 +21,7 @@ from .utils.getROIandSeed import getROIandSeed
 from .imageUtils.seg import extract_root_segmentation, extract_skeleton
 from .imageUtils.plot import saveImages
 from .graphUtils.save import saveGraph, saveProps
-from .graphUtils.graph_mc import createGraph
+from .graphUtils.graph import createGraph
 from .graphUtils.graphTrim import trimGraph
 from .graphUtils.graphTrack import graphInit, matchGraphs
 from .rsmlUtils.rsml import createTree, saveRSML
