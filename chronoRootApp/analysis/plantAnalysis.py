@@ -261,10 +261,9 @@ def plantAnalysis(conf, replicate=False):
                     frame_failed = True
                     analysis_log.append(f'Frame {frame_idx}: Error in graph creation - {str(e)}\n')
             
-            
             if not frame_failed:
                 try:
-                    new_graph, = trimGraph(
+                    new_graph = trimGraph(
                         new_graph
                     )
                 except Exception as e:
