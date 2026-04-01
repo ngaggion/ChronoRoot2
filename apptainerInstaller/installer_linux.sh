@@ -226,6 +226,8 @@ main() {
         cat > "$wrapper_script" << EOF
 #!/bin/bash
 
+umask 002
+
 # 1. Initialize Bind Paths
 # Always bind necessary system paths
 BINDS="--bind /tmp/.X11-unix --bind /run/user/\$(id -u):/run/user/\$(id -u)"

@@ -160,6 +160,8 @@ main() {
         # Create Wrapper
         cat > "$wrapper" << EOF
 #!/bin/bash
+
+umask 002
 source "$CONDA_BASE/etc/profile.d/conda.sh"
 conda activate $ENV_NAME
 cd "$REPO_DIR/$subdir"
