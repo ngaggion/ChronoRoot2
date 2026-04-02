@@ -216,7 +216,7 @@ def get_next_node(skeleton_image, multiclass_skeleton, current_pixel, parent_pix
             skeleton_image[current_pixel[1], current_pixel[0]] = edge_color_counter
         
         # Stop if structural node OR confirmed color boundary
-        if len(valid_children) != 1:
+        if len(valid_children) != 1 or color_changed:
             return skeleton_image, current_pixel, accumulated_distance
         
         skeleton_image[current_pixel[1], current_pixel[0]] = edge_color_counter

@@ -164,6 +164,7 @@ def dataWork(conf, pfile, folder, N_exp = None, debug=False, time_tolerance=0.5)
     # Smooth
     mainRoot = signal.medfilt(mainRoot, 9) 
     lateralRoots = signal.medfilt(lateralRoots, 9) 
+    numlateralRoots = signal.medfilt(numlateralRoots, 9)
     hypocotylLength = signal.medfilt(hypocotylLength, 9)
 
     # Check that the values never decrease
