@@ -100,8 +100,28 @@ def get_roi_bounding_box(mask, padding=5):
     
     return roi_slice, offset
 
+def calculate_bbox_iou(box1, box2):
+    """Calculates Intersection over Union for two bounding boxes (x_min, y_min, x_max, y_max)."""
+    if box1 is None or box2 is None:
+        return 0.0
+        
+    x_left = max(box1[0], box2[0])
+    y_top = max(box1[1], box2[1])
+    x_right = min(box1[2], box2[2])
+    y_bottom = min(box1[3], box2[3])
+    
+    if x_right < x_left or y_bottom < y_top:
+        return 0.0
+        
+    intersection_area = (x_right - x_left) * (y_bottom - y_top)
+    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    union_area = area1 + area2 - intersection_area
+    
+    return intersection_area / union_area if union_area > 0 else 0.0
 
-def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, fixed_seed_position):
+
+def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, fixed_seed_position, previous_bbox=None):
     # Load segmentation and crop to region of interest
     multi_class_mask = cv2.imread(segmentation_path, 0)[roi_bounds[0]:roi_bounds[1], roi_bounds[2]:roi_bounds[3]]
     
@@ -128,52 +148,82 @@ def extract_root_segmentation(segmentation_path, roi_bounds, current_root_base, 
     
     # Find all connected components
     connected_components, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    components_by_area = [(cv2.contourArea(component), component) for component in connected_components]
     
-    if len(components_by_area) == 0:
-        return binary_mask, hypocotyl_skeleton, hypocotyl_length, False, binary_mask
+    candidates = []
     
-    # Sort components by area (largest first)
-    components_by_area.sort(key=lambda x: x[0], reverse=True)
-    
-    # Find the component that contains or is near the root base
-    for area, component in components_by_area:
+    for component in connected_components:
+        area = cv2.contourArea(component)
         if area < 30:  # Skip tiny components
-            break
+            continue
+            
+        # Get bounding box for the component
+        x, y, w, h = cv2.boundingRect(component)
+        comp_bbox = (x, y, x + w, y + h)
         
-        # Check if this component contains the current root base position
-        distance_to_root_base = cv2.pointPolygonTest(component, (int(current_root_base[0]), int(current_root_base[1])), True)
-        distance_to_root_base = np.abs(distance_to_root_base)
-        contains_root_base = cv2.pointPolygonTest(component, (int(current_root_base[0]), int(current_root_base[1])), False) > 0
+        # Calculate distance to root base
+        dist_raw = cv2.pointPolygonTest(component, (int(current_root_base[0]), int(current_root_base[1])), True)
+        distance_to_root_base = np.abs(dist_raw)
         
-        if distance_to_root_base < 100 or contains_root_base:
-            # This is the root - extract only this component
-            component_mask = np.zeros(binary_mask.shape, np.uint8)
-            cv2.drawContours(component_mask, [component], -1, 255, -1)
-            filtered_mask = cv2.bitwise_and(component_mask, binary_mask.copy())
+        # If the point is inside the contour, distance is effectively 0
+        if dist_raw >= 0:
+            distance_to_root_base = 0.0 
             
-            # Create a temporary mask where Main Root (1) becomes 2, and Lateral (2) becomes 1.
-            # This forces the dilation (a local maximum filter) to prioritize the Main Root. 
-            temp_mc_mask = np.zeros_like(multi_class_mask)
-            temp_mc_mask[multi_class_mask == 1] = 2
-            temp_mc_mask[multi_class_mask == 2] = 1
-            
-            # Dilate the swapped mask
-            mc_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-            dilated_temp = cv2.dilate(temp_mc_mask, mc_kernel)
-            
-            # Swap the values back to their original meanings
-            dilated_mc_mask = np.zeros_like(multi_class_mask)
-            dilated_mc_mask[dilated_temp == 2] = 1
-            dilated_mc_mask[dilated_temp == 1] = 2
-            
-            # Return the dilated multiclass mask filtered by the valid binary component
-            mc_filtered_mask = dilated_mc_mask * (filtered_mask > 0).astype(np.uint8)
+        # Calculate IoU with previous frame
+        iou = calculate_bbox_iou(previous_bbox, comp_bbox) if previous_bbox is not None else 1.0
+        
+        candidates.append({
+            'component': component,
+            'area': area,
+            'distance': distance_to_root_base,
+            'iou': iou,
+            'bbox': comp_bbox
+        })
 
-            return filtered_mask, hypocotyl_skeleton, hypocotyl_length, True, mc_filtered_mask
+    if not candidates:
+        return binary_mask, hypocotyl_skeleton, hypocotyl_length, False, binary_mask, None
+
+    best_candidate = None
+
+    if previous_bbox is None:
+        # INITIALIZATION PHASE: No previous BBox. Pick the largest component near the root base.
+        candidates.sort(key=lambda x: x['area'], reverse=True)
+        for cand in candidates:
+            if cand['distance'] < 100:
+                best_candidate = cand
+                break
+    else:
+        # TRACKING PHASE: Filter by IoU > 0, then select the biggest IoU. If tie, select closest to root base.
+        valid_candidates = [c for c in candidates if c['iou'] > 0]
+        
+        if valid_candidates:
+            valid_candidates.sort(key=lambda x: (x['iou'], -x['area']), reverse=True)
+            best_candidate = valid_candidates[0]
+
+    # If we found a valid component based on our rules, process it
+    if best_candidate is not None:
+        component = best_candidate['component']
+        
+        component_mask = np.zeros(binary_mask.shape, np.uint8)
+        cv2.drawContours(component_mask, [component], -1, 255, -1)
+        filtered_mask = cv2.bitwise_and(component_mask, binary_mask.copy())
+        
+        temp_mc_mask = np.zeros_like(multi_class_mask)
+        temp_mc_mask[multi_class_mask == 1] = 2
+        temp_mc_mask[multi_class_mask == 2] = 1
+        
+        mc_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        dilated_temp = cv2.dilate(temp_mc_mask, mc_kernel)
+        
+        dilated_mc_mask = np.zeros_like(multi_class_mask)
+        dilated_mc_mask[dilated_temp == 2] = 1
+        dilated_mc_mask[dilated_temp == 1] = 2
+        
+        mc_filtered_mask = dilated_mc_mask * (filtered_mask > 0).astype(np.uint8)
+
+        return filtered_mask, hypocotyl_skeleton, hypocotyl_length, True, mc_filtered_mask, best_candidate['bbox']
     
-    # No component found near root base
-    return binary_mask, hypocotyl_skeleton, hypocotyl_length, False, binary_mask
+    # No component passed the filters
+    return binary_mask, hypocotyl_skeleton, hypocotyl_length, False, binary_mask, None
 
 def extract_hypocotyl_length(multi_class_mask):
     # Filter Mask for Hypocotyls (Class 4)

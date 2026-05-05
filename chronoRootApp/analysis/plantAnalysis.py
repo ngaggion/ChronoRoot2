@@ -121,11 +121,13 @@ def plantAnalysis(conf, replicate=False):
             
             # Try to extract root segmentation
             try:
-                root_mask, hypocotyl_skeleton, hypocotyl_length, found_root, mc_filtered_mask = extract_root_segmentation(
+                # Pass None for previous_bbox during initialization
+                root_mask, hypocotyl_skeleton, hypocotyl_length, found_root, mc_filtered_mask, current_bbox = extract_root_segmentation(
                     segmentation_paths[frame_idx], 
                     roi_bounds, 
                     current_root_base,
-                    fixed_seed_position
+                    fixed_seed_position,
+                    previous_bbox=None
                 )
                 
                 if not found_root:
@@ -229,11 +231,12 @@ def plantAnalysis(conf, replicate=False):
             
             frame_failed = False
             
-            new_root_mask, new_hypocotyl_skeleton, new_hypocotyl_length, found_root, mc_filtered_mask = extract_root_segmentation(
+            new_root_mask, new_hypocotyl_skeleton, new_hypocotyl_length, found_root, mc_filtered_mask, new_bbox = extract_root_segmentation(
                 segmentation_paths[frame_idx],
                 roi_bounds,
                 current_root_base,
-                fixed_seed_position
+                fixed_seed_position,
+                previous_bbox=current_bbox
             )
             
             if not found_root:
@@ -332,6 +335,7 @@ def plantAnalysis(conf, replicate=False):
                 current_hypocotyl_length = new_hypocotyl_length
                 current_hypocotyl_skeleton = new_hypocotyl_skeleton
                 current_root_base = updated_root_base
+                current_bbox = new_bbox
                 
                 consecutive_errors = 0  # Reset consecutive error counter
                 frame_errors.append(0)
