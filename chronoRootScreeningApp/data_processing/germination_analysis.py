@@ -71,10 +71,14 @@ class GerminationAnalyzer:
         self._process_raw_data()
         self._calculate_statistics()
         self._create_plots()
+        
+        timeline_df = self._export_plot_timeline() 
+        
         return {
             'ProcessedData': self.data,
             'GerminationData': self.germination_data,
-            'Statistics': self.statistics
+            'Statistics': self.statistics,
+            'PlotTimeline': timeline_df      
         }
     
   
@@ -241,10 +245,10 @@ class GerminationAnalyzer:
         self.data = data
         self.germination_data = germ_data
 
-        germ_data.to_csv(os.path.join(self.plot_dirs['data'], 'Germination_Summary.tsv'), 
-                        sep='\t', index=False)
-        data.to_csv(os.path.join(self.plot_dirs['data'], 'Germination_ProcessedData.tsv'),
-                    sep='\t', index=False)
+        germ_data.to_csv(os.path.join(self.plot_dirs['data'], 'Germination_Summary.csv'), 
+                        sep=',', index=False)
+        data.to_csv(os.path.join(self.plot_dirs['data'], 'Germination_ProcessedData.csv'),
+                    sep=',', index=False)
         
     def _calculate_statistics(self):
         """Calculate summary statistics for germination data."""
@@ -276,8 +280,8 @@ class GerminationAnalyzer:
         
         # Merge statistics
         self.statistics = stats.merge(ungerminated, on='Group', how='left')
-        self.statistics.to_csv(os.path.join(self.plot_dirs['data'], 'Germination_Statistics.tsv'), 
-                             sep='\t', index=False)
+        self.statistics.to_csv(os.path.join(self.plot_dirs['data'], 'Germination_Statistics.csv'), 
+                             sep=',', index=False)
         
         return self.statistics
 
@@ -601,3 +605,53 @@ class GerminationAnalyzer:
             
         except RuntimeError as e:
             print(f"Could not fit curve for group {group_name} video {video_name}: {str(e)}")
+
+    def _export_plot_timeline(self):
+        """
+        Exports a detailed CSV timeline of germination counts and percentages
+        per Group (Genotype/Variety) and Video to replicate plots externally.
+        """
+        records = []
+        
+        # Iterate through each genotype/variety
+        for group_name, group_data in self.data.groupby('Group'):
+            # Iterate through each video within that group
+            for video_name, video_data in group_data.groupby('Video'):
+                
+                # Fetch expected total seeds or default to unique observed UIDs
+                total_seeds = self.group_video_seed_counts.get((group_name, video_name), 0)
+                if total_seeds == 0:
+                    total_seeds = len(video_data['UID'].unique())
+                    
+                # Get all unique timepoints for this specific video
+                time_points = sorted(video_data['ElapsedHours'].unique())
+                
+                # Calculate counts and percentages for each timestep
+                for t in time_points:
+                    germinated_count = len(video_data[
+                        (video_data['ElapsedHours'] <= t) & 
+                        (video_data['Germinated'])
+                    ]['UID'].unique())
+                    
+                    percentage = (germinated_count / total_seeds * 100) if total_seeds > 0 else 0
+                    
+                    records.append({
+                        'Group_Identifier': group_name,
+                        'Video_ID': video_name,
+                        'TimeStep_Hours': t,
+                        'Total_Seeds': total_seeds,
+                        'Germinated_Count': germinated_count,
+                        'Germination_Percentage': percentage
+                    })
+        
+        # Convert to DataFrame
+        timeline_df = pd.DataFrame(records)
+        
+        # Sort for clean, chronological reading in CSV
+        timeline_df = timeline_df.sort_values(by=['Group_Identifier', 'Video_ID', 'TimeStep_Hours'])
+        
+        # Save to the ProcessedData directory
+        export_path = os.path.join(self.plot_dirs['data'], 'Germination_Plot_Replication.csv')
+        timeline_df.to_csv(export_path, index=False)
+        
+        return timeline_df
