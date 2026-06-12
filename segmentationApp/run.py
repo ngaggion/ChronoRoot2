@@ -85,7 +85,7 @@ class CLIWorker(QThread):
                 str(self.input_path),
                 "--model", self.model,
                 "--alpha", str(self.alpha),
-                "--device", "cuda"
+                "--device", getattr(self, "device", "auto")
             ]
 
             if self.postprocess_only:
@@ -177,6 +177,7 @@ class nnUNetMonitorUI(QMainWindow):
         self.conda_env = "ChronoRoot"
         self.fast_mode = False
         self.species = "arabidopsis"
+        self.device = "auto"
         
         self.init_ui()
         self.load_settings()
@@ -228,6 +229,11 @@ class nnUNetMonitorUI(QMainWindow):
         self.species_combo = QComboBox()
         self.species_combo.addItems(get_available_models() or ["No models found"])
         self.species_combo.currentTextChanged.connect(self.update_species)
+
+        self.device_combo = QComboBox()
+        self.device_combo.addItems(["auto", "cuda", "mps", "cpu"])
+        self.device_combo.setToolTip("Select compute device for segmentation (auto prefers cuda > mps > cpu)")
+        self.device_combo.currentTextChanged.connect(self.update_device)
         
         self.clear_queue_button = QPushButton("Clear Queue")
         self.clear_queue_button.setToolTip("Remove all pending tasks from the processing queue") 
@@ -239,7 +245,8 @@ class nnUNetMonitorUI(QMainWindow):
         header_items = [
             self.load_button, self.remove_robot_button, 
             self.robot_count_label, QLabel("|"), self.queue_info_label,
-            self.alpha_button, QLabel("Model:"), self.species_combo, 
+            self.alpha_button, QLabel("Model:"), self.species_combo,
+            QLabel("Device:"), self.device_combo,
             self.fast_mode_checkbox, self.hide_empty_checkbox,
             self.clear_queue_button, self.conda_button
         ]
@@ -996,6 +1003,7 @@ class nnUNetMonitorUI(QMainWindow):
             resume=(item['operation'] == 'resume'),
             fast_mode=self.fast_mode, conda_env=self.conda_env
         )
+        self.current_worker.device = self.device
         self.current_worker.finished.connect(self.on_worker_done)
         self.current_worker.error.connect(self.on_worker_done)
         self.current_worker.progress.connect(
@@ -1058,11 +1066,20 @@ class nnUNetMonitorUI(QMainWindow):
         self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
         self.save_settings()
 
+    def update_device(self, text):
+        self.device = (text or "auto").lower().strip()
+        self.save_settings()
+
     def save_settings(self):
         try:
             with open(GLOBAL_CONFIG_FILE, 'w') as f:
-                json.dump({'conda_env': self.conda_env, 'alpha': self.alpha_parameter, 
-                           'species': self.species, 'fast_mode': self.fast_mode}, f)
+                json.dump({
+                    'conda_env': self.conda_env,
+                    'alpha': self.alpha_parameter,
+                    'species': self.species,
+                    'fast_mode': self.fast_mode,
+                    'device': self.device
+                }, f)
         except: pass
 
     def load_settings(self):
@@ -1074,11 +1091,13 @@ class nnUNetMonitorUI(QMainWindow):
                     self.species = c.get('species', 'arabidopsis')
                     self.alpha_parameter = c.get('alpha', 0.85)
                     self.fast_mode = c.get('fast_mode', False)
+                    self.device = c.get('device', 'auto')
                     
                     self.conda_button.setText(f"Conda Environment: {self.conda_env}")
                     self.alpha_button.setText(f"Alpha: {self.alpha_parameter}")
                     self.species_combo.setCurrentText(self.species)
                     self.fast_mode_checkbox.setChecked(self.fast_mode)
+                    self.device_combo.setCurrentText(self.device)
             except: pass
 
     def clear_queue(self):

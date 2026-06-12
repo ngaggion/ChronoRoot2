@@ -124,7 +124,7 @@ For faster processing without the GUI overhead, use the CLI tool `cli.py`. This 
 | `input` | Path to the folder containing PNG images. | **Required** |
 | `--model`, `-m` | The specific model to use (must match a folder in `models/`). | **Required** |
 | `--alpha`, `-a` | Temporal consistency parameter (0.0 - 1.0). | `0.85` (Arabidopsis) `0.60` (Tomato) |
-| `--device` | Computing device to use. | `cuda` |
+| `--device` | Computing device to use (`auto`, `cuda`, `mps`, `cpu`). | `auto` |
 | `--output`, `-o` | Custom output directory. | `input` folder |
 | `--fast` | Enable fast mode (disables test-time augmentation/mirroring). | `False` |
 | `--postprocess-only` | Skip segmentation and run only the temporal post-processing. | `False` |

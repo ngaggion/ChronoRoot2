@@ -28,6 +28,51 @@ The image is based on `pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime` and uses a
 
 ---
 
+## Apple Silicon (macOS arm64) / CPU-only build (experimental)
+
+The official images are built around **CUDA/NVIDIA** and are primarily intended for **Linux amd64 + NVIDIA GPUs**.
+On Apple Silicon Macs, the GUI may be unstable under amd64 emulation. If you want a native-arch container,
+you can build a **CPU-only** arm64 image locally.
+
+From the repo root:
+
+```bash
+# Build base environment (CPU-only)
+docker buildx build --platform linux/arm64 \
+  -f Docker/BaseEnvironment/Dockerfile.cpu \
+  -t chronorootbase:cpu \
+  --load \
+  .
+
+# Build the app image (clones ChronoRoot2 into /app)
+docker buildx build --platform linux/arm64 \
+  -f Docker/Dockerfile.cpu \
+  -t chronoroot:cpu \
+  --load \
+  .
+```
+
+Run:
+
+```bash
+MOUNT="/path/to/your/data"
+docker run -it -v "$MOUNT":/DATA/ --shm-size=8gb chronoroot:cpu
+```
+
+Inside the container:
+
+```bash
+segmentation
+chronoroot
+screening
+```
+
+Notes:
+- This build is **CPU-only** (no CUDA). Segmentation will be slower.
+- GUI display on macOS Docker still depends on an X server/VNC/Web transport; CLI segmentation is the most reliable path.
+
+---
+
 ## Installation & Setup
 
 ### 1. Install Docker & NVIDIA Toolkit
