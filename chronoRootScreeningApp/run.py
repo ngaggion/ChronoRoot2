@@ -18,6 +18,14 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor, QPixmap, QIntValidator, QDoubleValidator
 import ui_errors
+import interface_config
+
+# --- CONFIGURATION CONSTANTS ---
+APP_NAME = "chronoRootScreening"
+GLOBAL_CONFIG_DIR = os.path.expanduser(f"~/.config/{APP_NAME}")
+GLOBAL_CONFIG_FILE = os.path.join(GLOBAL_CONFIG_DIR, "mainInterfaceConfig.json")
+PROCESS_CONFIG_NAME = "process_config.json"
+os.makedirs(GLOBAL_CONFIG_DIR, exist_ok=True)
 
 class GroupEntry(QWidget):
     def __init__(self, index, parent=None):
@@ -60,6 +68,8 @@ class AnalysisTab(QWidget):
         self.preview_window = None
         self.process_launcher = None
         self.report_launcher = None
+        self._loading_config = False
+        self._ui_ready = False
         self.initUI()
     
     def setup_project_fields(self):
@@ -77,6 +87,28 @@ class AnalysisTab(QWidget):
 
     def initUI(self):
         layout = QVBoxLayout()
+
+        config_layout = QHBoxLayout()
+        self.export_setup_btn = QPushButton('Save to File...')
+        self.export_setup_btn.clicked.connect(self.export_setup_to_file)
+        config_layout.addWidget(self.export_setup_btn)
+
+        self.load_last_config_btn = QPushButton('Restore Last Session')
+        self.load_last_config_btn.clicked.connect(self.load_last_configuration)
+        config_layout.addWidget(self.load_last_config_btn)
+
+        self.load_config_file_btn = QPushButton('Load From File...')
+        self.load_config_file_btn.clicked.connect(self.load_configuration_from_file)
+        config_layout.addWidget(self.load_config_file_btn)
+
+        config_hint = QLabel(
+            'Auto saves automatically when any button is pressed'
+        )
+        config_hint.setStyleSheet('color: #666; font-size: 9pt;')
+        config_layout.addWidget(config_hint)
+        
+        config_layout.addStretch()
+        layout.addLayout(config_layout)
         
         # Project Directory Selection
         proj_group = QGroupBox('Project Settings')
@@ -247,6 +279,7 @@ class AnalysisTab(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_widget = QWidget()
+        self.group_scroll_widget = scroll_widget
         self.group_layout = QVBoxLayout(scroll_widget)
         scroll.setWidget(scroll_widget)
         
@@ -286,20 +319,123 @@ class AnalysisTab(QWidget):
         
         self.setLayout(layout)
         
-        # Add initial groups
+        # Add initial groups (no autosave during UI setup)
         for _ in range(3):
-            self.add_group()
+            self._append_group_entry()
 
         # Initialize calibration mode
         self.toggle_calibration_mode()
         self.toggle_plant_growth_options()
+        self._ui_ready = True
+
+    def _autosave_config(self):
+        if not self._ui_ready or self._loading_config:
+            return
+        interface_config.save_interface_config(self, GLOBAL_CONFIG_FILE)
+
+    def _default_setup_directory(self) -> str:
+        project_dir = self.proj_dir_edit.text().strip()
+        analysis_id = self.identifier_edit.text().strip()
+        if project_dir and analysis_id:
+            analysis_dir = os.path.join(project_dir, 'analysis', analysis_id)
+            if os.path.isdir(analysis_dir):
+                return analysis_dir
+        if project_dir:
+            analysis_root = os.path.join(project_dir, 'analysis')
+            if os.path.isdir(analysis_root):
+                return analysis_root
+            return project_dir
+        return os.path.expanduser('~')
+
+    def _default_export_filename(self) -> str:
+        analysis_id = self.identifier_edit.text().strip()
+        if analysis_id:
+            return f'{analysis_id}_setup_config.json'
+        return 'analysis_setup_config.json'
+
+    def export_setup_to_file(self):
+        start_dir = self._default_setup_directory()
+        default_name = self._default_export_filename()
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            'Export Analysis Setup',
+            os.path.join(start_dir, default_name),
+            interface_config.SETUP_FILE_FILTER,
+        )
+        if not path:
+            return
+
+        if not path.lower().endswith('.json'):
+            path += '.json'
+
+        if not interface_config.is_setup_filename(path):
+            ui_errors.show_warning(
+                self,
+                'Invalid Filename',
+                "Setup files must have 'config' in the name.\n\n"
+                'Example: my_experiment_setup_config.json or process_config.json',
+            )
+            return
+
+        if interface_config.save_interface_config(self, path):
+            ui_errors.show_information(
+                self,
+                'Setup Exported',
+                f'Setup saved to:\n{path}\n\nYou can reload it with Load Setup From File.',
+            )
+        else:
+            ui_errors.show_critical(self, 'Error', f'Failed to save setup to:\n{path}')
+
+    def load_last_configuration(self):
+        if not os.path.exists(GLOBAL_CONFIG_FILE):
+            ui_errors.show_warning(
+                self, 'No Session Saved',
+                f'No saved session found at:\n{GLOBAL_CONFIG_FILE}',
+            )
+            return
+
+        ok, error = interface_config.load_interface_config(self, GLOBAL_CONFIG_FILE)
+        if ok:
+            ui_errors.show_information(self, 'Session Restored', 'Your last session configuration has been restored.')
+        else:
+            ui_errors.show_warning(
+                self,
+                'Could Not Restore Session',
+                f'The saved session file could not be loaded.\n\n{error}',
+            )
+
+    def load_configuration_from_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            'Load Analysis Setup',
+            self._default_setup_directory(),
+            interface_config.SETUP_FILE_FILTER,
+        )
+        if not path:
+            return
+
+        if not interface_config.is_setup_filename(path):
+            ui_errors.show_warning(
+                self,
+                'Wrong File Type',
+                "Please choose a setup file with 'config' in the name.\n\n"
+                'Example: process_config.json in your analysis folder.',
+            )
+            return
+
+        ok, error = interface_config.load_interface_config(self, path)
+        if ok:
+            ui_errors.show_information(self, 'Setup Loaded', f'Analysis setup loaded from:\n{path}')
+        else:
+            ui_errors.show_warning(self, 'Not a Setup File', error)
 
     def edit_name_mapping(self):
         """Open dialog to edit name mapping for visualization"""
         if not self.proj_dir_edit.text() or not os.path.exists(self.proj_dir_edit.text()):
             QMessageBox.warning(self, 'Error', 'Please select a valid project directory first!')
             return
-            
+
+        self._autosave_config()
         dialog = NameMappingDialog(self.proj_dir_edit.text(), self)
         dialog.exec_()
 
@@ -324,6 +460,8 @@ class AnalysisTab(QWidget):
         if not self.video_path_edit.text():
             QMessageBox.warning(self, 'Error', 'Please select a video directory first!')
             return
+
+        self._autosave_config()
 
         # Create command line arguments
         args = [
@@ -394,8 +532,34 @@ class AnalysisTab(QWidget):
             
         analysis_dir = os.path.join(self.proj_dir_edit.text(), 'analysis', identifier)
         if os.path.exists(analysis_dir):
-            QMessageBox.warning(self, 'Error', 'Analysis with this identifier already exists!')
-            return False
+            metadata_path = os.path.join(analysis_dir, 'metadata.json')
+            if os.path.exists(metadata_path):
+                try:
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                    status = metadata.get('status', '')
+                except (json.JSONDecodeError, OSError):
+                    status = ''
+            else:
+                status = ''
+
+            if status == 'Complete':
+                QMessageBox.warning(self, 'Error', 'Analysis with this identifier already exists!')
+                return False
+            if status in ('In Progress', 'Failed'):
+                reply = QMessageBox.question(
+                    self,
+                    'Re-run Analysis',
+                    f'Analysis "{identifier}" exists with status "{status}".\n'
+                    'Re-running will overwrite partial results. Continue?',
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if reply != QMessageBox.Yes:
+                    return False
+            else:
+                QMessageBox.warning(self, 'Error', 'Analysis with this identifier already exists!')
+                return False
             
         group_names = [entry.name_edit.text().strip() for entry in self.group_entries]
         if not all(group_names):
@@ -408,11 +572,15 @@ class AnalysisTab(QWidget):
             
         return True
 
-    def add_group(self):
+    def _append_group_entry(self):
         group_entry = GroupEntry(len(self.group_entries))
         group_entry.delete_btn.clicked.connect(lambda: self.remove_group(group_entry))
         self.group_entries.append(group_entry)
-        self.group_layout.insertWidget(len(self.group_entries)-1, group_entry)
+        self.group_layout.insertWidget(len(self.group_entries) - 1, group_entry)
+
+    def add_group(self):
+        self._append_group_entry()
+        self._autosave_config()
         
     def remove_group(self, group_entry):
         if len(self.group_entries) > 1:
@@ -420,6 +588,7 @@ class AnalysisTab(QWidget):
             group_entry.deleteLater()
             for i, entry in enumerate(self.group_entries):
                 entry.index = i
+            self._autosave_config()
         else:
             QMessageBox.warning(self, 'Warning', 'At least one group is required!')
             
@@ -427,8 +596,8 @@ class AnalysisTab(QWidget):
         dir_path = QFileDialog.getExistingDirectory(self, 'Select Project Directory')
         if dir_path:
             self.proj_dir_edit.setText(dir_path)
-            # Update the main window's project directory
-            self.main_window.set_project_dir(dir_path)  # This will update all tabs
+            self.main_window.set_project_dir(dir_path)
+            self._autosave_config()
             
     def _get_time_delta(self):
         try:
@@ -436,13 +605,11 @@ class AnalysisTab(QWidget):
         except ValueError:
             return 15.0
 
-    def _resolve_video_paths(self):
-        import plant_viewer
-        user_path = self.video_path_edit.text()
-        return plant_viewer.resolve_screening_paths(user_path)
-
     def _validate_video_dataset(self):
-        video_folder, segmentation_dir, images, seg_files = self._resolve_video_paths()
+        import plant_viewer
+        video_folder, segmentation_dir, images, seg_files = plant_viewer.resolve_screening_paths(
+            self.video_path_edit.text()
+        )
         if not images:
             ui_errors.show_warning(
                 self,
@@ -464,10 +631,13 @@ class AnalysisTab(QWidget):
         dir_path = QFileDialog.getExistingDirectory(self, 'Select Video Directory')
         if dir_path:
             self.video_path_edit.setText(dir_path)
+            self._autosave_config()
             
     def process_video(self):
         if not self.validate_inputs():
             return
+
+        self._autosave_config()
 
         if self.process_launcher and self.process_launcher.is_running():
             ui_errors.show_warning(self, "Busy", "Video processing is already running.")
@@ -510,26 +680,25 @@ class AnalysisTab(QWidget):
             return
 
         seed_counts = [entry.get_seed_count() for entry in self.group_entries]
-        config = {
+        config = interface_config.build_interface_config(self)
+        config.update({
             'video_dir': video_folder,
             'segmentation_dir': segmentation_dir,
             'project_dir': project_dir,
             'analysis_id': identifier,
-            'has_qr': self.qr_checkbox.isChecked(),
-            'show_tracking': self.show_tracking_checkbox.isChecked(),
             'time_delta': time_delta,
             'group_names': group_names,
             'seed_counts': [count if count is not None else 0 for count in seed_counts],
             'group_rois': {name: list(coords) for name, coords in group_rois.items()},
-        }
+        })
 
         if not config['has_qr']:
             config['known_distance'] = float(self.known_dist_edit.text())
             config['pixel_distance'] = int(self.pixel_dist_edit.text())
 
-        config_dir = os.path.join(project_dir, 'analysis')
-        os.makedirs(config_dir, exist_ok=True)
-        config_path = os.path.join(config_dir, f"{identifier}_process_config.json")
+        analysis_dir = os.path.join(project_dir, 'analysis', identifier)
+        os.makedirs(analysis_dir, exist_ok=True)
+        config_path = os.path.join(analysis_dir, PROCESS_CONFIG_NAME)
         try:
             with open(config_path, 'w') as f:
                 json.dump(config, f, indent=4)
@@ -555,6 +724,8 @@ class AnalysisTab(QWidget):
         dataset = self._validate_video_dataset()
         if not dataset:
             return
+
+        self._autosave_config()
 
         video_folder, segmentation_dir = dataset
         time_delta = self._get_time_delta()
@@ -583,6 +754,8 @@ class AnalysisTab(QWidget):
         if not self.proj_dir_edit.text():
             ui_errors.show_warning(self, 'Error', 'Please select a project directory first!')
             return
+
+        self._autosave_config()
 
         if self.report_launcher and self.report_launcher.is_running():
             ui_errors.show_warning(self, "Busy", "Report generation is already running.")
