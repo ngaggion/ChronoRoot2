@@ -564,13 +564,12 @@ class GroupROISelectorWindow(QDialog):
     def _update_group_label(self):
         if self.current_group_index >= len(self.group_names):
             return
-        if self._all_groups_confirmed():
-            self.lbl_group.setText(f"All regions set ({len(self.group_names)} groups)")
+        name = self._current_group_name()
+        pos = f"({self.current_group_index + 1} of {len(self.group_names)})"
+        if name in self.confirmed_groups:
+            self.lbl_group.setText(f"Update ROI for: {name}  {pos}")
         else:
-            name = self._current_group_name()
-            self.lbl_group.setText(
-                f"Select ROI for: {name}  ({self.current_group_index + 1} of {len(self.group_names)})"
-            )
+            self.lbl_group.setText(f"Select ROI for: {name}  {pos}")
         self._update_confirm_button()
         self._update_nav_buttons()
 
@@ -598,7 +597,6 @@ class GroupROISelectorWindow(QDialog):
             return
         self._clear_pending_overlay()
         self.current_group_index -= 1
-        self.confirmed_groups.pop(self._current_group_name(), None)
         self._redraw_confirmed_overlays()
         self._update_group_label()
         self._refresh_info_line()
@@ -611,6 +609,7 @@ class GroupROISelectorWindow(QDialog):
             return
         self._clear_pending_overlay()
         self.current_group_index += 1
+        self._redraw_confirmed_overlays()
         self._update_group_label()
         self._refresh_info_line()
 
@@ -696,8 +695,15 @@ class GroupROISelectorWindow(QDialog):
             )
 
     def _frame_info_suffix(self):
+        if self.pending_roi:
+            return "Press Enter or Confirm to apply this selection."
         if self._all_groups_confirmed():
             return "All regions set — press Enter or Finish to complete"
+        if self._current_group_name() in self.confirmed_groups:
+            return (
+                "Region already set — draw a new rectangle to update it, "
+                "or press Next to continue."
+            )
         return "Drag a rectangle on the image. Use the slider to change frame. Press Enter to confirm."
 
     def _refresh_info_line(self):
@@ -771,6 +777,7 @@ class GroupROISelectorWindow(QDialog):
         self.scene.addItem(rect_item)
         self.pending_roi = (scene_rect, rect_item)
         self._update_confirm_button()
+        self._refresh_info_line()
 
     def _confirm_current(self):
         if self._all_groups_confirmed() and not self.pending_roi:
@@ -789,12 +796,18 @@ class GroupROISelectorWindow(QDialog):
             return
 
         group_name = self._current_group_name()
+        is_update = group_name in self.confirmed_groups
         self.confirmed_groups[group_name] = (x1, y1, x2, y2)
 
         self.scene.removeItem(rect_item)
         self.pending_roi = None
 
         self._redraw_confirmed_overlays()
+
+        if is_update:
+            self._update_group_label()
+            self._refresh_info_line()
+            return
 
         if self._all_groups_confirmed():
             self.accept()

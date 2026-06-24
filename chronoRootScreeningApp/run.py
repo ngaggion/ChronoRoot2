@@ -496,8 +496,8 @@ class AnalysisTab(QWidget):
         except Exception as e:
             ui_errors.show_critical(self, 'Error', f'Failed to open calibration helper:\n{e}')
 
-    def _on_calibration_distance(self, pixels: float):
-        self.pixel_dist_edit.setText(f"{pixels:.1f}")
+    def _on_calibration_distance(self, pixels: int):
+        self.pixel_dist_edit.setText(f"{pixels}")
 
     def validate_inputs(self):
         """Updated validation to include calibration checks"""

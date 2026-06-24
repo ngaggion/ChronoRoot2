@@ -182,7 +182,7 @@ class ZoomableImage(QLabel):
 
 
 class CalibrationHelper(QMainWindow):
-    distance_measured = pyqtSignal(float)
+    distance_measured = pyqtSignal(int)
 
     def __init__(self, video_dir):
         super().__init__()
@@ -236,10 +236,16 @@ class CalibrationHelper(QMainWindow):
         return float(np.sqrt((points[1][0] - points[0][0])**2 +
                              (points[1][1] - points[0][1])**2))
 
-    def _emit_distance(self):
+    def _rounded_pixels(self) -> int:
         distance = self._pixel_distance()
-        if distance is not None:
-            self.distance_measured.emit(distance)
+        if distance is None:
+            return 0
+        return max(1, int(round(distance)))
+
+    def _emit_distance(self):
+        pixels = self._rounded_pixels()
+        if pixels:
+            self.distance_measured.emit(pixels)
         
     def load_first_frame(self):
         """Load the first frame of the first video in the directory"""
@@ -272,10 +278,10 @@ class CalibrationHelper(QMainWindow):
             self._emit_distance()
             
     def copy_distance(self):
-        distance = self._pixel_distance()
-        if distance is not None:
-            QApplication.clipboard().setText(f"{distance:.1f}")
-            self.statusBar().showMessage(f'Distance {distance:.1f} pixels copied to clipboard')
+        pixels = self._rounded_pixels()
+        if pixels:
+            QApplication.clipboard().setText(str(pixels))
+            self.statusBar().showMessage(f'Distance {pixels} pixels copied to clipboard')
             self._emit_distance()
         else:
             self.statusBar().showMessage('Please select two points first')
