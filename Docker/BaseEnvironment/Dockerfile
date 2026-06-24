@@ -34,7 +34,7 @@ RUN /opt/conda/bin/conda create -y -n ChronoRoot python=3.13.9 \
     pyzbar=0.1.9  \
     pip \
     -c conda-forge && \
-    /opt/conda/envs/ChronoRoot/bin/pip install opencv-python lapx==0.9.2 nnunetv2==2.6.2 && \
+    /opt/conda/envs/ChronoRoot/bin/pip install opencv-python-headless lapx==0.9.2 nnunetv2==2.6.2 && \
     echo "conda activate ChronoRoot" >> ~/.bashrc && \
     /opt/conda/bin/conda clean -a -y
 

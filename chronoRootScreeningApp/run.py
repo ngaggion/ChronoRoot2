@@ -15,8 +15,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QHBoxLayout, QLabel, QLineEdit, QPushButton, QCheckBox,
                            QFileDialog, QGroupBox, QMessageBox, QScrollArea,
                            QTabWidget, QTableWidget, QTableWidgetItem, QMenu, QComboBox, QDialog)
-from PyQt5.QtCore import Qt, QTimer, Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor, QPixmap, QIntValidator, QDoubleValidator
+import ui_errors
 
 class GroupEntry(QWidget):
     def __init__(self, index, parent=None):
@@ -56,6 +57,9 @@ class AnalysisTab(QWidget):
         super().__init__(parent)
         self.main_window = main_window
         self.group_entries = []
+        self.preview_window = None
+        self.process_launcher = None
+        self.report_launcher = None
         self.initUI()
     
     def setup_project_fields(self):
@@ -426,6 +430,36 @@ class AnalysisTab(QWidget):
             # Update the main window's project directory
             self.main_window.set_project_dir(dir_path)  # This will update all tabs
             
+    def _get_time_delta(self):
+        try:
+            return float(self.time_delta_edit.text() or '15')
+        except ValueError:
+            return 15.0
+
+    def _resolve_video_paths(self):
+        import plant_viewer
+        user_path = self.video_path_edit.text()
+        return plant_viewer.resolve_screening_paths(user_path)
+
+    def _validate_video_dataset(self):
+        video_folder, segmentation_dir, images, seg_files = self._resolve_video_paths()
+        if not images:
+            ui_errors.show_warning(
+                self,
+                'Error',
+                'No images found in the video folder!\nPlease check the path to the folder where the images are located.'
+            )
+            return None
+        if not seg_files:
+            ui_errors.show_warning(
+                self,
+                'Error',
+                f'Found {len(images)} images but no segmentation files!\n'
+                'The images may not have been properly segmented.'
+            )
+            return None
+        return video_folder, segmentation_dir
+
     def browse_video_path(self):
         dir_path = QFileDialog.getExistingDirectory(self, 'Select Video Directory')
         if dir_path:
@@ -434,252 +468,148 @@ class AnalysisTab(QWidget):
     def process_video(self):
         if not self.validate_inputs():
             return
-                
-        # Create analysis directory structure
-        project_dir = self.proj_dir_edit.text()
-        analysis_base_dir = os.path.join(project_dir, 'analysis')
-        os.makedirs(analysis_base_dir, exist_ok=True)
-        
-        identifier = self.identifier_edit.text().strip()
-        
-        # Get time delta, default to 15 if empty or invalid
-        try:
-            time_delta = float(self.time_delta_edit.text() or '15')
-        except ValueError:
-            time_delta = 15
-            
-        video_folder = self.video_path_edit.text()
-        segmentation_dir = os.path.join(video_folder, 'Segmentation')
-        
-        # Check for PNG images
-        images = glob.glob(os.path.join(video_folder, "*.png"))
-        
-        # Check if there is no images, then look for a file called "segmentation_metadata.json"
-        if not images:
-            metadata_path = os.path.join(video_folder, 'Segmentation', 'segmentation_metadata.json')
-            if os.path.exists(metadata_path):
-                with open(metadata_path, 'r') as f:
-                    metadata = json.load(f)
-                images = glob.glob(os.path.join(metadata["input_path"], "*.png")) 
-                video_folder = metadata["input_path"]
 
-        if not images:
-            QMessageBox.warning(
-                None, 'Error', 
-                'No images found in the video folder!\nPlease check the path to the folder where the images are located.'
-            )
+        if self.process_launcher and self.process_launcher.is_running():
+            ui_errors.show_warning(self, "Busy", "Video processing is already running.")
             return
-        
-        # Check for segmentation files in Segmentation/Ensemble folder
-        seg_folder = os.path.join(segmentation_dir, "Ensemble")
-        seg_files = glob.glob(os.path.join(seg_folder, "*.png")) if os.path.exists(seg_folder) else []
-        
-        if not seg_files:
-            # Images exist but no segmentation found
-            QMessageBox.warning(
-                None, 'Error',
-                f'Found {len(images)} images but no segmentation files!\n The images may not have been properly segmented.'
-            )
+
+        dataset = self._validate_video_dataset()
+        if not dataset:
             return
-        
-        # Collect parameters including seed counts
-        params = {
-            'project_dir': project_dir,
+        video_folder, segmentation_dir = dataset
+
+        project_dir = self.proj_dir_edit.text()
+        identifier = self.identifier_edit.text().strip()
+        time_delta = self._get_time_delta()
+        group_names = [entry.name_edit.text().strip() for entry in self.group_entries]
+
+        try:
+            import plant_viewer
+        except Exception as e:
+            ui_errors.show_critical(self, "Error", f"Failed to load images plant viewer:\n{e}")
+            return 
+            
+        try:
+            images, seg_files, _ = plant_viewer.load_screening_sequence(
+                video_folder, segmentation_dir, time_delta
+            )
+        except Exception as e:
+            ui_errors.show_critical(self, "Error", f"Failed to load images for ROI selection:\n{e}")
+            return
+
+        roi_dialog = plant_viewer.GroupROISelectorWindow(
+            images, seg_files, group_names, time_delta=time_delta, parent=self
+        )
+        if roi_dialog.exec_() != QDialog.Accepted:
+            ui_errors.show_warning(self, "Cancelled", "ROI selection was cancelled. Analysis was not started.")
+            return
+
+        group_rois = roi_dialog.get_group_rois()
+        if not group_rois:
+            ui_errors.show_warning(self, "Cancelled", "No group regions were selected.")
+            return
+
+        seed_counts = [entry.get_seed_count() for entry in self.group_entries]
+        config = {
             'video_dir': video_folder,
             'segmentation_dir': segmentation_dir,
+            'project_dir': project_dir,
             'analysis_id': identifier,
             'has_qr': self.qr_checkbox.isChecked(),
             'show_tracking': self.show_tracking_checkbox.isChecked(),
             'time_delta': time_delta,
-            'group_names': [entry.name_edit.text().strip() for entry in self.group_entries],
-            'seed_counts': [entry.get_seed_count() for entry in self.group_entries]
+            'group_names': group_names,
+            'seed_counts': [count if count is not None else 0 for count in seed_counts],
+            'group_rois': {name: list(coords) for name, coords in group_rois.items()},
         }
-        
-        # Create command line arguments
-        args = [
-            "python",
-            "process_video.py",
-            "--video-dir", params['video_dir'],
-            "--segmentation-dir", params['segmentation_dir'],
-            "--project-dir", params['project_dir'],
-            "--analysis-id", params['analysis_id'],
-            "--time-delta", str(params['time_delta'])
-        ]
 
-        # Add calibration parameters
-        if params['has_qr']:
-            args.append("--has-qr")
-        else:
-            # Get manual calibration values
-            try:
-                known_dist = float(self.known_dist_edit.text())
-                pixel_dist = int(self.pixel_dist_edit.text())
-                args.extend([
-                    "--known-distance", str(known_dist),
-                    "--pixel-distance", str(pixel_dist)
-                ])
-            except (ValueError, AttributeError) as e:
-                QMessageBox.critical(
-                    self, 
-                    "Error", 
-                    "Please provide valid calibration values:\n"
-                    "- Known distance (mm) as a decimal number\n"
-                    "- Pixel distance as a whole number\n"
-                    "Or enable QR code calibration."
-                )
-                return
+        if not config['has_qr']:
+            config['known_distance'] = float(self.known_dist_edit.text())
+            config['pixel_distance'] = int(self.pixel_dist_edit.text())
 
-        # Add optional flags
-        if params['show_tracking']:
-            args.append("--show-tracking")
-
-        # Add group names and their corresponding seed counts
-        group_info = []
-        for name, count in zip(params['group_names'], params['seed_counts']):
-            group_info.append(name)
-            if count is not None:
-                group_info.append(str(count))
-            else:
-                group_info.append("0")  # Use 0 to indicate no count provided
-                
-        args.extend(["--group-info"] + group_info)
-
+        config_dir = os.path.join(project_dir, 'analysis')
+        os.makedirs(config_dir, exist_ok=True)
+        config_path = os.path.join(config_dir, f"{identifier}_process_config.json")
         try:
-            # Launch the processing script
-            process = subprocess.Popen(
-                " ".join(args),
-                shell=True,
-                preexec_fn=os.setsid
-            )
-            
-            QMessageBox.information(
-                self,
-                "Processing Started",
-                f"Video processing has been started in a separate window.\n"
-                f"Results will be saved in: {os.path.join(analysis_base_dir, identifier)}"
-            )
-            
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=4)
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error starting processing: {str(e)}")
+            ui_errors.show_critical(self, "Error", f"Failed to write processing config:\n{e}")
+            return
+
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        args = ["python", "process_video.py", "--config", config_path]
+        self.process_launcher = ui_errors.launch_worker(
+            args,
+            parent=self,
+            working_directory=app_dir,
+            started_title="Processing Started",
+            started_message=(
+                f"Video processing has been started.\n"
+                f"Results will be saved in: {os.path.join(project_dir, 'analysis', identifier)}"
+            ),
+            error_title="Video Processing Error",
+        )
 
     def preview_video(self):
-        
-        # Get time delta, default to 15 if empty or invalid
-        try:
-            time_delta = float(self.time_delta_edit.text() or '15')
-        except ValueError:
-            time_delta = 15
-
-        video_folder = self.video_path_edit.text()
-        segmentation_dir = os.path.join(video_folder, 'Segmentation')
-        
-        # Check for PNG images
-        images = glob.glob(os.path.join(video_folder, "*.png"))
-        
-        # Check if there is no images, then look for a file called "segmentation_metadata.json"
-        if not images:
-            metadata_path = os.path.join(video_folder, 'Segmentation', 'segmentation_metadata.json')
-            if os.path.exists(metadata_path):
-                with open(metadata_path, 'r') as f:
-                    metadata = json.load(f)
-                images = glob.glob(os.path.join(metadata["input_path"], "*.png")) 
-                video_folder = metadata["input_path"]
-
-        if not images:
-            QMessageBox.warning(
-                None, 'Error', 
-                'No images found in the video folder!\nPlease check the path to the folder where the images are located.'
-            )
+        dataset = self._validate_video_dataset()
+        if not dataset:
             return
-        
-        # Check for segmentation files in Segmentation/Ensemble folder
-        seg_folder = os.path.join(segmentation_dir, "Ensemble")
-        seg_files = glob.glob(os.path.join(seg_folder, "*.png")) if os.path.exists(seg_folder) else []
-        
-        if not seg_files:
-            # Images exist but no segmentation found
-            QMessageBox.warning(
-                None, 'Error',
-                f'Found {len(images)} images but no segmentation files!\n The images may not have been properly segmented.'
-            )
-            return
-        
-        # Collect parameters
-        params = {
-            'video_dir': video_folder,
-            'segmentation_dir': segmentation_dir,
-            'time_delta': time_delta
-        }
-        
-        
-        # Create command line arguments
-        args = [
-            "python",
-            "preview_video.py",
-            "--video-dir", params['video_dir'],
-            "--segmentation-dir", params['segmentation_dir'],
-            "--time-delta", str(params['time_delta'])
-        ]
+
+        video_folder, segmentation_dir = dataset
+        time_delta = self._get_time_delta()
 
         try:
-            # Launch the processing script
-            process = subprocess.Popen(
-                " ".join(args),
-                shell=True,
-                preexec_fn=os.setsid
-            )
-            
-            QMessageBox.information(
-                self,
-                "Preview Started",
-                f"Video preview has been started in a separate window.\n"
-            )
-            
+            import plant_viewer
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error starting processing: {str(e)}")
-    
-        return
-
+            ui_errors.show_critical(self, "Error", f"Failed to load images plant viewer:\n{e}")
+            return 
+        
+        try:            
+            images, seg_files, conf = plant_viewer.load_screening_sequence(
+                video_folder, segmentation_dir, time_delta
+            )
+            self.preview_window = plant_viewer.ChronoViewWindow(
+                images, seg_files, None, conf, parent=None
+            )
+            self.preview_window.show()
+        except Exception as e:
+            ui_errors.show_critical(self, "Error", f"Failed to launch preview:\n{e}")
 
     def generate_report(self):
         """
         Generate report on all completed experiments.
         """
         if not self.proj_dir_edit.text():
-            QMessageBox.warning(self, 'Error', 'Please select a project directory first!')
+            ui_errors.show_warning(self, 'Error', 'Please select a project directory first!')
             return
-            
-        project_dir = self.proj_dir_edit.text()
-        
-        # Get time delta, default to 15 if empty or invalid
-        try:
-            time_delta = float(self.time_delta_edit.text() or '15')
-        except ValueError:
-            time_delta = 15
 
-        # Get add time, default 0 if empty or invalid
+        if self.report_launcher and self.report_launcher.is_running():
+            ui_errors.show_warning(self, "Busy", "Report generation is already running.")
+            return
+
+        project_dir = self.proj_dir_edit.text()
+        time_delta = self._get_time_delta()
+
         try:
             add_time = int(self.add_time_edit.text() or '0')
         except ValueError:
             add_time = 0
-        
-        # Verify there are completed analyses
+
         analysis_dir = os.path.join(project_dir, 'analysis')
         if not os.path.exists(analysis_dir):
-            QMessageBox.warning(self, 'Error', 'No analysis directory found!')
+            ui_errors.show_warning(self, 'Error', 'No analysis directory found!')
             return
-            
-        analyses = [d for d in os.listdir(analysis_dir) 
-                if os.path.isdir(os.path.join(analysis_dir, d))]
-        
+
+        analyses = [d for d in os.listdir(analysis_dir)
+                      if os.path.isdir(os.path.join(analysis_dir, d))]
+
         if not analyses:
-            QMessageBox.warning(self, 'Error', 'No analyses found to process!')
+            ui_errors.show_warning(self, 'Error', 'No analyses found to process!')
             return
-        
-        # Check for name mapping file
+
         mapping_file = os.path.join(project_dir, 'name_mapping.json')
-        
-        # 1. Collect Active Metrics/Parts
+
         active_parts = []
         mapping = [
             ("HypocotylLength", self.check_hypocotyl),
@@ -690,16 +620,12 @@ class AnalysisTab(QWidget):
         ]
         for name, cb in mapping:
             if cb.isChecked():
-                active_parts.append(name)        
-        
-        # 2. Collect FPCA Settings
+                active_parts.append(name)
+
         do_fpca = self.fpca_checkbox.isChecked()
         fpca_comps = self.fpca_components_edit.text() or "2"
-        
-        # 3. Handle Germination Cutoff
         germ_cut = self.germination_time_edit.text() or "0"
 
-        # 4. Construct Command Line Arguments
         args = [
             "python", "generate_report.py",
             "--project-dir", project_dir,
@@ -714,33 +640,23 @@ class AnalysisTab(QWidget):
             "--fpca-components", fpca_comps,
             "--normalize-fpca", str(self.fpca_normalize_checkbox.isChecked())
         ]
-        
-        # Add name mapping if it exists
+
         if os.path.exists(mapping_file):
             args.extend(["--name-mapping", mapping_file])
-        
-        try:
-            # Launch the processing script as a separate process
-            process = subprocess.Popen(
-                " ".join(args),
-                shell=True,
-                preexec_fn=os.setsid
-            )
-            
-            mapping_msg = " with name mapping" if os.path.exists(mapping_file) else ""
-            QMessageBox.information(
-                self,
-                "Report Generation Started",
+
+        mapping_msg = " with name mapping" if os.path.exists(mapping_file) else ""
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        self.report_launcher = ui_errors.launch_worker(
+            args,
+            parent=self,
+            working_directory=app_dir,
+            started_title="Report Generation Started",
+            started_message=(
                 f"Report generation has been started{mapping_msg}.\n"
                 f"Results will be saved in: {os.path.join(project_dir, 'results')}"
-            )
-            
-        except Exception as e:
-            QMessageBox.critical(
-                self, 
-                "Error", 
-                f"Error starting report generation: {str(e)}"
-            )
+            ),
+            error_title="Report Generation Error",
+        )
 
 class ResultsTab(QWidget):
     def __init__(self, parent=None):
@@ -844,7 +760,7 @@ class ResultsTab(QWidget):
                             f"array:string:file://{path}", "string:''"
                         ], timeout=2, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
                         return
-                    except:
+                    except (subprocess.SubprocessError, OSError):
                         pass
 
                 # --- STRATEGY 2: Standard Openers ---
@@ -1247,7 +1163,7 @@ class NameMappingDialog(QDialog):
             try:
                 with open(self.mapping_file, 'r') as f:
                     self.mapping = json.load(f)
-            except:
+            except (json.JSONDecodeError, OSError):
                 self.mapping = {}
     
     def load_group_names(self):
@@ -1265,7 +1181,7 @@ class NameMappingDialog(QDialog):
                             if 'group_names' in group_info:
                                 for name in group_info['group_names']:
                                     group_names.add(str(name).strip())
-                    except:
+                    except (json.JSONDecodeError, OSError):
                         pass
         
         # Clear existing layout
@@ -1395,7 +1311,7 @@ class AboutTab(QWidget):
         """Returns the current git commit hash (language independent)."""
         try:
             return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
-        except:
+        except (subprocess.SubprocessError, OSError):
             return None
 
     def get_last_commit_time(self):
@@ -1403,7 +1319,7 @@ class AboutTab(QWidget):
         try:
             cmd = ["git", "log", "-1", "--format=%cd", "--date=short"]
             return subprocess.check_output(cmd).decode().strip()
-        except:
+        except (subprocess.SubprocessError, OSError):
             return "Unknown"
 
     def update_software(self):

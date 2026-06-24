@@ -121,7 +121,8 @@ def get_group_for_position(x: int, y: int, groups: Dict[str, Tuple[int, int, int
             return group_name
     return "Unknown"
 
-def save_metadata(analysis_dir: str, params: Dict[str, Any], start_time: str = None, completion_time: str = None) -> None:
+def save_metadata(analysis_dir: str, params: Dict[str, Any], start_time: str = None,
+                  completion_time: str = None, status: str = None, error: str = None) -> None:
     """
     Save or update metadata about the analysis.
     
@@ -152,10 +153,52 @@ def save_metadata(analysis_dir: str, params: Dict[str, Any], start_time: str = N
         
         if completion_time:
             metadata['completion_time'] = completion_time
-            metadata['status'] = 'Complete'
+            metadata['status'] = status or 'Complete'
+        if error is not None:
+            metadata['error'] = error
     
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=4)
+
+
+def mark_analysis_failed(analysis_dir: str, params: Dict[str, Any], error: str) -> None:
+    metadata_path = os.path.join(analysis_dir, 'metadata.json')
+    if os.path.exists(metadata_path):
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+    else:
+        metadata = {
+            'analysis_id': params.get('analysis_id'),
+            'group_names': params.get('group_names', []),
+            'num_groups': len(params.get('group_names', [])),
+            'video_directory': params.get('video_dir'),
+            'segmentation_directory': params.get('segmentation_dir'),
+            'start_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    metadata['completion_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    metadata['status'] = 'Failed'
+    metadata['error'] = error
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=4)
+
+
+def load_group_rois(group_rois: Any, group_names: List[str]) -> Dict[str, Tuple[int, int, int, int]]:
+    if isinstance(group_rois, str):
+        with open(group_rois, 'r') as f:
+            group_rois = json.load(f)
+
+    if not isinstance(group_rois, dict):
+        raise ValueError("group_rois must be a JSON object mapping group names to rectangles")
+
+    groups = {}
+    for name in group_names:
+        if name not in group_rois:
+            raise ValueError(f"Missing ROI for group: {name}")
+        coords = group_rois[name]
+        if not isinstance(coords, (list, tuple)) or len(coords) != 4:
+            raise ValueError(f"Invalid ROI coordinates for group {name}")
+        groups[name] = tuple(int(v) for v in coords)
+    return groups
 
 
 def draw_tracking(img, bbox, group, seedpos, crop_seg_mask, original_coords):
@@ -217,20 +260,17 @@ def get_contour_centroid(contour):
 
 def process_video(params: Dict[str, Any]):
     """Process video with enhanced results management and merge detection."""
-    
-    # Create analysis directory
+
     analysis_dir = os.path.join(params['project_dir'], 'analysis', params['analysis_id'])
     vis_dir = os.path.join(analysis_dir, 'visualizations')
-    
+
     os.makedirs(analysis_dir, exist_ok=True)
     if params['show_tracking']:
         os.makedirs(vis_dir, exist_ok=True)
-        
-    # Save initial metadata
+
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     save_metadata(analysis_dir, params, start_time=start_time)
 
-    # Save a json file with the group information
     group_info = {
         'group_names': params['group_names'],
         'seed_counts': params['seed_counts']
@@ -238,28 +278,29 @@ def process_video(params: Dict[str, Any]):
 
     with open(os.path.join(analysis_dir, 'group_info.json'), 'w') as f:
         json.dump(group_info, f, indent=4)
-    
-    # Initialize tracking
-    image_files = [f for f in os.listdir(params['video_dir']) 
+
+    image_files = [f for f in os.listdir(params['video_dir'])
                   if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp'))]
     image_files.sort(key=natural_sort_key)
-    
+
     if not image_files:
         raise ValueError("No image files found in the video directory")
-    
-    # Initialize group selection with the first image
-    last_image_path = os.path.join(params['video_dir'], image_files[-1])
-    roi_selector = GroupROISelector(last_image_path, params['group_names'])
-    groups = roi_selector.select_groups()
-    
-    # Check if ROI selection was cancelled
-    if groups is None:
-        # Clean up the created directory since we're cancelling
-        import shutil
-        shutil.rmtree(analysis_dir)
-        return None
 
-    # Initialize tracking parameters
+    if params.get('group_rois'):
+        groups = load_group_rois(params['group_rois'], params['group_names'])
+        with open(os.path.join(analysis_dir, 'group_rois.json'), 'w') as f:
+            json.dump({k: list(v) for k, v in groups.items()}, f, indent=4)
+    else:
+        last_image_path = os.path.join(params['video_dir'], image_files[-1])
+        roi_selector = GroupROISelector(last_image_path, params['group_names'])
+        groups = roi_selector.select_groups()
+        if groups is None:
+            import shutil
+            shutil.rmtree(analysis_dir)
+            return None
+        with open(os.path.join(analysis_dir, 'group_rois.json'), 'w') as f:
+            json.dump({k: list(v) for k, v in groups.items()}, f, indent=4)
+
     mot_tracker = Sort(max_age=8, min_hits=2, iou_threshold=0.5)
     known_track_ids = set()
     max_init_frame = 8
@@ -519,73 +560,82 @@ def process_video(params: Dict[str, Any]):
     return dataframe
 
 
-def validate_directories(video_dir: str, project_dir: str):
+def validate_directories(video_dir: str, project_dir: str, segmentation_dir: str = None):
     """Validate directory structure and files."""
     if not os.path.exists(video_dir):
         raise ValueError(f"Video directory does not exist: {video_dir}")
-    
-    seg_dir = os.path.join(video_dir, "Segmentation", "Ensemble")
+
+    if segmentation_dir is None:
+        segmentation_dir = os.path.join(video_dir, "Segmentation")
+
+    seg_dir = os.path.join(segmentation_dir, "Ensemble")
     if not os.path.exists(seg_dir):
-        raise ValueError(f"Segmentation directory not found: {seg_dir}")
-    
+        seg_dir = os.path.join(segmentation_dir, "Seg")
+    if not os.path.exists(seg_dir):
+        raise ValueError(f"Segmentation directory not found: {segmentation_dir}")
+
     if not os.path.exists(project_dir):
         raise ValueError(f"Project directory does not exist: {project_dir}")
-    
-    image_files = [f for f in os.listdir(video_dir) 
+
+    image_files = [f for f in os.listdir(video_dir)
                   if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp'))]
-    
+
     seg_files = [f for f in os.listdir(seg_dir)
                  if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp'))]
-    
+
     if not image_files:
         raise ValueError(f"No image files found in video directory: {video_dir}")
-        
+
     if not seg_files:
         raise ValueError(f"No segmentation files found in: {seg_dir}")
-        
+
     return True
 
-def main():
-    parser = argparse.ArgumentParser(description='Process seed tracking video')
-    # Required arguments
-    parser.add_argument('--video-dir', required=True, help='Directory containing the video frames')
-    parser.add_argument('--segmentation-dir', required=True, help='Directory containing segmentation masks')
-    parser.add_argument('--project-dir', required=True, help='Project directory for output')
-    parser.add_argument('--analysis-id', required=True, help='Unique identifier for this analysis')
+def build_params_from_config(config_path: str) -> Dict[str, Any]:
+    with open(config_path, 'r') as f:
+        config = json.load(f)
 
-    # Calibration arguments (mutually exclusive)
-    calib_group = parser.add_mutually_exclusive_group(required=True)
-    calib_group.add_argument('--has-qr', action='store_true', help='Use QR code for calibration')
-    calib_group.add_argument('--known-distance', type=float, help='Known physical distance in mm')
+    required = [
+        'video_dir', 'segmentation_dir', 'project_dir', 'analysis_id',
+        'group_names', 'seed_counts', 'time_delta', 'has_qr', 'show_tracking'
+    ]
+    missing = [key for key in required if key not in config]
+    if missing:
+        raise ValueError(f"Missing required config fields: {', '.join(missing)}")
 
-    # Only required if using manual calibration
-    parser.add_argument('--pixel-distance', type=int, 
-                    help='Pixel distance corresponding to known physical distance')
+    params = {
+        'video_dir': config['video_dir'],
+        'segmentation_dir': config['segmentation_dir'],
+        'project_dir': config['project_dir'],
+        'analysis_id': config['analysis_id'],
+        'time_delta': config['time_delta'],
+        'has_qr': bool(config['has_qr']),
+        'show_tracking': bool(config['show_tracking']),
+        'group_names': config['group_names'],
+        'seed_counts': config['seed_counts'],
+    }
 
-    # Optional arguments
-    parser.add_argument('--time-delta', type=float, default=15,
-                    help='Time between slices in minutes')
-    parser.add_argument('--show-tracking', action='store_true',
-                    help='Flag to show tracking visualization')
+    if params['has_qr']:
+        pass
+    else:
+        if config.get('known_distance') is None or config.get('pixel_distance') is None:
+            raise ValueError("Manual calibration requires known_distance and pixel_distance in config")
+        params['known_distance'] = float(config['known_distance'])
+        params['pixel_distance'] = int(config['pixel_distance'])
 
-    # Group information (alternating name and count)
-    parser.add_argument('--group-info', nargs='+', required=True,
-                    help='Alternating group names and seed counts (e.g., "GroupA" "10" "GroupB" "15")')
+    if 'group_rois' in config and config['group_rois']:
+        params['group_rois'] = config['group_rois']
 
-    args = parser.parse_args()
+    return params
 
-    # Validate manual calibration parameters
-    if not args.has_qr and args.pixel_distance is None:
-        parser.error("--pixel-distance is required when using manual calibration")
 
-    # Process group info into names and counts
+def build_params_from_args(args) -> Dict[str, Any]:
     if len(args.group_info) % 2 != 0:
-        parser.error("--group-info must have pairs of names and counts")
-        
-    group_names = args.group_info[::2]  # Even indices are names
-    seed_counts = [int(count) for count in args.group_info[1::2]]  # Odd indices are counts
+        raise ValueError("--group-info must have pairs of names and counts")
 
-    # Build parameters dictionary
+    group_names = args.group_info[::2]
+    seed_counts = [int(count) for count in args.group_info[1::2]]
+
     params = {
         'video_dir': args.video_dir,
         'segmentation_dir': args.segmentation_dir,
@@ -595,30 +645,107 @@ def main():
         'has_qr': args.has_qr,
         'show_tracking': args.show_tracking,
         'group_names': group_names,
-        'seed_counts': seed_counts
+        'seed_counts': seed_counts,
     }
 
-    # Add calibration parameters if using manual calibration
     if not args.has_qr:
         params['known_distance'] = args.known_distance
         params['pixel_distance'] = args.pixel_distance
 
+    if args.group_rois:
+        params['group_rois'] = args.group_rois
+
+    return params
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Process seed tracking video')
+    parser.add_argument('--config', help='JSON config file with all processing parameters')
+
+    # Legacy CLI arguments (used when --config is not provided)
+    parser.add_argument('--video-dir', help='Directory containing the video frames')
+    parser.add_argument('--segmentation-dir', help='Directory containing segmentation masks')
+    parser.add_argument('--project-dir', help='Project directory for output')
+    parser.add_argument('--analysis-id', help='Unique identifier for this analysis')
+    parser.add_argument('--has-qr', action='store_true', help='Use QR code for calibration')
+    parser.add_argument('--known-distance', type=float, help='Known physical distance in mm')
+    parser.add_argument('--pixel-distance', type=int,
+                        help='Pixel distance corresponding to known physical distance')
+    parser.add_argument('--time-delta', type=float, default=15,
+                        help='Time between slices in minutes')
+    parser.add_argument('--show-tracking', action='store_true',
+                        help='Flag to show tracking visualization')
+    parser.add_argument('--group-info', nargs='+',
+                        help='Alternating group names and seed counts (e.g., "GroupA" "10" "GroupB" "15")')
+    parser.add_argument('--group-rois', help='JSON file with precomputed group ROIs')
+
+    args = parser.parse_args()
+
     try:
+        if args.config:
+            params = build_params_from_config(args.config)
+        else:
+            required = ['video_dir', 'segmentation_dir', 'project_dir', 'analysis_id', 'group_info']
+            missing = [name for name in required if getattr(args, name.replace('-', '_'), None) in (None, [])]
+            if missing:
+                parser.error(f"Missing required arguments: {', '.join(missing)} (or provide --config)")
+
+            if not args.has_qr:
+                if args.known_distance is None or args.pixel_distance is None:
+                    parser.error("--known-distance and --pixel-distance are required for manual calibration")
+            elif args.known_distance is not None:
+                parser.error("--known-distance cannot be used with --has-qr")
+
+            params = build_params_from_args(args)
+
+        validate_directories(params['video_dir'], params['project_dir'], params['segmentation_dir'])
+
         print(f"Starting analysis: {params['analysis_id']}")
         print("Groups to analyze:")
-        for name, count in zip(group_names, seed_counts):
+        for name, count in zip(params['group_names'], params['seed_counts']):
             print(f"  - {name}: {count} seeds")
-            
-        if args.has_qr:
+
+        if params['has_qr']:
             print("Using QR code calibration")
         else:
-            print(f"Using manual calibration: {args.known_distance}mm = {args.pixel_distance}px")
-            
+            print(f"Using manual calibration: {params['known_distance']}mm = {params['pixel_distance']}px")
+
         df = process_video(params)
+        if df is None:
+            print("Processing cancelled during ROI selection.")
+            sys.exit(1)
+
         print("\nProcessing completed successfully")
         print(f"Results saved in: {os.path.join(params['project_dir'], 'analysis', params['analysis_id'])}")
     except Exception as e:
-        print(f"Error during processing: {e}")
+        print(f"Error during processing: {e}", file=sys.stderr)
+        if args.config:
+            try:
+                with open(args.config, 'r') as f:
+                    config = json.load(f)
+                analysis_dir = os.path.join(
+                    config['project_dir'], 'analysis', config['analysis_id']
+                )
+                if os.path.exists(analysis_dir):
+                    mark_analysis_failed(analysis_dir, config, str(e))
+            except Exception:
+                pass
+        elif args.project_dir and args.analysis_id:
+            analysis_dir = os.path.join(args.project_dir, 'analysis', args.analysis_id)
+            if os.path.exists(analysis_dir):
+                try:
+                    mark_analysis_failed(
+                        analysis_dir,
+                        {
+                            'analysis_id': args.analysis_id,
+                            'group_names': args.group_info[::2] if args.group_info else [],
+                            'video_dir': args.video_dir,
+                            'segmentation_dir': args.segmentation_dir,
+                        },
+                        str(e),
+                    )
+                except Exception:
+                    pass
         sys.exit(1)
 
 if __name__ == "__main__":
