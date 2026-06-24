@@ -66,6 +66,7 @@ class AnalysisTab(QWidget):
         self.main_window = main_window
         self.group_entries = []
         self.preview_window = None
+        self.calibration_window = None
         self.process_launcher = None
         self.report_launcher = None
         self._loading_config = False
@@ -457,37 +458,46 @@ class AnalysisTab(QWidget):
 
     def open_calibration_helper(self):
         """Opens a helper window to assist with manual calibration"""
-        if not self.video_path_edit.text():
-            QMessageBox.warning(self, 'Error', 'Please select a video directory first!')
+        video_dir = self.video_path_edit.text().strip()
+        if not video_dir:
+            ui_errors.show_warning(self, 'Error', 'Please select a video directory first!')
+            return
+        if not os.path.exists(video_dir):
+            ui_errors.show_warning(self, 'Error', 'Video directory does not exist!')
             return
 
         self._autosave_config()
 
-        # Create command line arguments
-        args = [
-            "python",
-            "calibration_helper.py",
-            "--video-dir", self.video_path_edit.text()
-        ]
+        try:
+            import calibration_helper
+        except Exception as e:
+            ui_errors.show_critical(self, 'Error', f'Failed to load calibration helper:\n{e}')
+            return
+
+        if self.calibration_window is not None:
+            same_video = (
+                os.path.abspath(self.calibration_window.video_dir)
+                == os.path.abspath(video_dir)
+            )
+            if same_video and self.calibration_window.isVisible():
+                self.calibration_window.raise_()
+                self.calibration_window.activateWindow()
+                return
+            self.calibration_window.close()
+            self.calibration_window = None
 
         try:
-            process = subprocess.Popen(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True
+            self.calibration_window = calibration_helper.CalibrationHelper(video_dir)
+            self.calibration_window.distance_measured.connect(self._on_calibration_distance)
+            self.calibration_window.destroyed.connect(
+                lambda: setattr(self, 'calibration_window', None)
             )
-            
-            QMessageBox.information(
-                self,
-                "Calibration Helper",
-                "Calibration helper window has been opened.\n"
-                "Please measure the pixel distance between two points\n"
-                "of known physical distance in your image."
-            )
-            
+            self.calibration_window.show()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error starting calibration helper: {str(e)}")
+            ui_errors.show_critical(self, 'Error', f'Failed to open calibration helper:\n{e}')
+
+    def _on_calibration_distance(self, pixels: float):
+        self.pixel_dist_edit.setText(f"{pixels:.1f}")
 
     def validate_inputs(self):
         """Updated validation to include calibration checks"""

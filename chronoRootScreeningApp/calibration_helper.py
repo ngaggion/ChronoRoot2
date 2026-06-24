@@ -9,39 +9,6 @@ from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor
 import argparse
 import PIL.Image
 
-from typing import List, Tuple
-
-def loadPath(path: str, ext: str = "*") -> List[str]:
-    """
-    Helper function to load paths with specific extensions.
-    Matches the functionality expected by getImages()
-    """
-    import glob
-    if not os.path.exists(path):
-        return []
-    return sorted(glob.glob(os.path.join(path, ext)))
-
-def getImages(video_dir: str) -> Tuple[List[str], List[str]]:
-    """
-    Returns lists of image paths and segmentation paths
-    """
-    # Check if the directory exists and contains png files
-    images = loadPath(video_dir, ext="*.png")
-    
-    # Look for segmentation files
-    seg_path = os.path.join(video_dir, 'Segmentation', 'Ensemble')
-    if not os.path.exists(seg_path):
-        seg_path = os.path.join(video_dir, 'Seg')
-    
-    seg_files = loadPath(seg_path, ext="*.png")
-    
-    # Ensure we have matching numbers of files
-    n = min(len(images), len(seg_files))
-    images = images[:n]
-    seg_files = seg_files[:n]
-    
-    return images, seg_files
-
 class ZoomableImage(QLabel):
     point_selected = pyqtSignal(tuple)
     
@@ -214,11 +181,13 @@ class ZoomableImage(QLabel):
         self.update_display()
 
 
-
 class CalibrationHelper(QMainWindow):
+    distance_measured = pyqtSignal(float)
+
     def __init__(self, video_dir):
         super().__init__()
-        self.video_dir = video_dir
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.video_dir = os.path.abspath(video_dir)
         self.initUI()
         self.load_first_frame()
         
@@ -259,6 +228,18 @@ class CalibrationHelper(QMainWindow):
         layout.addLayout(button_layout)
         
         self.statusBar().showMessage('Select two points to measure distance')
+
+    def _pixel_distance(self):
+        points = self.frame_widget.points
+        if len(points) != 2:
+            return None
+        return float(np.sqrt((points[1][0] - points[0][0])**2 +
+                             (points[1][1] - points[0][1])**2))
+
+    def _emit_distance(self):
+        distance = self._pixel_distance()
+        if distance is not None:
+            self.distance_measured.emit(distance)
         
     def load_first_frame(self):
         """Load the first frame of the first video in the directory"""
@@ -266,7 +247,9 @@ class CalibrationHelper(QMainWindow):
             QMessageBox.critical(self, "Error", "Video directory does not exist!")
             return
         
-        images, _ = getImages(self.video_dir)
+        import plant_viewer
+
+        _, _, images, _ = plant_viewer.resolve_screening_paths(self.video_dir)
         
         if not images:
             QMessageBox.warning(self, "Warning", "No images found in directory!")
@@ -282,21 +265,25 @@ class CalibrationHelper(QMainWindow):
         if len(points) == 1:
             self.statusBar().showMessage(f'First point selected at {point}')
         elif len(points) == 2:
-            distance = np.sqrt((points[1][0] - points[0][0])**2 + 
-                             (points[1][1] - points[0][1])**2)
+            distance = self._pixel_distance()
             self.statusBar().showMessage(
                 f'Distance: {distance:.1f} pixels | Point 1: {points[0]} | Point 2: {points[1]}'
             )
+            self._emit_distance()
             
     def copy_distance(self):
-        points = self.frame_widget.points
-        if len(points) == 2:
-            distance = np.sqrt((points[1][0] - points[0][0])**2 + 
-                             (points[1][1] - points[0][1])**2)
+        distance = self._pixel_distance()
+        if distance is not None:
             QApplication.clipboard().setText(f"{distance:.1f}")
             self.statusBar().showMessage(f'Distance {distance:.1f} pixels copied to clipboard')
+            self._emit_distance()
         else:
             self.statusBar().showMessage('Please select two points first')
+
+
+def open_calibration_window(video_dir: str) -> CalibrationHelper:
+    return CalibrationHelper(video_dir)
+
 
 def main():
     parser = argparse.ArgumentParser(description='Video Calibration Helper')
