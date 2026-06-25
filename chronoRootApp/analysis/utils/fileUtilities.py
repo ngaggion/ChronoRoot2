@@ -18,7 +18,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import pathlib
 import re
-import os 
+import os
+import shutil
 
 def natural_key(string_):
     """See http://www.codinghorror.com/blog/archives/001018.html"""
@@ -42,6 +43,47 @@ def convertFromPathSafe(name):
     name = name.replace('_slash_', '/')
     name = name.replace('_backslash_', '\\')
     return name
+
+
+def list_result_dirs(plant_path):
+    """Return all Results_* directories under a plant slot, naturally sorted."""
+    if not plant_path or not os.path.isdir(plant_path):
+        return []
+    return loadPath(plant_path, 'Results_*')
+
+
+def get_latest_result_dir(plant_path):
+    """Return the latest Results_* folder for a plant slot, or None."""
+    results = list_result_dirs(plant_path)
+    return results[-1] if results else None
+
+
+def plant_slot_path(conf):
+    """Filesystem path for a plant hardware slot (parent of Results_* folders)."""
+    identifier = convertToPathSafe(conf['Experiment'])
+    rpi = str(conf['rpi'])
+    cam = f"cam_{conf['cam']}"
+    plant = f"plant_{conf['plant']}"
+    return os.path.join(conf['MainFolder'], 'Analysis', identifier, rpi, cam, plant)
+
+
+def plant_slot_has_finished_analysis(conf):
+    """True if the plant slot has at least one completed Results_* run."""
+    slot = plant_slot_path(conf)
+    for result_dir in list_result_dirs(slot):
+        log_path = os.path.join(result_dir, 'log.txt')
+        if os.path.exists(log_path):
+            return True
+    return False
+
+
+def cleanup_superseded_results(plant_path, keep_result_path):
+    """Delete all Results_* folders except the one to keep."""
+    keep_result_path = os.path.abspath(keep_result_path)
+    for result_dir in list_result_dirs(plant_path):
+        if os.path.abspath(result_dir) != keep_result_path and os.path.isdir(result_dir):
+            shutil.rmtree(result_dir, ignore_errors=True)
+
 
 def createSaveFolder(conf):
     # Create the folder for the general results
@@ -133,6 +175,49 @@ def getImages(conf):
     return images, segFiles
 
 import json
+
+UNSPECIFIED_FACTOR = "unspecified"
+
+
+def normalize_factor_value(value):
+    if value is None:
+        return UNSPECIFIED_FACTOR
+    text = str(value).strip()
+    return text if text else UNSPECIFIED_FACTOR
+
+
+def load_result_metadata(res_folder):
+    meta_path = os.path.join(res_folder, 'metadata.json')
+    if not os.path.exists(meta_path):
+        return {}
+    try:
+        with open(meta_path, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def attach_plant_metadata_columns(data, meta, rpi_name=None, cam_name=None, plant_name=None,
+                                  experiment_fallback=None):
+    """Attach experiment and grouping columns from per-plant metadata."""
+    experiment = meta.get('Experiment', experiment_fallback)
+    if experiment is not None:
+        data['Experiment'] = experiment
+    data['PlateCondition'] = normalize_factor_value(meta.get('PlateCondition', ''))
+    data['ExtraVariable'] = normalize_factor_value(meta.get('ExtraVariable', ''))
+    if rpi_name is not None:
+        data['rpi'] = rpi_name
+    if cam_name is not None:
+        data['cam'] = cam_name
+    if plant_name is not None:
+        data['plant'] = plant_name
+    return data
+
+
+def build_plant_id(rpi_name, cam_name, plant_name, extra_variable=None):
+    """Hardware slot identity only; ExtraVariable is a separate stats column."""
+    return f"{rpi_name}_{cam_name}_{plant_name}"
+
 
 def saveMetadata(bbox, seed, conf):
     metadata = {}

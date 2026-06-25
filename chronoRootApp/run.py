@@ -6,14 +6,6 @@ import platform
 os.environ['QT_LOGGING_RULES'] = '*=false'
 os.environ['LIBGL_ALWAYS_INDIRECT'] = '1'
 
-# --- CONFIGURATION CONSTANTS ---
-APP_NAME = "chronoroot"
-PROJECT_CONFIG_NAME = "project_config.json"
-GLOBAL_CONFIG_DIR = os.path.expanduser(f"~/.config/{APP_NAME}")
-GLOBAL_CONFIG_FILE = os.path.join(GLOBAL_CONFIG_DIR, "mainInterfaceConfig.json")
-
-os.makedirs(GLOBAL_CONFIG_DIR, exist_ok=True)
-
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QPushButton
 from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox
@@ -24,9 +16,25 @@ import pathlib
 import re
 import shutil
 import glob
-import os
 from PIL import Image
-from analysis.utils.fileUtilities import convertFromPathSafe, getImages
+
+from analysis.utils.fileUtilities import (
+    convertFromPathSafe,
+    getImages,
+    get_latest_result_dir,
+    load_result_metadata,
+    normalize_factor_value,
+    plant_slot_has_finished_analysis,
+)
+from gui.config_store import ConfigStore, PROJECT_CONFIG_NAME
+from gui import pipeline_runner
+from gui.stats_config_dialog import StatsConfigDialog
+
+TAB_HEIGHT = 630
+
+WINDOW_WIDTH = 811
+WINDOW_HEIGHT = TAB_HEIGHT + 20
+
         
 def natural_keys(text):
     return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', text)]
@@ -50,119 +58,26 @@ class AspectRatioLabel(QLabel):
 class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.project_dir = None  # Add this before setupUi
-        self.selected_plant = None  # Add this before setupUi
+        self.project_dir = None
+        self.selected_plant = None
+        self.config_store = ConfigStore()
         self.setupUi(self)
         
     def openFileNameDialog(self):
         options = QtWidgets.QFileDialog.Options() | QtWidgets.QFileDialog.DontUseNativeDialog
         return QtWidgets.QFileDialog.getExistingDirectory(None, "Select Directory", options=options)
 
-    def saveFieldsIntoJson(self):            
-        data = {}
+    def _config_value(self, data, key, default=None):
+        return self.config_store.config_value(data, key, default)
 
-        for field in [self.processingLimitField, 
-                      self.processingLimitField_3, self.emergenceDistanceField, self.captureIntervalField,
-                      self.everyXhourField, self.everyXhourFieldFourier, self.everyXhourFieldAngles, self.numComponentsFPCAField]:
-            if field.text().isdigit():
-                data[field.objectName()] = int(field.text())
-            
-            if field.text() == "":
-                data[field.objectName()] = ""
-                
-        data.update({field.objectName(): field.text() for field in [self.experimentName, self.videoField, self.projectField,
-                                                                    self.everyXhourField, self.everyXhourFieldFourier, 
-                                                                    self.everyXhourFieldAngles, self.numComponentsFPCAField]})
-        data.update({field.objectName(): field.isChecked() for field in [self.saveImagesButton, 
-                                                                         self.videoHasQRbutton,
-                                                                         self.saveImagesConvex, 
-                                                                         self.doConvex, self.doFourier, self.doLateralAngles,
-                                                                         self.doFPCA, self.normFPCA, self.averagePerPlantStats]})
-        
-        data["daysConvexHull"] = self.daysConvexField.text()
-        data["daysAngles"] = self.daysAnglesField.text()
-
-        # map values for compatibility with 1_analysis.py
-        data["rpi"] = self.rpiField.text()
-        data["rpiField"] = self.rpiField.text()
-        data["cam"] = self.cameraField.text()
-        data["cameraField"] = self.cameraField.text()
-        data["plant"] = self.plantField.text()
-        data["plantField"] = self.plantField.text()
-        data["Experiment"] = data["experimentName"]
-        data["Images"] = data["videoField"]
-        data["processingLimit"] = data["processingLimitField"]
-        data["timeStep"] = data["captureIntervalField"]
-        data["MainFolder"] = data["projectField"]
-        data["saveImages"] = data["saveImagesButton"]
-        data["videoHasQR"] = data["videoHasQRbutton"]
-        data["emergenceDistance"] = data["emergenceDistanceField"]
-
-        if data["processingLimit"] != "":
-            data['Limit'] = int(data["processingLimit"] * 24 * 60 / int(data['timeStep']))
-        else:
-            data['Limit'] = 0
-            
-        data['knownDistance'] = self.knownDistanceField.text()
-        data['pixelDistance'] = self.pixelDistanceField.text()
-
-        # 1. Save to Global Config (User Preferences)
-        try:
-            with open(GLOBAL_CONFIG_FILE, "w") as f:
-                json.dump(data, f, indent=4)
-        except Exception as e:
-            print(f"Error saving global config: {e}")
-
-        # 2. Save to Project Config (Reproducibility)
-        project_path = self.projectField.text()
-        if project_path and os.path.isdir(project_path):
-            try:
-                proj_cfg_path = os.path.join(project_path, PROJECT_CONFIG_NAME)
-                with open(proj_cfg_path, "w") as f:
-                    json.dump(data, f, indent=4)
-            except Exception as e:
-                print(f"Error saving project config: {e}")
+    def saveFieldsIntoJson(self):
+        self.config_store.save(self)
 
     def loadJsonIntoFields(self):
-        # Determine which file to load
-        project_cfg = os.path.join(self.projectField.text(), PROJECT_CONFIG_NAME)
-        
-        # Hierarchy: Project File > Global File
-        if os.path.exists(project_cfg):
-            json_path = project_cfg
-        elif os.path.exists(GLOBAL_CONFIG_FILE):
-            json_path = GLOBAL_CONFIG_FILE
-        else:
-            return
+        self.config_store.load(self)
 
-        try:
-            with open(json_path, 'r') as f:
-                data = json.load(f)
-                for field in [self.rpiField, self.cameraField, self.plantField, self.processingLimitField, 
-                      self.processingLimitField_3, self.emergenceDistanceField, self.captureIntervalField,
-                      self.everyXhourField, self.everyXhourFieldFourier, self.everyXhourFieldAngles, self.numComponentsFPCAField]:
-                    if field.objectName() in data:
-                        field.setText(str(data[field.objectName()]))
-
-                for field in [self.experimentName, self.videoField, self.projectField]:
-                    if field.objectName() in data:
-                        field.setText(data[field.objectName()])
-
-                for field in [self.saveImagesButton, self.videoHasQRbutton,
-                            self.saveImagesConvex, self.doConvex, self.doFourier, self.doLateralAngles,
-                            self.doFPCA, self.normFPCA, self.averagePerPlantStats]:
-                    if field.objectName() in data:
-                        field.setChecked(data[field.objectName()])
-
-                self.knownDistanceField.setText(str(data['knownDistance']))
-                self.pixelDistanceField.setText(str(data['pixelDistance']))
-            
-                if "daysConvexHull" in data:
-                    self.daysConvexField.setText(str(data["daysConvexHull"]))
-                if "daysAngles" in data:
-                    self.daysAnglesField.setText(str(data["daysAngles"]))
-        except Exception as e:
-            print(f"Error loading config: {e}")
+    def open_stats_config_dialog(self):
+        self.stats_config_dialog.exec_()
 
     def refresh_table(self):
         # Store current sort order and column
@@ -174,61 +89,76 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.table.clearContents()
         self.table.setRowCount(0)
 
-        # Get the data from the database
         AnalysisFolder = os.path.join(self.projectField.text(), "Analysis")
-        pathlib_dir = pathlib.Path(AnalysisFolder)
+        if not os.path.isdir(AnalysisFolder):
+            self.table.setSortingEnabled(True)
+            return
 
-        data_files = pathlib_dir.glob('*/*/*/*/*')
-        data_files = [str(file) for file in data_files]
-        data_files = sorted(data_files, key=lambda x: natural_keys(x))
+        pathlib_dir = pathlib.Path(AnalysisFolder)
+        plant_slots = sorted(pathlib_dir.glob('*/*/*/*'), key=lambda p: natural_keys(str(p)))
+        plant_slots = [str(p) for p in plant_slots if p.is_dir()]
 
         data = []
-
         self.plant_dropdown.clear()
 
-        for file in data_files:
-            rel_path = os.path.relpath(file, AnalysisFolder)
+        for plant_slot in plant_slots:
+            rel_path = os.path.relpath(plant_slot, AnalysisFolder)
             split = rel_path.split(os.path.sep)
+            if len(split) < 4:
+                continue
+
             experiment = convertFromPathSafe(split[0])
             rpi = split[1]
             camera = split[2]
             plant = split[3]
-            results = split[4]
 
-            # read the error rate from the log file first line
-            if os.path.exists(os.path.join(file, "log.txt")):
-                with open(os.path.join(file, "log.txt"), 'r') as f:
-                    date = f.readline().replace("Analysis completed: ", "")
-
-                    # error rate is in the last line
-                    lines = f.readlines()
-                    last_line = lines[-1]
-                    error_rate = float(last_line.split(":")[-1].strip())
-                    error_rate = round(error_rate, 4)
-                status = "Finished"
-            else:
+            result_dir = get_latest_result_dir(plant_slot)
+            if result_dir is None:
+                status = "Not finished"
                 date = ""
                 error_rate = ""
-                status = "Not finished"
+                plate_condition = ""
+                extra_variable = ""
+                active_path = plant_slot
+            else:
+                meta = load_result_metadata(result_dir)
+                plate_condition = normalize_factor_value(meta.get('PlateCondition', ''))
+                extra_variable = normalize_factor_value(meta.get('ExtraVariable', ''))
+                active_path = result_dir
 
-            data.append([experiment, rpi, camera, plant, results, error_rate, status, date, file])
+                if os.path.exists(os.path.join(result_dir, "log.txt")):
+                    with open(os.path.join(result_dir, "log.txt"), 'r') as f:
+                        date = f.readline().replace("Analysis completed: ", "").strip()
+                        lines = f.readlines()
+                        last_line = lines[-1] if lines else ""
+                        if "Error rate:" in last_line:
+                            error_rate = round(float(last_line.split(":")[-1].strip()), 4)
+                        else:
+                            error_rate = ""
+                    status = "Finished"
+                else:
+                    date = ""
+                    error_rate = ""
+                    status = "Not finished"
 
-            self.plant_dropdown.addItem(file)
+            data.append([
+                experiment, rpi, camera, plant, plate_condition, extra_variable,
+                error_rate, status, date, active_path, plant_slot,
+            ])
+            self.plant_dropdown.addItem(active_path)
 
         self.table.setRowCount(len(data))
 
         for row, row_data in enumerate(data):
-            for col, cell_data in enumerate(row_data[:-1]):  # Ignore the last element (path)
+            for col, cell_data in enumerate(row_data[:-2]):
                 item = QTableWidgetItem(str(cell_data))
-                item.path = row_data[-1]  # Store the path in the item
+                item.path = row_data[-2]
+                item.plant_slot = row_data[-1]
                 self.table.setItem(row, col, item)
 
         self.table.resizeColumnsToContents()
         self.table.horizontalHeader().setStretchLastSection(True)
-
-        self.table.setSortingEnabled(True)  
-
-        # Restore the sort order and column
+        self.table.setSortingEnabled(True)
         self.table.sortItems(current_sort_column, current_sort_order)
 
         return
@@ -349,13 +279,13 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
         selected_row = selected_rows[0].row()
         item = self.table.item(selected_row, 0)
-        path = item.path
+        path = getattr(item, 'plant_slot', os.path.dirname(item.path))
 
-        # Removing the plant means moving it to a folder called "Removed"
-        # This is done to avoid losing the data in case the user wants to recover it
-        # Also keep the same folder structure, from the Analysis folder
-        removed_path = removed_path = os.path.join(self.projectField.text(), "Removed")
-        removed_path = os.path.join(removed_path, os.path.relpath(path, self.projectField.text() + "/Analysis"))
+        removed_path = os.path.join(self.projectField.text(), "Removed")
+        removed_path = os.path.join(
+            removed_path,
+            os.path.relpath(path, os.path.join(self.projectField.text(), "Analysis")),
+        )
 
         if not os.path.exists(os.path.dirname(removed_path)):
             os.makedirs(os.path.dirname(removed_path))
@@ -373,16 +303,14 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
     def set_default_parameters(self):
         """Set default values for important fields"""
-        self.emergenceDistanceField.setText("2")
+        self.reportEmergenceDistanceField.setText("2")
         self.processingLimitField.setText("0")
-        self.processingLimitField_3.setText("0")
+        self.reportProcessingLimitField.setText("0")
         self.captureIntervalField.setText("15")
-        self.captureIntervalField_3.setText("15")
-        self.emergenceDistanceField_2.setText("2")
-        self.everyXhourField.setText("6")
-        self.everyXhourFieldFourier.setText("6")
-        self.everyXhourFieldAngles.setText("6")
+        self.reportCaptureIntervalField.setText("15")
+        self.analysisEmergenceDistanceField.setText("2")
         self.numComponentsFPCAField.setText("2")
+        self.stats_config_dialog.set_defaults()
 
     def validate_numeric_input(self, field):
         """Validate numeric input fields"""
@@ -390,47 +318,47 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             text = field.text()
             # Don't allow empty fields
             if text.strip() == "":
-                if field in [self.emergenceDistanceField, self.emergenceDistanceField_2]:
+                if field in [self.reportEmergenceDistanceField, self.analysisEmergenceDistanceField]:
                     field.setText("2")
-                elif field in [self.processingLimitField, self.processingLimitField_3]:
+                elif field in [self.processingLimitField, self.reportProcessingLimitField]:
                     field.setText("0")
-                elif field in [self.captureIntervalField, self.captureIntervalField_3]:
+                elif field in [self.captureIntervalField, self.reportCaptureIntervalField]:
                     field.setText("15")
                 return
                 
             value = float(text)
-            if field == self.emergenceDistanceField or field == self.emergenceDistanceField_2:
+            if field == self.reportEmergenceDistanceField or field == self.analysisEmergenceDistanceField:
                 if value <= 0:
                     field.setText("2")
-            elif field in [self.processingLimitField, self.processingLimitField_3]:
+            elif field in [self.processingLimitField, self.reportProcessingLimitField]:
                 if value < 0:
                     field.setText("0")
-            elif field in [self.captureIntervalField, self.captureIntervalField_3]:
+            elif field in [self.captureIntervalField, self.reportCaptureIntervalField]:
                 if value <= 0:
                     field.setText("15")
         except ValueError:
-            if field in [self.emergenceDistanceField, self.emergenceDistanceField_2]:
+            if field in [self.reportEmergenceDistanceField, self.analysisEmergenceDistanceField]:
                 field.setText("2")
-            elif field in [self.processingLimitField, self.processingLimitField_3]:
+            elif field in [self.processingLimitField, self.reportProcessingLimitField]:
                 field.setText("0")
-            elif field in [self.captureIntervalField, self.captureIntervalField_3]:
+            elif field in [self.captureIntervalField, self.reportCaptureIntervalField]:
                 field.setText("15")
 
     def setup_field_validation(self):
         """Set up validation for numeric fields"""
         # Connect validation to editingFinished signal
-        self.emergenceDistanceField.editingFinished.connect(
-            lambda: self.validate_numeric_input(self.emergenceDistanceField))
-        self.emergenceDistanceField_2.editingFinished.connect(
-            lambda: self.validate_numeric_input(self.emergenceDistanceField_2))
+        self.reportEmergenceDistanceField.editingFinished.connect(
+            lambda: self.validate_numeric_input(self.reportEmergenceDistanceField))
+        self.analysisEmergenceDistanceField.editingFinished.connect(
+            lambda: self.validate_numeric_input(self.analysisEmergenceDistanceField))
         self.processingLimitField.editingFinished.connect(
             lambda: self.validate_numeric_input(self.processingLimitField))
-        self.processingLimitField_3.editingFinished.connect(
-            lambda: self.validate_numeric_input(self.processingLimitField_3))
+        self.reportProcessingLimitField.editingFinished.connect(
+            lambda: self.validate_numeric_input(self.reportProcessingLimitField))
         self.captureIntervalField.editingFinished.connect(
             lambda: self.validate_numeric_input(self.captureIntervalField))
-        self.captureIntervalField_3.editingFinished.connect(
-            lambda: self.validate_numeric_input(self.captureIntervalField_3))
+        self.reportCaptureIntervalField.editingFinished.connect(
+            lambda: self.validate_numeric_input(self.reportCaptureIntervalField))
 
     def get_image_paths(self):
         if not os.path.exists(os.path.join(self.selected_plant, "log.txt")):
@@ -539,20 +467,26 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
     def remove_selected_plant(self):
         path = self.selected_plant
+        if not path:
+            return
+        plant_slot = os.path.dirname(path) if os.path.basename(path).startswith('Results_') else path
 
-        removed_path = self.projectField.text() + "/Removed"
-        removed_path = os.path.join(removed_path, os.path.relpath(path, os.path.join(self.projectField.text(), "Analysis")))
+        removed_path = os.path.join(
+            self.projectField.text(),
+            "Removed",
+            os.path.relpath(plant_slot, os.path.join(self.projectField.text(), "Analysis")),
+        )
 
         if not os.path.exists(os.path.dirname(removed_path)):
             os.makedirs(os.path.dirname(removed_path))
 
         # Open the directory in the file explorer
         if os.name == 'nt':
-            os.system(f'move "{path}" "{removed_path}"')
+            os.system(f'move "{plant_slot}" "{removed_path}"')
         elif sys.platform == 'darwin':
-            os.system(f'mv "{path}" "{removed_path}"')
+            os.system(f'mv "{plant_slot}" "{removed_path}"')
         else:
-            os.system(f'mv "{path}" "{removed_path}"')
+            os.system(f'mv "{plant_slot}" "{removed_path}"')
         
         self.refresh_table()
         
@@ -628,11 +562,38 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         
         # All validations passed, run analysis
         self.saveFieldsIntoJson()
-        subprocess.Popen(["python", "1_analysis.py", "--config", os.path.join(self.projectField.text(), "project_config.json")])
+
+        config_path = os.path.join(self.projectField.text(), PROJECT_CONFIG_NAME)
+        try:
+            with open(config_path, 'r') as f:
+                conf = json.load(f)
+            conf['Experiment'] = conf.get('plantIdentifier', conf.get('Experiment', ''))
+            conf['MainFolder'] = self.projectField.text()
+            conf['rpi'] = self.rpiField.text()
+            conf['cam'] = self.cameraField.text()
+            conf['plant'] = self.plantField.text()
+        except (OSError, json.JSONDecodeError):
+            conf = {}
+
+        if plant_slot_has_finished_analysis(conf):
+            reply = QtWidgets.QMessageBox.question(
+                None,
+                'Plant already analyzed',
+                'A finished analysis already exists for this plant slot '
+                '(same experiment, robot, camera, and plant number).\n\n'
+                'Use "Repeat Analysis" or "Redo Analysis" to re-run.\n\n'
+                'Continue anyway and create a new run?',
+                QtWidgets.QMessageBox.Cancel | QtWidgets.QMessageBox.Yes,
+                QtWidgets.QMessageBox.Cancel,
+            )
+            if reply != QtWidgets.QMessageBox.Yes:
+                return
+
+        pipeline_runner.run_analysis(self.projectField.text())
         
     def redoAnalysis(self):
         metadata_path = os.path.join(self.selected_plant, "metadata.json")
-        subprocess.Popen(["python", "1_analysis.py", "--config", metadata_path, "--restart"])
+        pipeline_runner.run_analysis_restart(metadata_path)
 
     def repeatAnalysis(self):
         selected_rows = self.table.selectionModel().selectedRows()
@@ -645,7 +606,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         path = item.path
 
         metadata_path = os.path.join(path, "metadata.json")
-        subprocess.Popen(["python", "1_analysis.py", "--config", metadata_path, "--rerun"])
+        pipeline_runner.run_analysis_rerun(metadata_path)
 
     def reviewPlant(self):
         path = self.selected_plant
@@ -705,44 +666,46 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         
     def PostProcess(self):
         self.saveFieldsIntoJson()
-        subprocess.Popen(["python", "2_postprocess.py", "--config", os.path.join(self.projectField.text(), "project_config.json")])
+        pipeline_runner.run_postprocess(self.projectField.text())
     
     def report(self):
         self.saveFieldsIntoJson()
-        subprocess.Popen(["python", "3_generateReport.py", "--config", os.path.join(self.projectField.text(), "project_config.json")])   
+        pipeline_runner.run_report(self.projectField.text())
 
     def syncProjectFolderField(self):
         projectFolder = self.projectField.text()
-        projectFolder2 = self.projectField_2.text()
+        projectFolder2 = self.reportProjectField.text()
 
         if self.central_widget.sender() == self.projectField:
-            self.projectField_2.setText(projectFolder)
-        elif self.central_widget.sender() == self.projectField_2:
+            self.reportProjectField.setText(projectFolder)
+        elif self.central_widget.sender() == self.reportProjectField:
             self.projectField.setText(projectFolder2)
     
     def syncCaptureIntervalField(self):
         captureInterval = self.captureIntervalField.text()
-        captureInterval2 = self.captureIntervalField_3.text()
+        captureInterval2 = self.reportCaptureIntervalField.text()
 
         if self.central_widget.sender() == self.captureIntervalField:
-            self.captureIntervalField_3.setText(captureInterval)
-        elif self.central_widget.sender() == self.captureIntervalField_3:
+            self.reportCaptureIntervalField.setText(captureInterval)
+        elif self.central_widget.sender() == self.reportCaptureIntervalField:
             self.captureIntervalField.setText(captureInterval2)
 
     def syncProcessingLimitField(self):
         processingLimit = self.processingLimitField.text()
-        processingLimit2 = self.processingLimitField_3.text()
+        processingLimit2 = self.reportProcessingLimitField.text()
 
         if self.central_widget.sender() == self.processingLimitField:
-            self.processingLimitField_3.setText(processingLimit)
-        elif self.central_widget.sender() == self.processingLimitField_3:
+            self.reportProcessingLimitField.setText(processingLimit)
+        elif self.central_widget.sender() == self.reportProcessingLimitField:
             self.processingLimitField.setText(processingLimit2)
                     
     def setupUi(self, chrono_root_analysis):
         chrono_root_analysis.setObjectName("ChronoRootAnalysis")
-        chrono_root_analysis.resize(811, 600)
+        chrono_root_analysis.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.central_widget = QtWidgets.QWidget(chrono_root_analysis)
         self.central_widget.setObjectName("centralwidget")
+
+        self.stats_config_dialog = StatsConfigDialog(self)
         
         self.setup_tabs()
         self.setup_tab1_elements()
@@ -751,28 +714,33 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.setup_tab4_elements()
         self.setup_tab5_elements()
         
-        # Initialize Tab 6
         self.tab6 = QtWidgets.QWidget()
         self.tab6.setObjectName("tab6")
-        self.tab_widget.addTab(self.tab6, "About") # Add title here
+        self.tab_widget.addTab(self.tab6, "About")
         self.setup_tab6_elements()
 
+        self.stats_config_dialog.register_on_host(self)
         self.setup_field_validation()
         self.set_default_parameters()
-        self.setup_tooltips()
 
         chrono_root_analysis.setCentralWidget(self.central_widget)
         self.statusbar = QtWidgets.QStatusBar(chrono_root_analysis)
         self.statusbar.setObjectName("statusbar")
         chrono_root_analysis.setStatusBar(self.statusbar)
 
-        self.retranslate_ui(chrono_root_analysis)
+        self._apply_window_settings(chrono_root_analysis)
         self.tab_widget.setCurrentIndex(0)
         QtCore.QMetaObject.connectSlotsByName(chrono_root_analysis)
 
+    def _apply_window_settings(self, window):
+        window.setWindowTitle("ChronoRootAnalysis")
+        fixed_size = QtCore.QSize(810, WINDOW_HEIGHT)
+        window.setMinimumSize(fixed_size)
+        window.setMaximumSize(fixed_size)
+
     def setup_tabs(self):
         self.tab_widget = QtWidgets.QTabWidget(self.central_widget)
-        self.tab_widget.setGeometry(QtCore.QRect(0, 0, 811, 621))
+        self.tab_widget.setGeometry(QtCore.QRect(0, 0, WINDOW_WIDTH, TAB_HEIGHT))
         self.tab_widget.currentChanged.connect(self.handle_tab_change)
         
         font = QtGui.QFont()
@@ -785,54 +753,34 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
     def read_config_from_file(self):
         options = QtWidgets.QFileDialog.Options() | QtWidgets.QFileDialog.DontUseNativeDialog
         file_filter = "JSON Files (*.json);;All Files (*)"
-        json_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select Configuration File", "", file_filter, options=options)
-    
+        json_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            None, "Select Configuration File", "", file_filter, options=options)
+
         if not json_path:
-            return  # If no file was selected, exit the function
+            return
 
-        with open(json_path, 'r') as file:
-            data = json.load(file)
-
-        for field in [self.rpiField, self.cameraField, self.plantField, self.processingLimitField, 
-                      self.processingLimitField_3, self.emergenceDistanceField, self.captureIntervalField,
-                      self.everyXhourField, self.everyXhourFieldFourier, self.everyXhourFieldAngles, self.numComponentsFPCAField]:
-            if field.objectName() in data:
-                field.setText(str(data[field.objectName()]))
-
-        for field in [self.experimentName, self.videoField, self.projectField]:
-            if field.objectName() in data:
-                field.setText(data[field.objectName()])
-
-        for field in [self.saveImagesButton, self.videoHasQRbutton,
-                      self.saveImagesConvex, self.doConvex, self.doFourier, self.doLateralAngles,
-                      self.doFPCA, self.normFPCA, self.averagePerPlantStats]:
-            if field.objectName() in data:
-                field.setChecked(data[field.objectName()])
-
-        if "daysConvexHull" in data:
-            self.daysConvexField.setText(str(data["daysConvexHull"]))
-        if "daysAngles" in data:
-            self.daysAnglesField.setText(str(data["daysAngles"]))
+        self.config_store.apply_file(self, json_path)
 
 
     def setup_tab1_elements(self):
 
         self.tab1 = QtWidgets.QWidget()
         self.tab1.setObjectName("tab1")
-        self.tab_widget.addTab(self.tab1, "")
-    
-        self.videoField = QtWidgets.QLineEdit(self.tab1)
-        self.videoField.setGeometry(QtCore.QRect(190, 100, 441, 31))
-        self.videoField.setObjectName("videoField")
+        self.tab_widget.addTab(self.tab1, "Plant Analysis")
 
-        self.loadVideo = QtWidgets.QPushButton(self.tab1)
-        self.loadVideo.setGeometry(QtCore.QRect(10, 100, 161, 31))
-        self.loadVideo.setObjectName("loadVideo")
-        self.loadVideo.clicked.connect(lambda: self.videoField.setText(self.openFileNameDialog()))
+        self.plantAnalysisSectionLabel = QtWidgets.QLabel(self.tab1)
+        self.plantAnalysisSectionLabel.setGeometry(QtCore.QRect(10, 10, 541, 31))
+        self.plantAnalysisSectionLabel.setObjectName("plantAnalysisSectionLabel")
+        self.plantAnalysisSectionLabel.setText(
+            "<html><head/><body><p><span style=\" font-size:10pt; font-weight:600;\">"
+            "Individual plant root analysis</span></p></body></html>")
 
         self.loadProject = QtWidgets.QPushButton(self.tab1)
         self.loadProject.setGeometry(QtCore.QRect(10, 50, 161, 31))
         self.loadProject.setObjectName("loadProject")
+        self.loadProject.setText("Select Project Folder")
+        self.loadProject.setToolTip(
+            "Select the primary directory where experiment results and data are organized.")
         self.loadProject.clicked.connect(lambda: self.projectField.setText(self.openFileNameDialog()))
 
         self.projectField = QtWidgets.QLineEdit(self.tab1)
@@ -840,177 +788,263 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.projectField.setObjectName("projectField")
         self.projectField.textChanged.connect(self.syncProjectFolderField)
 
+        self.loadVideo = QtWidgets.QPushButton(self.tab1)
+        self.loadVideo.setGeometry(QtCore.QRect(10, 100, 161, 31))
+        self.loadVideo.setObjectName("loadVideo")
+        self.loadVideo.setText("Select Video Folder")
+        self.loadVideo.setToolTip(
+            "Select the folder containing the segmented image sequence for analysis. \n"
+            "Folder should contain a Segmentation/ subfolder with images. \n"
+            "Images can be stored somewhere else as long their path is saved within the "
+            "segmentation_metadata.json file and has not been moved.")
+        self.loadVideo.clicked.connect(lambda: self.videoField.setText(self.openFileNameDialog()))
+
+        self.videoField = QtWidgets.QLineEdit(self.tab1)
+        self.videoField.setGeometry(QtCore.QRect(190, 100, 441, 31))
+        self.videoField.setObjectName("videoField")
+
+        self.rpiModuleLabel = QtWidgets.QLabel(self.tab1)
+        self.rpiModuleLabel.setGeometry(QtCore.QRect(10, 150, 171, 31))
+        self.rpiModuleLabel.setObjectName("rpiModuleLabel")
+        self.rpiModuleLabel.setText("Raspberry Module Number")
+
         self.rpiField = QtWidgets.QLineEdit(self.tab1)
-        self.rpiField.setGeometry(QtCore.QRect(190, 150, 51, 31))
+        self.rpiField.setGeometry(QtCore.QRect(190, 150, 81, 31))
         self.rpiField.setObjectName("rpiField")
 
+        self.cameraNumberLabel = QtWidgets.QLabel(self.tab1)
+        self.cameraNumberLabel.setGeometry(QtCore.QRect(290, 150, 151, 31))
+        self.cameraNumberLabel.setObjectName("cameraNumberLabel")
+        self.cameraNumberLabel.setText("Camera Number")
+
         self.cameraField = QtWidgets.QLineEdit(self.tab1)
-        self.cameraField.setGeometry(QtCore.QRect(190, 200, 51, 31))
+        self.cameraField.setGeometry(QtCore.QRect(525, 150, 101, 31))
         self.cameraField.setObjectName("cameraField")
 
+        self.plantNumberLabel = QtWidgets.QLabel(self.tab1)
+        self.plantNumberLabel.setGeometry(QtCore.QRect(10, 200, 161, 31))
+        self.plantNumberLabel.setObjectName("plantNumberLabel")
+        self.plantNumberLabel.setText("Plant Number")
+
         self.plantField = QtWidgets.QLineEdit(self.tab1)
-        self.plantField.setGeometry(QtCore.QRect(190, 250, 51, 31))
+        self.plantField.setGeometry(QtCore.QRect(190, 200, 81, 31))
         self.plantField.setObjectName("plantField")
 
-        self.experimentName = QtWidgets.QLineEdit(self.tab1)
-        self.experimentName.setGeometry(QtCore.QRect(190, 300, 101, 31))
-        self.experimentName.setObjectName("experimentName")
+        self.genotypeLabel = QtWidgets.QLabel(self.tab1)
+        self.genotypeLabel.setGeometry(QtCore.QRect(290, 200, 230, 31))
+        self.genotypeLabel.setObjectName("genotypeLabel")
+        self.genotypeLabel.setText("Identifier (Genotype, Treatment, etc.)")
+
+        self.plantIdentifier = QtWidgets.QLineEdit(self.tab1)
+        self.plantIdentifier.setGeometry(QtCore.QRect(525, 200, 101, 31))
+        self.plantIdentifier.setObjectName("plantIdentifier")
+
+        self.plateConditionLabel = QtWidgets.QLabel(self.tab1)
+        self.plateConditionLabel.setGeometry(QtCore.QRect(10, 250, 151, 31))
+        self.plateConditionLabel.setObjectName("plateConditionLabel")
+        self.plateConditionLabel.setText("Plate Growth Condition")
+
+        self.plateConditionName = QtWidgets.QLineEdit(self.tab1)
+        self.plateConditionName.setGeometry(QtCore.QRect(190, 250, 121, 31))
+        self.plateConditionName.setObjectName("plateConditionName")
+
+        self.plateConditionHintLabel = QtWidgets.QLabel(self.tab1)
+        self.plateConditionHintLabel.setGeometry(QtCore.QRect(330, 250, 271, 31))
+        self.plateConditionHintLabel.setObjectName("plateConditionHintLabel")
+        self.plateConditionHintLabel.setText("(Optional, e.g. \"Control\", \"Treatment\", etc.)")
+
+        self.extraVariableNameLabel = QtWidgets.QLabel(self.tab1)
+        self.extraVariableNameLabel.setGeometry(QtCore.QRect(10, 300, 120, 31))
+        self.extraVariableNameLabel.setObjectName("extraVariableNameLabel")
+        self.extraVariableNameLabel.setText("Extra Variable")
+
+        self.extraField = QtWidgets.QLineEdit(self.tab1)
+        self.extraField.setGeometry(QtCore.QRect(190, 300, 121, 31))
+        self.extraField.setObjectName("extraField")
+
+        self.extraVariableHintLabel = QtWidgets.QLabel(self.tab1)
+        self.extraVariableHintLabel.setGeometry(QtCore.QRect(330, 300, 271, 31))
+        self.extraVariableHintLabel.setObjectName("extraVariableHintLabel")
+        self.extraVariableHintLabel.setText("(Optional value, e.g. Run 1, Run 2.)")
+
+        self.postprocessParametersSeparator = QtWidgets.QFrame(self.tab1)
+        self.postprocessParametersSeparator.setGeometry(QtCore.QRect(0, 350, 651, 16))
+        self.postprocessParametersSeparator.setFrameShape(QtWidgets.QFrame.HLine)
+        self.postprocessParametersSeparator.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.postprocessParametersSeparator.setObjectName("postprocessParametersSeparator")
+        self.postprocessParametersSeparator.lower()
+
+        self.postprocessParametersSectionLabel = QtWidgets.QLabel(self.tab1)
+        self.postprocessParametersSectionLabel.setGeometry(QtCore.QRect(10, 360, 541, 31))
+        self.postprocessParametersSectionLabel.setObjectName("postprocessParametersSectionLabel")
+        self.postprocessParametersSectionLabel.setText(
+            "<html><head/><body><p><span style=\" font-size:10pt; font-weight:600;\">"
+            "Analysis and postprocessing parameters</span></p></body></html>")
 
         self.saveImagesButton = QtWidgets.QCheckBox(self.tab1)
-        self.saveImagesButton.setGeometry(QtCore.QRect(10, 380, 161, 31))
+        self.saveImagesButton.setGeometry(QtCore.QRect(10, 390, 161, 31))
         self.saveImagesButton.setObjectName("saveImagesButton")
-        
-        self.videoHasQRbutton = QtWidgets.QCheckBox(self.tab1)
-        self.videoHasQRbutton.setGeometry(QtCore.QRect(10, 410, 161, 31))
-        self.videoHasQRbutton.setObjectName("videoHasQRbutton")
+        self.saveImagesButton.setText("Save Cropped Images")
+        self.saveImagesButton.setToolTip(
+            "Save individual plant crops; required for creating growth time-lapse videos.")
 
-        self.captureIntervalField = QtWidgets.QLineEdit(self.tab1)
-        self.captureIntervalField.setGeometry(QtCore.QRect(190, 500, 51, 31))
-        self.captureIntervalField.setObjectName("captureIntervalField")
-        self.captureIntervalField.textChanged.connect(self.syncCaptureIntervalField)
+        self.videoHasQRbutton = QtWidgets.QCheckBox(self.tab1)
+        self.videoHasQRbutton.setGeometry(QtCore.QRect(10, 420, 161, 31))
+        self.videoHasQRbutton.setObjectName("videoHasQRbutton")
+        self.videoHasQRbutton.setText("Video has QR codes")
+        self.videoHasQRbutton.setToolTip(
+            "Enable automatic scale detection using the 1-cm QR code in the images.")
+
+        self.manual_calib_widget = QtWidgets.QWidget(self.tab1)
+        self.manual_calib_widget.setGeometry(QtCore.QRect(210, 385, 380, 70))
+
+        self.manual_calib_label = QtWidgets.QLabel(self.manual_calib_widget)
+        self.manual_calib_label.setGeometry(QtCore.QRect(0, 0, 200, 31))
+        self.manual_calib_label.setText("Manual Calibration Parameters:")
+
+        self.known_dist_label = QtWidgets.QLabel(self.manual_calib_widget)
+        self.known_dist_label.setGeometry(QtCore.QRect(220, 0, 100, 31))
+        self.known_dist_label.setText("Known (mm):")
+
+        self.knownDistanceField = QtWidgets.QLineEdit(self.manual_calib_widget)
+        self.knownDistanceField.setGeometry(QtCore.QRect(320, 0, 51, 31))
+        self.knownDistanceField.setPlaceholderText("10")
+        self.knownDistanceField.setObjectName("knownDistanceField")
+
+        self.pixel_dist_label = QtWidgets.QLabel(self.manual_calib_widget)
+        self.pixel_dist_label.setGeometry(QtCore.QRect(220, 31, 70, 31))
+        self.pixel_dist_label.setText("Pixels:")
+
+        self.pixelDistanceField = QtWidgets.QLineEdit(self.manual_calib_widget)
+        self.pixelDistanceField.setGeometry(QtCore.QRect(320, 32, 51, 31))
+        self.pixelDistanceField.setPlaceholderText("240")
+        self.pixelDistanceField.setObjectName("pixelDistanceField")
+
+        self.calibrateBtn = QtWidgets.QPushButton(self.manual_calib_widget)
+        self.calibrateBtn.setGeometry(QtCore.QRect(0, 30, 180, 31))
+        self.calibrateBtn.setText("Open Calibration Helper")
+        self.calibrateBtn.setToolTip(
+            "Manually define the physical scale by measuring a known distance in the image.")
+        self.calibrateBtn.clicked.connect(self.open_calibration_helper)
+
+        self.processingLimitLabel = QtWidgets.QLabel(self.tab1)
+        self.processingLimitLabel.setGeometry(QtCore.QRect(10, 460, 161, 31))
+        self.processingLimitLabel.setObjectName("processingLimitLabel")
+        self.processingLimitLabel.setText(
+            "<html><head/><body><p>Processing limit</p></body></html>")
 
         self.processingLimitField = QtWidgets.QLineEdit(self.tab1)
-        self.processingLimitField.setGeometry(QtCore.QRect(190, 450, 51, 31))
+        self.processingLimitField.setGeometry(QtCore.QRect(190, 460, 51, 31))
         self.processingLimitField.setObjectName("processingLimitField")
         self.processingLimitField.textChanged.connect(self.syncProcessingLimitField)
 
-        self.emergenceDistanceField_2 = QtWidgets.QLineEdit(self.tab1)
-        self.emergenceDistanceField_2.setGeometry(QtCore.QRect(190, 550, 51, 31))
-        self.emergenceDistanceField_2.setObjectName("emergenceDistanceField_2")
-        
+        self.processingLimitHintLabel = QtWidgets.QLabel(self.tab1)
+        self.processingLimitHintLabel.setGeometry(QtCore.QRect(260, 460, 261, 31))
+        self.processingLimitHintLabel.setObjectName("processingLimitHintLabel")
+        self.processingLimitHintLabel.setText("(in days, 0 means no limit)")
+
+        self.captureIntervalLabel = QtWidgets.QLabel(self.tab1)
+        self.captureIntervalLabel.setGeometry(QtCore.QRect(10, 510, 161, 31))
+        self.captureIntervalLabel.setObjectName("captureIntervalLabel")
+        self.captureIntervalLabel.setText(
+            "<html><head/><body><p>Capture interval</p></body></html>")
+
+        self.captureIntervalField = QtWidgets.QLineEdit(self.tab1)
+        self.captureIntervalField.setGeometry(QtCore.QRect(190, 510, 51, 31))
+        self.captureIntervalField.setObjectName("captureIntervalField")
+        self.captureIntervalField.textChanged.connect(self.syncCaptureIntervalField)
+
+        self.captureIntervalHintLabel = QtWidgets.QLabel(self.tab1)
+        self.captureIntervalHintLabel.setGeometry(QtCore.QRect(260, 510, 261, 31))
+        self.captureIntervalHintLabel.setObjectName("captureIntervalHintLabel")
+        self.captureIntervalHintLabel.setText("(in minutes, usually 15 minutes)")
+
         self.emergenceDistanceLabel = QtWidgets.QLabel(self.tab1)
-        self.emergenceDistanceLabel.setGeometry(QtCore.QRect(10, 550, 161, 31))
+        self.emergenceDistanceLabel.setGeometry(QtCore.QRect(10, 560, 161, 31))
         self.emergenceDistanceLabel.setObjectName("emergenceDistanceLabel")
-        
+        self.emergenceDistanceLabel.setText(
+            "<html><head/><body><p>Emergence distance</p></body></html>")
+
+        self.analysisEmergenceDistanceField = QtWidgets.QLineEdit(self.tab1)
+        self.analysisEmergenceDistanceField.setGeometry(QtCore.QRect(190, 560, 51, 31))
+        self.analysisEmergenceDistanceField.setObjectName("analysisEmergenceDistanceField")
+
         self.emergenceDistanceExp = QtWidgets.QLabel(self.tab1)
-        self.emergenceDistanceExp.setGeometry(QtCore.QRect(260, 550, 261, 31))
+        self.emergenceDistanceExp.setGeometry(QtCore.QRect(260, 560, 261, 31))
         self.emergenceDistanceExp.setObjectName("emergenceDistanceExp")
+        self.emergenceDistanceExp.setText("(in millimeters, default: 2 mm)")
+
+        self.actionButtonsSeparator = QtWidgets.QFrame(self.tab1)
+        self.actionButtonsSeparator.setGeometry(QtCore.QRect(640, -30, 20, TAB_HEIGHT))
+        self.actionButtonsSeparator.setFrameShape(QtWidgets.QFrame.VLine)
+        self.actionButtonsSeparator.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.actionButtonsSeparator.setObjectName("actionButtonsSeparator")
+        self.actionButtonsSeparator.lower()
 
         self.saveButton = QtWidgets.QPushButton(self.tab1)
         self.saveButton.setGeometry(QtCore.QRect(660, 0, 141, 81))
         self.saveButton.setObjectName("saveButton")
+        self.saveButton.setText("Save")
+        self.saveButton.setToolTip("Save the current parameters to the project configuration.")
         self.saveButton.clicked.connect(self.saveFieldsIntoJson)
 
         self.previewAnalysisButton = QtWidgets.QPushButton(self.tab1)
         self.previewAnalysisButton.setGeometry(QtCore.QRect(660, 100, 141, 81))
         self.previewAnalysisButton.setObjectName("previewAnalysisButton")
+        self.previewAnalysisButton.setText("Preview video")
+        self.previewAnalysisButton.setToolTip(
+            "<b>Visual Inspection:</b><br>"
+            "Open a viewer to check image quality and verify that the root segmentation is accurate.")
         self.previewAnalysisButton.clicked.connect(self.preview)
 
         self.analysisButton = QtWidgets.QPushButton(self.tab1)
         self.analysisButton.setGeometry(QtCore.QRect(660, 200, 141, 81))
         self.analysisButton.setObjectName("analysisButton")
+        self.analysisButton.setText("Analyze Plant")
+        self.analysisButton.setToolTip(
+            "<b>Initiate Analysis:</b><br>"
+            "1. Define the plant analysis area (ROI).<br>"
+            "2. Mark the <b>Root Starting Point</b>.<br>"
+            "3. Process the growth tracking graph.")
         self.analysisButton.clicked.connect(self.analysis)
 
         self.PostProcessButton = QtWidgets.QPushButton(self.tab1)
         self.PostProcessButton.setGeometry(QtCore.QRect(660, 300, 141, 81))
         self.PostProcessButton.setObjectName("PostProcessButton")
+        self.PostProcessButton.setText("Process\nall plants")
+        self.PostProcessButton.setToolTip(
+            "Finalize and calculate statistics for all analyzed plants in this project.")
         self.PostProcessButton.clicked.connect(self.PostProcess)
 
         self.loadConfigFileButton = QtWidgets.QPushButton(self.tab1)
         self.loadConfigFileButton.setGeometry(QtCore.QRect(660, 400, 141, 81))
-        self.loadConfigFileButton.setObjectName("loadLastConfigButton")
+        self.loadConfigFileButton.setObjectName("loadConfigFileButton")
+        self.loadConfigFileButton.setText("Load\nconfig json\nfrom file")
+        self.loadConfigFileButton.setToolTip("Import settings from an existing configuration file.")
         self.loadConfigFileButton.clicked.connect(self.read_config_from_file)
 
         self.loadLastConfigButton = QtWidgets.QPushButton(self.tab1)
         self.loadLastConfigButton.setGeometry(QtCore.QRect(660, 500, 141, 81))
         self.loadLastConfigButton.setObjectName("loadLastConfigButton")
+        self.loadLastConfigButton.setText("Load\nprevious\nconfiguration")
+        self.loadLastConfigButton.setToolTip("Restore the most recently used settings.")
         self.loadLastConfigButton.clicked.connect(self.loadJsonIntoFields)
 
-        self.label = QtWidgets.QLabel(self.tab1)
-        self.label.setGeometry(QtCore.QRect(10, 150, 161, 31))
-        self.label.setObjectName("label")
-        self.label_2 = QtWidgets.QLabel(self.tab1)
-        self.label_2.setGeometry(QtCore.QRect(10, 200, 161, 31))
-        self.label_2.setObjectName("label_2")
-        self.label_3 = QtWidgets.QLabel(self.tab1)
-        self.label_3.setGeometry(QtCore.QRect(10, 250, 161, 31))
-        self.label_3.setObjectName("label_3")
-        self.label_4 = QtWidgets.QLabel(self.tab1)
-        self.label_4.setGeometry(QtCore.QRect(10, 300, 161, 31))
-        self.label_4.setObjectName("label_4")
-        self.label_5 = QtWidgets.QLabel(self.tab1)
-        self.label_5.setGeometry(QtCore.QRect(260, 150, 261, 31))
-        self.label_5.setObjectName("label_5")
-        self.label_6 = QtWidgets.QLabel(self.tab1)
-        self.label_6.setGeometry(QtCore.QRect(260, 200, 261, 31))
-        self.label_6.setObjectName("label_6")
-        self.label_7 = QtWidgets.QLabel(self.tab1)
-        self.label_7.setGeometry(QtCore.QRect(260, 250, 301, 31))
-        self.label_7.setObjectName("label_7")
-        self.label_8 = QtWidgets.QLabel(self.tab1)
-        self.label_8.setGeometry(QtCore.QRect(310, 300, 301, 31))
-        self.label_8.setObjectName("label_8")
-        self.label_9 = QtWidgets.QLabel(self.tab1)
-        self.label_9.setGeometry(QtCore.QRect(10, 350, 541, 31))
-        self.label_9.setObjectName("label_9")
-        self.label_11 = QtWidgets.QLabel(self.tab1)
-        self.label_11.setGeometry(QtCore.QRect(10, 500, 161, 31))
-        self.label_11.setObjectName("label_11")
-        self.label_12 = QtWidgets.QLabel(self.tab1)
-        self.label_12.setGeometry(QtCore.QRect(10, 450, 161, 31))
-        self.label_12.setObjectName("label_12")
-        self.label_26 = QtWidgets.QLabel(self.tab1)
-        self.label_26.setGeometry(QtCore.QRect(260, 450, 261, 31))
-        self.label_26.setObjectName("label_26")
-        self.label_27 = QtWidgets.QLabel(self.tab1)
-        self.label_27.setGeometry(QtCore.QRect(260, 500, 261, 31))
-        self.label_27.setObjectName("label_27")
-        self.label_30 = QtWidgets.QLabel(self.tab1)
-        self.label_30.setGeometry(QtCore.QRect(10, 10, 541, 31))
-        self.label_30.setObjectName("label_30")
-        self.line = QtWidgets.QFrame(self.tab1)
-        self.line.setGeometry(QtCore.QRect(0, 340, 651, 16))
-        self.line.setFrameShape(QtWidgets.QFrame.HLine)
-        self.line.setFrameShadow(QtWidgets.QFrame.Sunken)
-        self.line.setObjectName("line")
-        self.line_2 = QtWidgets.QFrame(self.tab1)
-        self.line_2.setGeometry(QtCore.QRect(640, -30, 20, 641))
-        self.line_2.setFrameShape(QtWidgets.QFrame.VLine)
-        self.line_2.setFrameShadow(QtWidgets.QFrame.Sunken)
-        self.line_2.setObjectName("line_2")
-
-        # Create container widget for manual calibration (hidden by default)
-        self.manual_calib_widget = QtWidgets.QWidget(self.tab1)
-        self.manual_calib_widget.setGeometry(QtCore.QRect(210, 375, 380, 70))
-        
-        
-        # Write a "Manual Calibration" label
-        self.manual_calib_label = QtWidgets.QLabel(self.manual_calib_widget)
-        self.manual_calib_label.setGeometry(QtCore.QRect(0, 0, 200, 31))
-        self.manual_calib_label.setText("Manual Calibration Parameters:")
-        
-        # Known distance label and field - first row
-        self.known_dist_label = QtWidgets.QLabel(self.manual_calib_widget)
-        self.known_dist_label.setGeometry(QtCore.QRect(220, 0, 100, 31))
-        self.known_dist_label.setText("Known (mm):")
-        
-        self.knownDistanceField = QtWidgets.QLineEdit(self.manual_calib_widget)
-        self.knownDistanceField.setGeometry(QtCore.QRect(320, 0, 51, 31))
-        self.knownDistanceField.setPlaceholderText("10")
-        self.knownDistanceField.setObjectName("knownDistanceField")
-        
-        # Pixel distance label and field - continue first row
-        self.pixel_dist_label = QtWidgets.QLabel(self.manual_calib_widget)
-        self.pixel_dist_label.setGeometry(QtCore.QRect(220, 31, 70, 31))
-        self.pixel_dist_label.setText("Pixels:")
-        
-        self.pixelDistanceField = QtWidgets.QLineEdit(self.manual_calib_widget)
-        self.pixelDistanceField.setGeometry(QtCore.QRect(320, 32, 51, 31))
-        self.pixelDistanceField.setPlaceholderText("240")
-        self.pixelDistanceField.setObjectName("pixelDistanceField")
-        
-        # Calibration helper button - second row
-        self.calibrateBtn = QtWidgets.QPushButton(self.manual_calib_widget)
-        self.calibrateBtn.setGeometry(QtCore.QRect(0, 30, 180, 31))
-        self.calibrateBtn.setText("Open Calibration Helper")
-        self.calibrateBtn.clicked.connect(self.open_calibration_helper)
-        
-        # Connect toggle function to checkbox
         self.videoHasQRbutton.stateChanged.connect(self.toggle_calibration_mode)
-        
-        # Initialize visibility
         self.toggle_calibration_mode()
-    
+
+        tab1_interactive = [
+            self.loadProject, self.projectField, self.loadVideo, self.videoField,
+            self.rpiField, self.cameraField, self.plantField, self.plantIdentifier,
+            self.plateConditionName, self.extraField, 
+            self.saveImagesButton, self.videoHasQRbutton, self.manual_calib_widget,
+            self.processingLimitField, self.captureIntervalField, self.analysisEmergenceDistanceField,
+            self.saveButton, self.previewAnalysisButton, self.analysisButton,
+            self.PostProcessButton, self.loadConfigFileButton, self.loadLastConfigButton,
+        ]
+        for widget in tab1_interactive:
+            widget.raise_()
+
         return
     
     def toggle_calibration_mode(self):
@@ -1024,14 +1058,8 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(None, 'Error', 'Please select a video directory first!')
             return
 
-        args = [
-            "python",
-            "calibration_helper.py",
-            "--video-dir", self.videoField.text()
-        ]
-
         try:
-            subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            pipeline_runner.run_calibration_helper(self.videoField.text())
             QtWidgets.QMessageBox.information(
                 None,
                 "Calibration Helper",
@@ -1045,9 +1073,12 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
     def setup_tab2_elements(self):
         # Create the table
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
-        self.table.setHorizontalHeaderLabels(["Experiment", "Raspberry", "Camera", "Plant Number", "Result ID", 
-                                              "Error Rate", "Status", "Finish Date"])
+        self.table.setColumnCount(9)
+        self.table.setHorizontalHeaderLabels([
+            "Experiment", "Raspberry", "Camera", "Plant Number",
+            "Plate Condition", "Extra Variable",
+            "Error Rate", "Status", "Finish Date",
+        ])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
 
@@ -1056,22 +1087,29 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
         # Create the refresh button
         self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.setToolTip(
+            "Update the table to show the latest analysis progress and error rates.")
         self.refresh_button.clicked.connect(self.refresh_table)
 
-        # Create the rerun analysis button
         self.rerun_analysis_button_tab2 = QPushButton("Repeat Analysis")
+        self.rerun_analysis_button_tab2.setToolTip(
+            "<b>Quick Re-run:</b> Repeat tracking using the existing ROI and Root Starting Point.")
         self.rerun_analysis_button_tab2.clicked.connect(self.repeatAnalysis)
 
-        # Create the open path button
-        self.open_path_button_tab2 = QPushButton("Open Folder")
+        self.open_path_button_tab2 = QPushButton("Open Path")
+        self.open_path_button_tab2.setToolTip(
+            "Open the folder containing the data for the selected plant.")
         self.open_path_button_tab2.clicked.connect(self.open_selected_path)
 
-        # Create the remove path button
         self.remove_path_button = QPushButton("Remove Plant")
+        self.remove_path_button.setToolTip(
+            "Move the selected plant to the 'Removed' folder. This hides it from reports "
+            "without deleting the data.")
         self.remove_path_button.clicked.connect(self.remove_selected_path)
-        
-        # Include a process all plants button
+
         self.postprocess_plants_button = QPushButton("Process all plants")
+        self.postprocess_plants_button.setToolTip(
+            "Refresh global statistics for all plants currently in the project.")
         self.postprocess_plants_button.clicked.connect(self.PostProcess)
 
         # Set up the layout
@@ -1090,7 +1128,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         # Create and set up the new tab
         self.tab2 = QtWidgets.QWidget()
         self.tab2.setLayout(layout)
-        self.tab_widget.addTab(self.tab2, "Tab 2")
+        self.tab_widget.addTab(self.tab2, "Analysis Overview")
 
 
     def setup_tab3_elements(self):
@@ -1104,20 +1142,24 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
         # Create the checkbox
         self.overlay_checkbox = QCheckBox("Overlay Image")
+        self.overlay_checkbox.setToolTip(
+            "Show or hide the color-coded tracking mask over the plant image.")
 
-        # Create the dropdown menu for plant selection to the right of the checkbox
         self.plant_dropdown = QComboBox()
 
-        # Create the refresh button
-        self.refresh_button_tab3 = QPushButton("Refresh_2")
+        self.refresh_button_tab3 = QPushButton("Refresh")
+        self.refresh_button_tab3.setToolTip(
+            "Refresh the list of plants available for visual inspection.")
         self.refresh_button_tab3.clicked.connect(self.refresh_table)
 
-        # Create a rerun analysis button
         self.rerun_analysis_button_tab3 = QPushButton("Redo Analysis")
+        self.rerun_analysis_button_tab3.setToolTip(
+            "<b>Manual Re-run:</b> Restart the analysis to choose a new ROI or Root Starting Point.")
         self.rerun_analysis_button_tab3.clicked.connect(self.redoAnalysis)
 
-        # Create the remove path button
         self.remove_path_button_tab3 = QPushButton("Remove Plant")
+        self.remove_path_button_tab3.setToolTip(
+            "Move the current plant to the 'Removed' folder if it is unsuitable for reporting.")
         self.remove_path_button_tab3.clicked.connect(self.remove_selected_plant)
 
         # Connect signals
@@ -1125,9 +1167,13 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.overlay_checkbox.stateChanged.connect(self.update_image_labels)
 
         self.reviewButton = QPushButton("View full sequence")
+        self.reviewButton.setToolTip(
+            "Open the sequence viewer to inspect the development of this root system.")
         self.reviewButton.clicked.connect(self.reviewPlant)
 
         self.open_path_button_tab3 = QPushButton("Open Folder")
+        self.open_path_button_tab3.setToolTip(
+            "Open the results folder for the plant currently being viewed.")
         self.open_path_button_tab3.clicked.connect(self.open_selected_path_tab3)
 
         # Set up the layout for the checkbox, dropdown menu, and refresh button
@@ -1160,190 +1206,249 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.update_image_labels()
 
     def setup_tab4_elements(self):
+        # Spacing: ROW=31px per control row; SEP=41px separator frame; GAP=10px after separator.
         self.tab4 = QtWidgets.QWidget()
         self.tab4.setObjectName("tab4")
-        self.tab_widget.addTab(self.tab4, "")
+        self.tab_widget.addTab(self.tab4, "Generate Report")
 
         font = QtGui.QFont()
         font.setPointSize(10)
         font.setBold(True)
         font.setWeight(75)
-        
-        self.averagePerPlantStats = QtWidgets.QCheckBox(self.tab4)
-        self.averagePerPlantStats.setGeometry(QtCore.QRect(10, 70, 311, 31))
-        self.averagePerPlantStats.setFont(font)
-        self.averagePerPlantStats.setObjectName("averagePerPlantStats")
 
-        self.everyXhourText = QtWidgets.QLabel(self.tab4)
-        self.everyXhourText.setGeometry(QtCore.QRect(370, 70, 241, 31))
-        self.everyXhourText.setObjectName("everyXhourText")
+        self.reportSelectProjectButton = QtWidgets.QPushButton(self.tab4)
+        self.reportSelectProjectButton.setGeometry(QtCore.QRect(10, 10, 161, 31))
+        self.reportSelectProjectButton.setObjectName("reportSelectProjectButton")
+        self.reportSelectProjectButton.setText("Select Project Folder")
+        self.reportSelectProjectButton.clicked.connect(lambda: self.projectField.setText(self.openFileNameDialog()))
 
-        self.everyXhourField = QtWidgets.QLineEdit(self.tab4)
-        self.everyXhourField.setGeometry(QtCore.QRect(620, 70, 51, 31))
-        self.everyXhourField.setObjectName("everyXhourField")
+        self.reportProjectField = QtWidgets.QLineEdit(self.tab4)
+        self.reportProjectField.setGeometry(QtCore.QRect(190, 10, 441, 31))
+        self.reportProjectField.setObjectName("reportProjectField")
+        self.reportProjectField.textChanged.connect(self.syncProjectFolderField)
 
-        self.reportText = QtWidgets.QLabel(self.tab4)
-        self.reportText.setGeometry(QtCore.QRect(10, 110, 810, 31))
-        self.reportText.setObjectName("reportText")
+        self.projectSectionSeparator = QtWidgets.QFrame(self.tab4)
+        self.projectSectionSeparator.setGeometry(QtCore.QRect(0, 40, 891, 41))
+        self.projectSectionSeparator.setFrameShape(QtWidgets.QFrame.HLine)
+        self.projectSectionSeparator.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.projectSectionSeparator.setObjectName("projectSectionSeparator")
+        self.projectSectionSeparator.lower()
 
         self.doFPCA = QtWidgets.QCheckBox(self.tab4)
-        self.doFPCA.setGeometry(QtCore.QRect(10, 150, 311, 31))
+        self.doFPCA.setGeometry(QtCore.QRect(10, 70, 311, 31))
         self.doFPCA.setFont(font)
         self.doFPCA.setObjectName("doFPCA")
+        self.doFPCA.setText("Perform Functional PCA on time series")
 
         self.normFPCA = QtWidgets.QCheckBox(self.tab4)
-        self.normFPCA.setGeometry(QtCore.QRect(340, 150, 221, 31))
+        self.normFPCA.setGeometry(QtCore.QRect(340, 70, 221, 31))
         self.normFPCA.setObjectName("normFPCA")
+        self.normFPCA.setText("Normalize FPCA Boxplots")
 
         self.numComponentsFPCAText = QtWidgets.QLabel(self.tab4)
-        self.numComponentsFPCAText.setGeometry(QtCore.QRect(570, 150, 200, 31))
+        self.numComponentsFPCAText.setGeometry(QtCore.QRect(570, 70, 200, 31))
         self.numComponentsFPCAText.setObjectName("numComponentsFPCAText")
+        self.numComponentsFPCAText.setText("Number of components")
 
         self.numComponentsFPCAField = QtWidgets.QLineEdit(self.tab4)
-        self.numComponentsFPCAField.setGeometry(QtCore.QRect(730, 150, 51, 31))
+        self.numComponentsFPCAField.setGeometry(QtCore.QRect(730, 70, 51, 31))
         self.numComponentsFPCAField.setObjectName("numComponentsFPCAField")
 
-        self.line_4 = QtWidgets.QFrame(self.tab4)
-        self.line_4.setGeometry(QtCore.QRect(-40, 170, 891, 41))
-        self.line_4.setFrameShape(QtWidgets.QFrame.HLine)
-        self.line_4.setFrameShadow(QtWidgets.QFrame.Sunken)
-        self.line_4.setObjectName("line_4")
+        self.fpcaSectionSeparator = QtWidgets.QFrame(self.tab4)
+        self.fpcaSectionSeparator.setGeometry(QtCore.QRect(-40, 90, 891, 41))
+        self.fpcaSectionSeparator.setFrameShape(QtWidgets.QFrame.HLine)
+        self.fpcaSectionSeparator.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.fpcaSectionSeparator.setObjectName("fpcaSectionSeparator")
+        self.fpcaSectionSeparator.lower()
 
         self.doConvex = QtWidgets.QCheckBox(self.tab4)
-        self.doConvex.setGeometry(QtCore.QRect(10, 200, 201, 31))
+        self.doConvex.setGeometry(QtCore.QRect(10, 120, 201, 31))
         self.doConvex.setFont(font)
         self.doConvex.setObjectName("doConvex")
+        self.doConvex.setText("Do Convex hull analysis")
 
         self.saveImagesConvex = QtWidgets.QCheckBox(self.tab4)
-        self.saveImagesConvex.setGeometry(QtCore.QRect(370, 200, 311, 31))
+        self.saveImagesConvex.setGeometry(QtCore.QRect(370, 120, 311, 31))
         self.saveImagesConvex.setObjectName("saveImagesConvex")
+        self.saveImagesConvex.setText("Save images for each day")
 
-        self.daysFieldConvex = QtWidgets.QLabel(self.tab4)
-        self.daysFieldConvex.setGeometry(QtCore.QRect(10, 240, 131, 31))
-        self.daysFieldConvex.setObjectName("daysFieldConvex")
+        self.daysConvexLabel = QtWidgets.QLabel(self.tab4)
+        self.daysConvexLabel.setGeometry(QtCore.QRect(10, 160, 131, 31))
+        self.daysConvexLabel.setObjectName("daysConvexLabel")
+        self.daysConvexLabel.setText("Days to report")
 
         self.daysConvexField = QtWidgets.QLineEdit(self.tab4)
-        self.daysConvexField.setGeometry(QtCore.QRect(120, 240, 221, 31))
+        self.daysConvexField.setGeometry(QtCore.QRect(120, 160, 221, 31))
         self.daysConvexField.setObjectName("daysConvexField")
 
         self.daysConvexText = QtWidgets.QLabel(self.tab4)
-        self.daysConvexText.setGeometry(QtCore.QRect(350, 240, 351, 31))
+        self.daysConvexText.setGeometry(QtCore.QRect(350, 160, 351, 31))
         self.daysConvexText.setObjectName("daysConvexText")
+        self.daysConvexText.setText("(Numbers separated by commas)")
 
-        self.line_5 = QtWidgets.QFrame(self.tab4)
-        self.line_5.setGeometry(QtCore.QRect(-40, 270, 891, 41))
-        self.line_5.setFrameShape(QtWidgets.QFrame.HLine)
-        self.line_5.setFrameShadow(QtWidgets.QFrame.Sunken)
-        self.line_5.setObjectName("line_5")
+        self.convexSectionSeparator = QtWidgets.QFrame(self.tab4)
+        self.convexSectionSeparator.setGeometry(QtCore.QRect(-40, 190, 891, 41))
+        self.convexSectionSeparator.setFrameShape(QtWidgets.QFrame.HLine)
+        self.convexSectionSeparator.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.convexSectionSeparator.setObjectName("convexSectionSeparator")
+        self.convexSectionSeparator.lower()
 
         self.doFourier = QtWidgets.QCheckBox(self.tab4)
-        self.doFourier.setGeometry(QtCore.QRect(10, 305, 451, 31))
+        self.doFourier.setGeometry(QtCore.QRect(10, 225, 451, 31))
         self.doFourier.setFont(font)
         self.doFourier.setObjectName("doFourier")
+        self.doFourier.setText("Evaluate Growth Speeds and perform Fourier Analysis")
 
-        self.everyXhourTextFourier = QtWidgets.QLabel(self.tab4)
-        self.everyXhourTextFourier.setGeometry(QtCore.QRect(450, 305, 231, 31))
-        self.everyXhourTextFourier.setObjectName("everyXhourTextFourier")
-
-        self.everyXhourFieldFourier = QtWidgets.QLineEdit(self.tab4)
-        self.everyXhourFieldFourier.setGeometry(QtCore.QRect(680, 305, 51, 31))
-        self.everyXhourFieldFourier.setObjectName("everyXhourFieldFourier")
-
-        self.line_6 = QtWidgets.QFrame(self.tab4)
-        self.line_6.setGeometry(QtCore.QRect(-70, 330, 961, 41))
-        self.line_6.setFrameShape(QtWidgets.QFrame.HLine)
-        self.line_6.setFrameShadow(QtWidgets.QFrame.Sunken)
-        self.line_6.setObjectName("line_6")
+        self.fourierSectionSeparator = QtWidgets.QFrame(self.tab4)
+        self.fourierSectionSeparator.setGeometry(QtCore.QRect(-70, 250, 961, 41))
+        self.fourierSectionSeparator.setFrameShape(QtWidgets.QFrame.HLine)
+        self.fourierSectionSeparator.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.fourierSectionSeparator.setObjectName("fourierSectionSeparator")
+        self.fourierSectionSeparator.lower()
 
         self.doLateralAngles = QtWidgets.QCheckBox(self.tab4)
-        self.doLateralAngles.setGeometry(QtCore.QRect(10, 365, 301, 31))
+        self.doLateralAngles.setGeometry(QtCore.QRect(10, 285, 301, 31))
         self.doLateralAngles.setFont(font)
         self.doLateralAngles.setObjectName("doLateralAngles")
+        self.doLateralAngles.setText("Do Lateral Root Angles Analysis")
 
-        self.emergenceDistanceText = QtWidgets.QLabel(self.tab4)
-        self.emergenceDistanceText.setGeometry(QtCore.QRect(370, 365, 131, 31))
-        self.emergenceDistanceText.setObjectName("emergenceDistanceText")
+        self.reportEmergenceDistanceLabel = QtWidgets.QLabel(self.tab4)
+        self.reportEmergenceDistanceLabel.setGeometry(QtCore.QRect(370, 285, 131, 31))
+        self.reportEmergenceDistanceLabel.setObjectName("reportEmergenceDistanceLabel")
+        self.reportEmergenceDistanceLabel.setText("Emergence distance")
 
-        self.emergenceDistanceField = QtWidgets.QLineEdit(self.tab4)
-        self.emergenceDistanceField.setGeometry(QtCore.QRect(510, 365, 51, 31))
-        self.emergenceDistanceField.setObjectName("emergenceDistanceField")
+        self.reportEmergenceDistanceField = QtWidgets.QLineEdit(self.tab4)
+        self.reportEmergenceDistanceField.setGeometry(QtCore.QRect(510, 285, 51, 31))
+        self.reportEmergenceDistanceField.setObjectName("emergenceDistanceField")
 
-        self.emergenceDistanceTextExp = QtWidgets.QLabel(self.tab4)
-        self.emergenceDistanceTextExp.setGeometry(QtCore.QRect(570, 365, 261, 31))
-        self.emergenceDistanceTextExp.setObjectName("emergenceDistanceTextExp")
+        self.reportEmergenceDistanceHintLabel = QtWidgets.QLabel(self.tab4)
+        self.reportEmergenceDistanceHintLabel.setGeometry(QtCore.QRect(570, 285, 261, 31))
+        self.reportEmergenceDistanceHintLabel.setObjectName("reportEmergenceDistanceHintLabel")
+        self.reportEmergenceDistanceHintLabel.setText("(in millimeters, default: 2 mm)")
 
         self.daysAnglesText = QtWidgets.QLabel(self.tab4)
-        self.daysAnglesText.setGeometry(QtCore.QRect(10, 410, 131, 31))
+        self.daysAnglesText.setGeometry(QtCore.QRect(10, 330, 131, 31))
         self.daysAnglesText.setObjectName("daysAnglesText")
+        self.daysAnglesText.setText("Days to report")
 
         self.daysAnglesField = QtWidgets.QLineEdit(self.tab4)
-        self.daysAnglesField.setGeometry(QtCore.QRect(120, 410, 221, 31))
+        self.daysAnglesField.setGeometry(QtCore.QRect(120, 330, 221, 31))
         self.daysAnglesField.setObjectName("daysAnglesField")
 
-        self.everyXhourTextAngles = QtWidgets.QLabel(self.tab4)
-        self.everyXhourTextAngles.setGeometry(QtCore.QRect(370, 410, 231, 31))
-        self.everyXhourTextAngles.setObjectName("everyXhourTextAngles")
+        self.anglesSectionSeparator = QtWidgets.QFrame(self.tab4)
+        self.anglesSectionSeparator.setGeometry(QtCore.QRect(-30, 360, 961, 41))
+        self.anglesSectionSeparator.setFrameShape(QtWidgets.QFrame.HLine)
+        self.anglesSectionSeparator.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.anglesSectionSeparator.setObjectName("anglesSectionSeparator")
+        self.anglesSectionSeparator.lower()
 
-        self.everyXhourFieldAngles = QtWidgets.QLineEdit(self.tab4)
-        self.everyXhourFieldAngles.setGeometry(QtCore.QRect(620, 410, 51, 31))
-        self.everyXhourFieldAngles.setObjectName("everyXhourFieldAngles")
+        self.reportProcessingLimitLabel = QtWidgets.QLabel(self.tab4)
+        self.reportProcessingLimitLabel.setGeometry(QtCore.QRect(10, 400, 121, 31))
+        self.reportProcessingLimitLabel.setObjectName("reportProcessingLimitLabel")
+        self.reportProcessingLimitLabel.setText(
+            "<html><head/><body><p>Processing limit</p></body></html>")
 
-        self.PostProcessButton2 = QtWidgets.QPushButton(self.tab4)
-        self.PostProcessButton2.setGeometry(QtCore.QRect(360, 480, 131, 81))
-        self.PostProcessButton2.setObjectName("PostProcessButton2")
-        self.PostProcessButton2.clicked.connect(self.PostProcess)
+        self.reportProcessingLimitField = QtWidgets.QLineEdit(self.tab4)
+        self.reportProcessingLimitField.setGeometry(QtCore.QRect(140, 400, 51, 31))
+        self.reportProcessingLimitField.setObjectName("reportProcessingLimitField")
+        self.reportProcessingLimitField.textChanged.connect(self.syncProcessingLimitField)
 
-        self.reportButton = QtWidgets.QPushButton(self.tab4)
-        self.reportButton.setGeometry(QtCore.QRect(510, 480, 131, 81))
-        self.reportButton.setObjectName("re portButton")
-        self.reportButton.clicked.connect(self.report)
+        self.reportMappingText = QtWidgets.QLabel(self.tab4)
+        self.reportMappingText.setGeometry(QtCore.QRect(240, 400, 120, 31))
+        self.reportMappingText.setText("Parameter mapping for plots")
+        
+        self.reportGenotypeAxisLabelText = QtWidgets.QLabel(self.tab4)
+        self.reportGenotypeAxisLabelText.setGeometry(QtCore.QRect(490, 400, 120, 31))
+        self.reportGenotypeAxisLabelText.setText("Identifier label")
+        
+        self.reportGenotypeAxisLabelField = QtWidgets.QLineEdit(self.tab4)
+        self.reportGenotypeAxisLabelField.setGeometry(QtCore.QRect(630, 400, 120, 31))
+        self.reportGenotypeAxisLabelField.setObjectName("reportGenotypeAxisLabelField")
+        self.reportGenotypeAxisLabelField.setText("Genotype")
 
-        self.loadLastConfig2 = QtWidgets.QPushButton(self.tab4)
-        self.loadLastConfig2.setGeometry(QtCore.QRect(660, 480, 141, 81))
-        self.loadLastConfig2.setObjectName("loadLastConfig2")
-        self.loadLastConfig2.clicked.connect(self.loadJsonIntoFields)
+        self.reportPlateConditionAxisLabelText = QtWidgets.QLabel(self.tab4)
+        self.reportPlateConditionAxisLabelText.setGeometry(QtCore.QRect(240, 450, 120, 31))
+        self.reportPlateConditionAxisLabelText.setText("Plate label")
+        
+        self.reportPlateConditionAxisLabelField = QtWidgets.QLineEdit(self.tab4)
+        self.reportPlateConditionAxisLabelField.setGeometry(QtCore.QRect(330, 450, 120, 31))
+        self.reportPlateConditionAxisLabelField.setObjectName("reportPlateConditionAxisLabelField")
+        self.reportPlateConditionAxisLabelField.setText("Plate condition")
 
-        self.saveButton_2 = QtWidgets.QPushButton(self.tab4)
-        self.saveButton_2.setGeometry(QtCore.QRect(210, 480, 131, 81))
-        self.saveButton_2.setObjectName("saveButton_2")
-        self.saveButton_2.clicked.connect(self.saveFieldsIntoJson)
+        self.reportExtraVariableAxisLabelText = QtWidgets.QLabel(self.tab4)
+        self.reportExtraVariableAxisLabelText.setGeometry(QtCore.QRect(490, 450, 120, 31))
+        self.reportExtraVariableAxisLabelText.setText("Extra variable label")
+        
+        self.reportExtraVariableAxisLabelField = QtWidgets.QLineEdit(self.tab4)
+        self.reportExtraVariableAxisLabelField.setGeometry(QtCore.QRect(630, 450, 120, 31))
+        self.reportExtraVariableAxisLabelField.setObjectName("reportExtraVariableAxisLabelField")
+        self.reportExtraVariableAxisLabelField.setText("Run")
 
-        self.loadProject_2 = QtWidgets.QPushButton(self.tab4)
-        self.loadProject_2.setGeometry(QtCore.QRect(10, 10, 161, 31))
-        self.loadProject_2.clicked.connect(lambda: self.projectField.setText(self.openFileNameDialog()))
+        self.reportCaptureIntervalLabel = QtWidgets.QLabel(self.tab4)
+        self.reportCaptureIntervalLabel.setGeometry(QtCore.QRect(10, 450, 111, 31))
+        self.reportCaptureIntervalLabel.setObjectName("reportCaptureIntervalLabel")
+        self.reportCaptureIntervalLabel.setText(
+            "<html><head/><body><p>Capture interval</p></body></html>")
 
-        self.projectField_2 = QtWidgets.QLineEdit(self.tab4)
-        self.projectField_2.setGeometry(QtCore.QRect(190, 10, 441, 31))
-        self.projectField_2.setObjectName("projectField_2")
-        self.projectField_2.textChanged.connect(self.syncProjectFolderField)
+        self.reportCaptureIntervalField = QtWidgets.QLineEdit(self.tab4)
+        self.reportCaptureIntervalField.setGeometry(QtCore.QRect(140, 450, 51, 31))
+        self.reportCaptureIntervalField.setObjectName("reportCaptureIntervalField")
+        self.reportCaptureIntervalField.textChanged.connect(self.syncCaptureIntervalField)
 
-        self.captureIntervalField_3 = QtWidgets.QLineEdit(self.tab4)
-        self.captureIntervalField_3.setGeometry(QtCore.QRect(140, 530, 51, 31))
-        self.captureIntervalField_3.setObjectName("captureIntervalField_3")
-        self.captureIntervalField_3.textChanged.connect(self.syncCaptureIntervalField)
+        self.reportSaveConfigButton = QtWidgets.QPushButton(self.tab4)
+        self.reportSaveConfigButton.setGeometry(QtCore.QRect(20, 510, 131, 81))
+        self.reportSaveConfigButton.setObjectName("reportSaveConfigButton")
+        self.reportSaveConfigButton.setText("Save")
+        self.reportSaveConfigButton.setToolTip("Save current reporting preferences.")
+        self.reportSaveConfigButton.clicked.connect(self.saveFieldsIntoJson)
 
-        self.processingLimitField_3 = QtWidgets.QLineEdit(self.tab4)
-        self.processingLimitField_3.setGeometry(QtCore.QRect(140, 480, 51, 31))
-        self.processingLimitField_3.setObjectName("processingLimitField_3")
-        self.processingLimitField_3.textChanged.connect(self.syncProcessingLimitField)
+        self.reportPostProcessButton = QtWidgets.QPushButton(self.tab4)
+        self.reportPostProcessButton.setGeometry(QtCore.QRect(180, 510, 131, 81))
+        self.reportPostProcessButton.setObjectName("reportPostProcessButton")
+        self.reportPostProcessButton.setText("Process\nall plants")
+        self.reportPostProcessButton.setToolTip(
+            "Ensure all plant data is synchronized before generating final figures.")
+        self.reportPostProcessButton.clicked.connect(self.PostProcess)
+        
+        self.reportConfigureStatsButton = QtWidgets.QPushButton(self.tab4)
+        self.reportConfigureStatsButton.setGeometry(QtCore.QRect(340, 510, 131, 81))
+        self.reportConfigureStatsButton.setObjectName("reportConfigureStatsButton")
+        self.reportConfigureStatsButton.setText("Configure \nStatistical \nAnalysis")
+        self.reportConfigureStatsButton.setToolTip(
+            "Set statistical testing intervals, averaging options, and comparison modes.")
+        self.reportConfigureStatsButton.clicked.connect(self.open_stats_config_dialog)
 
-        self.line_7 = QtWidgets.QFrame(self.tab4)
-        self.line_7.setGeometry(QtCore.QRect(0, 40, 891, 41))
-        self.line_7.setFrameShape(QtWidgets.QFrame.HLine)
-        self.line_7.setFrameShadow(QtWidgets.QFrame.Sunken)
-        self.line_7.setObjectName("line_7")
-        self.line_11 = QtWidgets.QFrame(self.tab4)
-        self.line_11.setGeometry(QtCore.QRect(-30, 440, 961, 41))
-        self.line_11.setFrameShape(QtWidgets.QFrame.HLine)
-        self.line_11.setFrameShadow(QtWidgets.QFrame.Sunken)
-        self.line_11.setObjectName("line_11")
+        self.reportGenerateButton = QtWidgets.QPushButton(self.tab4)
+        self.reportGenerateButton.setGeometry(QtCore.QRect(500, 510, 131, 81))
+        self.reportGenerateButton.setObjectName("reportGenerateButton")
+        self.reportGenerateButton.setText("Generate report")
+        self.reportGenerateButton.setToolTip(
+            "<b>Compile Results:</b><br>"
+            "Generate visual charts, CSV data, and perform statistical comparisons between varieties.")
+        self.reportGenerateButton.clicked.connect(self.report)
 
-        self.captureIntervalLabel = QtWidgets.QLabel(self.tab4)
-        self.captureIntervalLabel.setGeometry(QtCore.QRect(10, 530, 111, 31))
-        self.captureIntervalLabel.setObjectName("captureIntervalLabel")
-        self.processingLimitLabel = QtWidgets.QLabel(self.tab4)
-        self.processingLimitLabel.setGeometry(QtCore.QRect(10, 480, 121, 31))
-        self.processingLimitLabel.setObjectName("processingLimitLabel")
+        self.reportLoadConfigButton = QtWidgets.QPushButton(self.tab4)
+        self.reportLoadConfigButton.setGeometry(QtCore.QRect(650, 510, 141, 81))
+        self.reportLoadConfigButton.setObjectName("reportLoadConfigButton")
+        self.reportLoadConfigButton.setText("Load\nprevious\nconfiguration")
+        self.reportLoadConfigButton.setToolTip(
+            "Restore previous reporting and statistical parameters.")
+        self.reportLoadConfigButton.clicked.connect(self.loadJsonIntoFields)
+
+        interactive_widgets = [
+            self.reportSelectProjectButton, self.reportProjectField,
+            self.doFPCA, self.normFPCA, self.numComponentsFPCAField,
+            self.doConvex, self.saveImagesConvex, self.daysConvexField,
+            self.doFourier, self.doLateralAngles, self.reportEmergenceDistanceField,
+            self.daysAnglesField, self.reportConfigureStatsButton,
+            self.reportProcessingLimitField, self.reportCaptureIntervalField,
+            self.reportGenotypeAxisLabelField, self.reportPlateConditionAxisLabelField,
+            self.reportExtraVariableAxisLabelField,
+            self.reportSaveConfigButton, self.reportPostProcessButton,
+            self.reportGenerateButton, self.reportLoadConfigButton,
+        ]
+        for widget in interactive_widgets:
+            widget.raise_()
 
         return
 
@@ -1375,18 +1480,25 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         return
     
     def refresh_tab5(self):
-        report_path = os.path.join(self.projectField.text(), "Report/")
-        figures = pathlib.Path(report_path).glob("*/*.png")
-        self.report_figures = [str(figure).replace(report_path, "") for figure in figures]
-        self.report_figures = sorted(self.report_figures, key=natural_keys)[::-1]
-        
+        report_path = os.path.join(self.projectField.text(), "Report")
+        if not os.path.isdir(report_path):
+            self.report_figures = []
+            self.report_dropdown.clear()
+            return
+
+        figures = pathlib.Path(report_path).glob("**/*.png")
+        self.report_figures = sorted(
+            [str(figure.relative_to(report_path)) for figure in figures],
+            key=natural_keys,
+            reverse=True,
+        )
         self.report_dropdown.clear()
         self.report_dropdown.addItems(self.report_figures)
     
     def setup_tab5_elements(self):
         self.tab5 = QtWidgets.QWidget()
         self.tab5.setObjectName("tab5")
-        self.tab_widget.addTab(self.tab5, "")
+        self.tab_widget.addTab(self.tab5, "Report")
 
         # Create the image labels
         self.report_label_1 = AspectRatioLabel()
@@ -1395,6 +1507,9 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
         self.refresh_button_tab5 = QPushButton(self.tab5)
         self.refresh_button_tab5.setObjectName("Refresh_5")
+        self.refresh_button_tab5.setText("Refresh")
+        self.refresh_button_tab5.setToolTip(
+            "Update the list of available report figures based on the current project data.")
         self.refresh_button_tab5.clicked.connect(self.refresh_tab5)
         
         # create a menu to select the report
@@ -1405,6 +1520,9 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         
         self.open_path_button_tab5 = QPushButton(self.tab5)
         self.open_path_button_tab5.setObjectName("Open Path")
+        self.open_path_button_tab5.setText("Open Report Path")
+        self.open_path_button_tab5.setToolTip(
+            "Open the directory where generated reports are stored.")
         self.open_path_button_tab5.clicked.connect(self.open_report_folder)
 
         # Set up the main layout
@@ -1423,8 +1541,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         layout.addLayout(horizontal_layout_top)
         layout.addLayout(horizontal_layout)
         
-        self.tab5.setLayout(layout) 
-        #self.update_report_labels()
+        self.tab5.setLayout(layout)
     
     def setup_tab6_elements(self):        
         self.tab6.setAutoFillBackground(True)
@@ -1479,7 +1596,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.commit_label = QLabel(f"Last update: {self.get_last_commit_time()}")
         self.commit_label.setStyleSheet("color: #95a5a6; background-color: transparent; margin-top: 15px;")
         layout.addWidget(self.commit_label, alignment=QtCore.Qt.AlignCenter)
-        
+
     def get_git_hash(self):
         """Returns the current git commit hash (language independent)."""
         try:
@@ -1526,151 +1643,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         finally:
             self.update_btn.setText("Check for Updates")
             self.update_btn.setEnabled(True)
-            
-    def retranslate_ui(self, ChronoRootAnalysis):
-        _translate = QtCore.QCoreApplication.translate
-        
-        def set_translation(element, text):
-            element.setText(_translate("ChronoRootAnalysis", text))
 
-        def translate_main_elements():
-            ChronoRootAnalysis.setWindowTitle(_translate("ChronoRootAnalysis", "ChronoRootAnalysis"))
-            # Replace WIDTH and HEIGHT with the desired width and height of the window
-            fixed_size = QtCore.QSize(810, 650)
-
-            ChronoRootAnalysis.setMinimumSize(fixed_size)
-            ChronoRootAnalysis.setMaximumSize(fixed_size)
-
-            set_translation(self.loadVideo, "Select Video Folder")
-            set_translation(self.loadProject, "Select Project Folder")
-            set_translation(self.saveButton, "Save")
-
-        def translate_labels():
-            set_translation(self.label, "<html><head/><body><p align=\"center\">Raspberry Module</p></body></html>")
-            set_translation(self.label_2, "<html><head/><body><p align=\"center\">Camera</p></body></html>")
-            set_translation(self.label_3, "<html><head/><body><p align=\"center\">Plant Number</p></body></html>")
-            set_translation(self.label_4, "<html><head/><body><p align=\"center\">Identifier</p></body></html>")
-            set_translation(self.label_5, "(the raspberry module identifier)")
-            set_translation(self.label_6, "(the plate/camera identifier)")
-            set_translation(self.label_7, "(a number to identify plants in the plate, left to right)")
-            set_translation(self.label_8, "(experiment identifier, e.g. WT, Col0)")
-            set_translation(self.label_9, "<html><head/><body><p><span style=\" font-size:10pt; font-weight:600;\">Analysis and postprocessing parameters</span></p></body></html>")
-            set_translation(self.label_11, "<html><head/><body><p>Capture interval</p></body></html>")
-            set_translation(self.label_12, "<html><head/><body><p>Set processing limit</p></body></html>")
-            set_translation(self.label_26, "(in days, 0 means no limit)")
-            set_translation(self.label_27, "(in minutes, usually 15 minutes)")
-            set_translation(self.label_30, "<html><head/><body><p><span style=\" font-size:10pt; font-weight:600;\">Individual plant root analysis</span></p></body></html>")
-            set_translation(self.daysFieldConvex, "Days to report")
-            set_translation(self.daysConvexText, "(Numbers separated by commas)")
-            set_translation(self.daysAnglesText, "Days to report")
-            set_translation(self.emergenceDistanceText, "Emergence distance")
-            set_translation(self.emergenceDistanceTextExp, "(in millimeters, default: 2 mm)")
-            set_translation(self.captureIntervalLabel, "<html><head/><body><p>Capture interval</p></body></html>")
-            set_translation(self.processingLimitLabel, "<html><head/><body><p>Processing limit</p></body></html>")
-            set_translation(self.emergenceDistanceLabel, "<html><head/><body><p>Emergence distance</p></body></html>")
-            set_translation(self.emergenceDistanceExp, "(in millimeters, default: 2 mm)")
-            
-        def translate_buttons():
-            set_translation(self.loadVideo, "Select Video Folder")
-            set_translation(self.loadProject, "Select Project Folder")
-            set_translation(self.saveButton, "Save")
-            set_translation(self.loadConfigFileButton, "Load\nconfig json\nfrom file")
-            set_translation(self.loadLastConfigButton, "Load\nprevious\nconfiguration")
-            set_translation(self.saveImagesButton, "Save Cropped Images")
-            set_translation(self.videoHasQRbutton, "Video has QR codes")
-            set_translation(self.analysisButton, "Analyze Plant")
-            set_translation(self.previewAnalysisButton, "Preview video")
-            set_translation(self.PostProcessButton, "Process\nall plants")
-            set_translation(self.saveImagesConvex, "Save images for each day")
-            set_translation(self.doFPCA, "Perform Functional PCA on time series")
-            set_translation(self.doConvex, "Do Convex hull analysis")
-            set_translation(self.doFourier, "Evaluate Growth Speeds and perform Fourier Analysis")
-            set_translation(self.doLateralAngles, "Do Lateral Root Angles Analysis")
-            set_translation(self.PostProcessButton2, "Process\nall plants")
-            set_translation(self.reportButton, "Generate report")
-            set_translation(self.loadLastConfig2, "Load\nprevious\nconfiguration")
-            set_translation(self.saveButton_2, "Save")
-            set_translation(self.loadProject_2, "Select Project Folder")
-            set_translation(self.refresh_button, "Refresh")
-            set_translation(self.refresh_button_tab3, "Refresh")
-            set_translation(self.refresh_button_tab5, "Refresh")
-            set_translation(self.open_path_button_tab2, "Open Path")
-            set_translation(self.open_path_button_tab5, "Open Report Path")
-            set_translation(self.averagePerPlantStats, "Average intervals before testing")
-            set_translation(self.everyXhourText, "Time series stats interval (dt, in hours)")
-            set_translation(self.everyXhourTextFourier, "Speeds stats interval (dt, in hours)")
-            set_translation(self.everyXhourTextAngles, "First LR Tip Stats interval (dt, in hours)")
-            set_translation(self.reportText, "Hypothesis testing uses Mann-Whitney test every dt interval. If selected, an average value will be used, or a step (i*dt) otherwise")
-            set_translation(self.normFPCA, "Normalize FPCA Boxplots")
-            set_translation(self.numComponentsFPCAText, "Number of components")
-            
-        def translate_tab_text():
-            self.tab_widget.setTabText(self.tab_widget.indexOf(self.tab1), _translate("ChronoRootAnalysis", "Plant Analysis"))
-            self.tab_widget.setTabText(self.tab_widget.indexOf(self.tab2), _translate("ChronoRootAnalysis", "Analysis Overview"))
-            self.tab_widget.setTabText(self.tab_widget.indexOf(self.tab4), _translate("ChronoRootAnalysis", "Generate Report"))
-            self.tab_widget.setTabText(self.tab_widget.indexOf(self.tab5), _translate("ChronoRootAnalysis", "Report"))
-            
-        translate_main_elements()
-        translate_labels()
-        translate_buttons()
-        translate_tab_text()
-    
-    def setup_tooltips(self):
-        """Standardized explanations for all UI elements focusing on user workflow."""
-        
-        # --- Tab 1: Plant Analysis ---
-        self.loadProject.setToolTip("Select the primary directory where experiment results and data are organized.")
-        self.loadVideo.setToolTip("Select the folder containing the segmented image sequence for analysis. \nFolder should contain a Segmentation/ subfolder with images. \nImages can be stored somewhere else as long their path is saved within the segmentation_metadata.json file and has not been moved.")
-        self.saveButton.setToolTip("Save the current parameters to the project configuration.")
-        
-        self.previewAnalysisButton.setToolTip(
-            "<b>Visual Inspection:</b><br>"
-            "Open a viewer to check image quality and verify that the root segmentation is accurate."
-        )
-        
-        self.analysisButton.setToolTip(
-            "<b>Initiate Analysis:</b><br>"
-            "1. Define the plant analysis area (ROI).<br>"
-            "2. Mark the <b>Root Starting Point</b>.<br>"
-            "3. Process the growth tracking graph."
-        )
-        
-        self.PostProcessButton.setToolTip("Finalize and calculate statistics for all analyzed plants in this project.")
-        self.loadConfigFileButton.setToolTip("Import settings from an existing configuration file.")
-        self.loadLastConfigButton.setToolTip("Restore the most recently used settings.")
-        
-        self.saveImagesButton.setToolTip("Save individual plant crops; required for creating growth time-lapse videos.")
-        self.videoHasQRbutton.setToolTip("Enable automatic scale detection using the 1-cm QR code in the images.")
-        self.calibrateBtn.setToolTip("Manually define the physical scale by measuring a known distance in the image.")
-
-        # --- Tab 2: Analysis Overview ---
-        self.refresh_button.setToolTip("Update the table to show the latest analysis progress and error rates.")
-        self.open_path_button_tab2.setToolTip("Open the folder containing the data for the selected plant.")
-        self.remove_path_button.setToolTip("Move the selected plant to the 'Removed' folder. This hides it from reports without deleting the data.")
-        self.rerun_analysis_button_tab2.setToolTip("<b>Quick Re-run:</b> Repeat tracking using the existing ROI and Root Starting Point.")
-        self.postprocess_plants_button.setToolTip("Refresh global statistics for all plants currently in the project.")
-        
-        # --- Tab 3: Plant Overlay ---
-        self.refresh_button_tab3.setToolTip("Refresh the list of plants available for visual inspection.")
-        self.open_path_button_tab3.setToolTip("Open the results folder for the plant currently being viewed.")
-        self.rerun_analysis_button_tab3.setToolTip("<b>Manual Re-run:</b> Restart the analysis to choose a new ROI or Root Starting Point.")
-        self.remove_path_button_tab3.setToolTip("Move the current plant to the 'Removed' folder if it is unsuitable for reporting.")
-        self.reviewButton.setToolTip("Open the sequence viewer to inspect the development of this root system.")
-        self.overlay_checkbox.setToolTip("Show or hide the color-coded tracking mask over the plant image.")
-        
-        # --- Tab 4: Generate Report ---
-        self.reportButton.setToolTip(
-            "<b>Compile Results:</b><br>"
-            "Generate visual charts, CSV data, and perform statistical comparisons between varieties."
-        )
-        self.loadLastConfig2.setToolTip("Restore previous reporting and statistical parameters.")
-        self.saveButton_2.setToolTip("Save current reporting preferences.")
-        self.PostProcessButton2.setToolTip("Ensure all plant data is synchronized before generating final figures.")
-        
-        # --- Tab 5: Report ---
-        self.refresh_button_tab5.setToolTip("Update the list of available report figures based on the current project data.")
-        self.open_path_button_tab5.setToolTip("Open the directory where generated reports are stored.")
-        
 def main():
     app = QtWidgets.QApplication(sys.argv)
     window = Ui_ChronoRootAnalysis()

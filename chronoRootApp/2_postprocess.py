@@ -20,7 +20,7 @@ from analysis.dataWork import dataWork
 from analysis.qr import qr_detect, get_pixel_size, load_path
 from analysis.report import plot_individual_plant
 from analysis.lateral_angles import getAngles
-from analysis.utils.fileUtilities import convertFromPathSafe
+from analysis.utils.fileUtilities import convertFromPathSafe, get_latest_result_dir
 import json
 import os 
 import pandas as pd
@@ -96,11 +96,9 @@ if __name__ == "__main__":
                 
                 # 3. Process Individual Plants
                 for plant in plants:
-                    plant_results = load_path(plant, '*')
-                    if len(plant_results) == 0:
+                    target_res = get_latest_result_dir(plant)
+                    if target_res is None:
                         continue
-                    
-                    target_res = plant_results[-1]
                     meta_file = os.path.join(target_res, 'metadata.json')
                     
                     with open(meta_file, 'r') as f:

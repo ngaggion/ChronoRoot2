@@ -34,6 +34,17 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 plt.switch_backend('agg')
 
 from .utils.fileUtilities import convertFromPathSafe, convertToPathSafe
+from .utils.report_paths import (
+    MODULE_TEMPORAL,
+    metric_dir,
+    overview_plot,
+    overview_table,
+    table_file,
+    temporal_metric_slug,
+)
+from .stats_utils import perform_temporal_pairwise_stats, ensure_factor_columns
+from .report_plots import emit_temporal_comparison_plots
+from .utils.report_style import genotype_palette_for_data, get_genotype_axis_label
 
 def natural_key(string_):
     """See http://www.codinghorror.com/blog/archives/001018.html"""
@@ -137,204 +148,151 @@ def plot_individual_plant(savepath, dataframe, name):
     plt.close('all')
 
 def performStatisticalAnalysis(conf, data, metric):
-    UniqueExperiments = data['Experiment'].unique().astype(str)
-    N_exp = int(len(UniqueExperiments))
-
-    dt = int(conf['everyXhourField'])
-    N_steps = int(round((data['ElapsedTime (h)'].max()+1) / dt, 0))
-    
-    # Create a text file to store the results
-    reportPath = os.path.join(conf['MainFolder'],'Report', 'Temporal Parameters')
-    
-    if "/" in metric:
-        reportPath_stats = os.path.join(reportPath, '%s Stats.txt' % metric.replace('/',' over '))
-    else:
-        reportPath_stats = os.path.join(reportPath, '%s Stats.txt' % metric)
-        
-    # First row should say "Using Mann Whitney U test to compare the growth speed of different experiments"
-    with open(reportPath_stats, 'w') as f:
-        f.write('Using Mann Whitney U test to compare different experiments\n')
-        f.write('Uses the average value, per plant, per day\n\n')
-         
-        for step in range(0, N_steps):            
-            end = dt * (step+1)
-            end = int(min(end, data['ElapsedTime (h)'].max()))
-            hours = np.arange(dt * step, end)
-            subdata = data[data['ElapsedTime (h)'].isin(hours)]
-
-            if conf['averagePerPlantStats']:
-                subdata = subdata.groupby(['Experiment', 'Plant_id']).mean(numeric_only=True).reset_index()
-    
-            subdata['Experiment'] = subdata['Experiment'].astype(str)
-            
-            # Compare every pair of experiments with Mann-Whitney U test
-            f.write('Hours from ' + str(step*dt) + ' to ' + str(end) + '\n')
-            
-            for i in range(0, N_exp-1):
-                for j in range(i+1, N_exp):
-                    exp1 = subdata[subdata['Experiment'] == UniqueExperiments[i]][metric]
-                    exp2 = subdata[subdata['Experiment'] == UniqueExperiments[j]][metric]
-                    
-                    # Perform Mann-Whitney U test
-                    try:
-                        U, p = stats.mannwhitneyu(exp1, exp2)
-                        p = round(p, 6)
-                        
-                        # Write the number of samples in each experiment, both in the same line
-                        f.write('Number of samples ' + UniqueExperiments[i] + ': ' + str(len(exp1)) + ' - ')
-                        f.write('Number of samples ' + UniqueExperiments[j] + ': ' + str(len(exp2)) + '\n')
-                        
-                        # Write the mean value of each experiment
-                        f.write('Mean ' + UniqueExperiments[i] + ': ' + str(round(exp1.mean(), 2)) + ' - ')
-                        f.write('Mean ' + UniqueExperiments[j] + ': ' + str(round(exp2.mean(), 2)) + '\n')
-                        
-                        # Compare the p-value with the significance level
-                        if p < 0.05:
-                            f.write('Experiments ' + UniqueExperiments[i] + ' and ' + UniqueExperiments[j] + ' are significantly different. P-value: ' + str(p) + '\n')
-                        else:
-                            f.write('Experiments ' + UniqueExperiments[i] + ' and ' + UniqueExperiments[j] + ' are not significantly different. P-value: ' + str(p) + '\n')
-                    except:
-                        f.write('Experiments ' + UniqueExperiments[i] + ' and ' + UniqueExperiments[j] + ' could not be compared\n')
-                        
-            f.write('\n')            
+    data = ensure_factor_columns(data)
+    slug = temporal_metric_slug(metric)
+    table_path = table_file(conf, MODULE_TEMPORAL, slug, 'summary_table.csv')
+    perform_temporal_pairwise_stats(
+        conf, data, metric,
+        module=MODULE_TEMPORAL, metric_slug_name=slug,
+        table_file_path=table_path,
+    )
+    _write_metric_summary_table(conf, data, metric, slug)
+    base_dir = metric_dir(conf, MODULE_TEMPORAL, slug)
+    emit_temporal_comparison_plots(
+        conf, data, metric, base_dir,
+        module=MODULE_TEMPORAL, metric_slug_name=slug,
+        metric_label=metric,
+    )
     return
 
-def generateTableTemporal(conf, data):
+
+def _write_metric_summary_table(conf, data, metric, slug):
+    """Per-metric descriptive summary across intervals and grouping factors."""
     dt = int(conf['everyXhourField'])
-    N_steps = int(round((data['ElapsedTime (h)'].max()+1) / dt, 0))
-    reportPath = os.path.join(conf['MainFolder'],'Report', 'Temporal Parameters')
-    
-    summaryDF = []
-    
-    for step in range(0, N_steps):            
-        end = dt * (step+1)
-        end = int(min(end, data['ElapsedTime (h)'].max()))
+    max_hour = data['ElapsedTime (h)'].max()
+    if pd.isna(max_hour):
+        return
+
+    n_steps = int(round((max_hour + 1) / dt, 0))
+    rows = []
+    for step in range(n_steps):
+        end = int(min(dt * (step + 1), max_hour))
         hours = np.arange(dt * step, end)
         subdata = data[data['ElapsedTime (h)'].isin(hours)]
-        subdata = subdata.groupby(['Experiment', 'Plant_id']).mean(numeric_only=True).reset_index()
-        subdata = subdata.groupby(['Experiment']).agg({'MainRootLength (mm)': ['count', 'mean', 'std'],
-                                                      'LateralRootsLength (mm)': ['mean', 'std'], 
-                                                      'TotalLength (mm)': ['mean', 'std'], 
-                                                      'NumberOfLateralRoots': ['mean', 'std'], 
-                                                      'DiscreteLateralDensity (LR/cm)': ['mean', 'std'], 
-                                                      'MainOverTotal (%)': ['mean', 'std'],
-                                                      'HypocotylLength (mm)': ['mean', 'std']})
-        
+        subdata = subdata.groupby(
+            ['Experiment', 'PlateCondition', 'ExtraVariable', 'Plant_id']
+        ).mean(numeric_only=True).reset_index()
+        grouped = subdata.groupby(['Experiment', 'PlateCondition', 'ExtraVariable']).agg(
+            n_plants=('Plant_id', 'nunique'),
+            mean=(metric, 'mean'),
+            sd=(metric, 'std'),
+        ).reset_index()
+        grouped['hours_interval'] = f'{dt * step}-{end - 1}'
+        rows.append(grouped)
+
+    if not rows:
+        return
+
+    result = pd.concat(rows, ignore_index=True)
+    result = result.round(3)
+    result.to_csv(table_file(conf, MODULE_TEMPORAL, slug, 'summary_table.csv'), index=False)
+
+def _build_temporal_summary_table(data, group_cols, dt, max_hour):
+    n_steps = int(round((max_hour + 1) / dt, 0))
+    summary_df = []
+
+    agg_cols = {
+        'MainRootLength (mm)': ['count', 'mean', 'std'],
+        'LateralRootsLength (mm)': ['mean', 'std'],
+        'TotalLength (mm)': ['mean', 'std'],
+        'NumberOfLateralRoots': ['mean', 'std'],
+        'DiscreteLateralDensity (LR/cm)': ['mean', 'std'],
+        'MainOverTotal (%)': ['mean', 'std'],
+        'HypocotylLength (mm)': ['mean', 'std'],
+    }
+
+    for step in range(n_steps):
+        end = int(min(dt * (step + 1), max_hour))
+        hours = np.arange(dt * step, end)
+        subdata = data[data['ElapsedTime (h)'].isin(hours)]
+        subdata = subdata.groupby(group_cols + ['Plant_id']).mean(numeric_only=True).reset_index()
+        subdata = subdata.groupby(group_cols).agg(agg_cols)
         subdata.columns = [' '.join(col).strip() for col in subdata.columns.values]
         subdata = subdata.reset_index()
-        subdata['Hours interval'] = str(dt * step) + '-' + str(end - 1)
-        summaryDF.append(subdata)
+        subdata['Hours interval'] = f'{dt * step}-{end - 1}'
+        summary_df.append(subdata)
 
-    summaryDF = pd.concat(summaryDF)
-    summaryDF.rename(columns={"MainRootLength (mm) count": "N experiment"}, inplace=True)
-    col = summaryDF.pop("Hours interval")
-    summaryDF.insert(0, col.name, col)
-    summaryDF.to_csv(os.path.join(reportPath, "Temporal Parameters Summary Table.csv"), index=False)    
+    if not summary_df:
+        return pd.DataFrame()
+
+    result = pd.concat(summary_df)
+    if 'MainRootLength (mm) count' in result.columns:
+        result.rename(columns={'MainRootLength (mm) count': 'N experiment'}, inplace=True)
+    col = result.pop('Hours interval')
+    result.insert(0, col.name, col)
+    return result
+
+
+def generateTableTemporal(conf, data):
+    data = ensure_factor_columns(data)
+    dt = int(conf['everyXhourField'])
+    max_hour = data['ElapsedTime (h)'].max()
+
+    tables = [
+        (_build_temporal_summary_table(data, ['Experiment'], dt, max_hour), 'summary_by_genotype.csv'),
+        (_build_temporal_summary_table(data, ['PlateCondition', 'Experiment'], dt, max_hour),
+         'summary_by_plate.csv'),
+        (_build_temporal_summary_table(data, ['ExtraVariable', 'Experiment'], dt, max_hour),
+         'summary_by_extra_variable.csv'),
+    ]
+
+    for table, filename in tables:
+        if not table.empty:
+            table.to_csv(overview_table(conf, MODULE_TEMPORAL, filename), index=False)
     
-def plot_info_all(savepath, dataframe):
+def plot_info_all(conf, dataframe):
     plt.ioff()
-    
-    # set color palette
-    sns.set_palette("tab10")
+    dataframe = ensure_factor_columns(dataframe)
+    geno_palette = genotype_palette_for_data(dataframe)
+    geno_label = get_genotype_axis_label(conf)
 
-    # plt.rcParams.update({'font.size': 18})
+    def _plot_metric(ax, y_col, title):
+        sns.lineplot(
+            x='ElapsedTime (h)', y=y_col, data=dataframe, hue='Experiment',
+            errorbar='se', ax=ax, palette=geno_palette,
+        )
+        ax.set_title(title, fontsize=16)
+        ax.legend(loc='best', title=geno_label)
 
-    fig3 = plt.figure(figsize=(12,8), constrained_layout=True)
+    fig3 = plt.figure(figsize=(12, 8), constrained_layout=True)
     gs = fig3.add_gridspec(2, 3)
-    f_ax1 = fig3.add_subplot(gs[0, 0])
-    f_ax2 = fig3.add_subplot(gs[0, 1])
-    f_ax3 = fig3.add_subplot(gs[0, 2])
-    f_ax4 = fig3.add_subplot(gs[1, 0])
-    f_ax5 = fig3.add_subplot(gs[1, 1])
-    f_ax6 = fig3.add_subplot(gs[1, 2])
+    axes = [fig3.add_subplot(gs[r, c]) for r in range(2) for c in range(3)]
 
-    sns.lineplot(x = 'ElapsedTime (h)', y = 'MainRootLength (mm)', data = dataframe, hue = 'Experiment', errorbar='se', ax = f_ax1)
-    f_ax1.set_title('MR length', fontsize = 16)
-    f_ax1.set_ylabel('Length (mm)', fontsize = 12)
-    f_ax1.set_xlabel('Elapsed Time (h)', fontsize = 12)
-    f_ax1.legend(loc='upper left')
+    metrics = [
+        ('MainRootLength (mm)', 'Main root length'),
+        ('LateralRootsLength (mm)', 'Lateral root length'),
+        ('TotalLength (mm)', 'Total root length'),
+        ('NumberOfLateralRoots', 'Number of lateral roots'),
+        ('DiscreteLateralDensity (LR/cm)', 'Discrete lateral root density'),
+        ('MainOverTotal (%)', 'Main root / total length (%)'),
+    ]
+    for ax, (col, title) in zip(axes, metrics):
+        _plot_metric(ax, col, title)
+        ax.set_xlabel('Elapsed Time (h)', fontsize=12)
+        if col == 'NumberOfLateralRoots':
+            ax.set_ylabel('Number of LR', fontsize=12)
+        elif col == 'DiscreteLateralDensity (LR/cm)':
+            ax.set_ylabel('Discrete LR density (LRs/cm)', fontsize=12)
+        elif col == 'MainOverTotal (%)':
+            ax.set_ylabel('Percentage (%)', fontsize=12)
+        else:
+            ax.set_ylabel('Length (mm)', fontsize=12)
 
-    sns.lineplot(x = 'ElapsedTime (h)', y = 'LateralRootsLength (mm)', data = dataframe, hue = 'Experiment', errorbar='se', ax = f_ax2)
-    f_ax2.set_title('LR length', fontsize = 16)
-    f_ax2.set_ylabel('Length (mm)', fontsize = 12)
-    f_ax2.set_xlabel('Elapsed Time (h)', fontsize = 12)
-    f_ax2.legend(loc='upper left')
-
-    sns.lineplot(x = 'ElapsedTime (h)', y = 'TotalLength (mm)', data = dataframe, hue = 'Experiment', errorbar='se', ax = f_ax3)
-    f_ax3.set_title('TR length', fontsize = 16)
-    f_ax3.set_ylabel('Length (mm)', fontsize = 12)
-    f_ax3.set_xlabel('Elapsed Time (h)', fontsize = 12)
-    f_ax3.legend(loc='upper left')
-        
-    sns.lineplot(x = 'ElapsedTime (h)', y = 'NumberOfLateralRoots', hue = 'Experiment', data = dataframe, errorbar='se', ax = f_ax4)
-    f_ax4.set_title('Number of LR', fontsize = 16)
-    f_ax4.set_ylabel('Number of LR', fontsize = 12)
-    f_ax4.set_xlabel('Elapsed Time (h)', fontsize = 12)
-    f_ax4.legend(loc='upper left')
-
-    sns.lineplot(x = 'ElapsedTime (h)', y = 'DiscreteLateralDensity (LR/cm)', hue = 'Experiment', data = dataframe, errorbar='se', ax = f_ax5)
-    f_ax5.set_title('Discrete LR Density', fontsize = 16)
-    f_ax5.set_ylabel('Discrete LR density (LRs/cm)', fontsize = 12)
-    f_ax5.set_xlabel('Elapsed Time (h)', fontsize = 12)
-    f_ax5.legend(loc='upper left')
-
-    sns.lineplot(x = 'ElapsedTime (h)', y = 'MainOverTotal (%)', hue = 'Experiment', data = dataframe, errorbar='se', ax = f_ax6)
-    f_ax6.set_title('MR length / TR length (%)', fontsize = 16)
-    f_ax6.set_ylabel('Percentage (%)', fontsize = 12)
-    f_ax6.set_xlabel('Elapsed Time (h)', fontsize = 12)
-    f_ax6.legend(loc='lower left')
-    
-    """
-    f_ax1.annotate('(A)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
-    f_ax2.annotate('(B)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
-    f_ax3.annotate('(C)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
-    f_ax4.annotate('(D)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
-    f_ax5.annotate('(E)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
-    f_ax6.annotate('(F)',(0.47,-0.15), xycoords="axes fraction", fontsize=15, weight = 'bold')
-    """
-    
-    plt.savefig(os.path.join(savepath,'Temporal_Subplots_Mean_SE.svg'),dpi=300, bbox_inches='tight')
-    plt.savefig(os.path.join(savepath,'Temporal_Subplots_Mean_SE.png'),dpi=300, bbox_inches='tight')
+    plt.savefig(overview_plot(conf, MODULE_TEMPORAL, 'all_metrics_subplots.png'), dpi=300, bbox_inches='tight')
 
     plt.cla()
     plt.clf()
     plt.close('all')
-    
-    # List of metrics to plot individually
-    metrics = [
-        ('MainRootLength (mm)', 'Main Root Length'),
-        ('LateralRootsLength (mm)', 'Lateral Roots Length'),
-        ('TotalLength (mm)', 'Total Length'),
-        ('NumberOfLateralRoots', 'Number of Lateral Roots'),
-        ('DiscreteLateralDensity (LR/cm)', 'Discrete Lateral Density'),
-        ('MainOverTotal (%)', 'Main Root over Total Length'),
-        ('HypocotylLength (mm)', 'Hypocotyl Length')
-    ]
-
-    for column, title in metrics:
-        plt.ioff()
-        plt.figure(figsize=(8, 6))
-        
-        sns.lineplot(
-            x='ElapsedTime (h)', 
-            y=column, 
-            data=dataframe, 
-            hue='Experiment', 
-            errorbar='se'
-        )
-        
-        plt.title(f'{title} Over Time', fontsize=16)
-        plt.ylabel(column, fontsize=12)
-        plt.xlabel('Elapsed Time (h)', fontsize=12)
-        plt.legend(loc='best')
-        
-        # Create a filename-friendly string (removing special characters)
-        filename = column.replace(' ', '_').replace('/', '_').replace('(', '').replace(')', '').replace('%', 'Pct')
-        
-        plt.savefig(os.path.join(savepath, f'{filename}_Temporal.png'), dpi=300, bbox_inches='tight')
-        
-        # Clean up memory after each plot
-        plt.close()
 
 def mkdir(path):
     try:

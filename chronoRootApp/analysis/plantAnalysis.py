@@ -16,7 +16,7 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from .utils.fileUtilities import createSaveFolder, getImages, saveMetadata
+from .utils.fileUtilities import createSaveFolder, getImages, saveMetadata, cleanup_superseded_results, plant_slot_path
 from .utils.getROIandSeed import getROIandSeed
 from .imageUtils.seg import extract_root_segmentation, extract_skeleton
 from .imageUtils.plot import saveImages
@@ -376,5 +376,7 @@ def plantAnalysis(conf, replicate=False):
         print(f'Results saved to {output_folders["result"]}')
         if error_count > 0:
             print(f'Warning: {error_count} errors occurred during tracking (see log.txt)')
+
+        cleanup_superseded_results(plant_slot_path(conf), output_folders['result'])
     
     return
