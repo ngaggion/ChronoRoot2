@@ -19,8 +19,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
-import pathlib
-import re
 import os
 import scipy.stats as stats
 import numpy as np
@@ -37,8 +35,7 @@ from .utils.fileUtilities import convertFromPathSafe, convertToPathSafe
 from .utils.report_paths import (
     MODULE_TEMPORAL,
     metric_dir,
-    overview_plot,
-    overview_table,
+    overview_dir,
     table_file,
     temporal_metric_slug,
 )
@@ -46,22 +43,6 @@ from .stats_utils import perform_temporal_pairwise_stats, ensure_factor_columns
 from .report_plots import emit_temporal_comparison_plots
 from .utils.report_style import genotype_palette_for_data, get_genotype_axis_label
 
-def natural_key(string_):
-    """See http://www.codinghorror.com/blog/archives/001018.html"""
-    return [int(s) if s.isdigit() else s for s in re.split(r'(\d+)', string_)]
-
-
-def load_path(search_path, ext = '*.*'):
-    data_root = pathlib.Path(search_path)
-    all_files = list(data_root.glob(ext))
-    all_files = [str(path) for path in all_files]
-    all_files.sort(key = natural_key)
-    
-    return all_files
-
-import matplotlib.pyplot as plt
-import numpy as np
-import os
 
 def plot_individual_plant(savepath, dataframe, name):
     plt.ioff()
@@ -248,7 +229,7 @@ def generateTableTemporal(conf, data):
 
     for table, filename in tables:
         if not table.empty:
-            table.to_csv(overview_table(conf, MODULE_TEMPORAL, filename), index=False)
+            table.to_csv(os.path.join(overview_dir(conf, MODULE_TEMPORAL), filename), index=False)
     
 def plot_info_all(conf, dataframe):
     plt.ioff()
@@ -288,15 +269,8 @@ def plot_info_all(conf, dataframe):
         else:
             ax.set_ylabel('Length (mm)', fontsize=12)
 
-    plt.savefig(overview_plot(conf, MODULE_TEMPORAL, 'all_metrics_subplots.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(overview_dir(conf, MODULE_TEMPORAL), 'all_metrics_subplots.png'), dpi=300, bbox_inches='tight')
 
     plt.cla()
     plt.clf()
     plt.close('all')
-
-def mkdir(path):
-    try:
-        os.mkdir(path)
-    except:
-        pass
-    return

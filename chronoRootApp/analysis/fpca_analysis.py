@@ -28,14 +28,6 @@ import logging
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
 
-def _save_fpca_overview(conf, mag_slug):
-    for ext in ('png', 'svg'):
-        plt.savefig(
-            plot_file(conf, MODULE_TEMPORAL, mag_slug, f'{mag_slug}_overview.{ext}', 'fpca'),
-            dpi=300, bbox_inches='tight',
-        )
-
-
 def performFPCA(conf_path):
     COLUMNS = [
         'MainRootLength (mm)',
@@ -162,7 +154,11 @@ def performFPCA(conf_path):
             ax.legend(handles, labels, title=f'PC{fpc1} Value', bbox_to_anchor=(1.05, 1), loc='upper left')
 
         plt.tight_layout()
-        _save_fpca_overview(conf, mag_slug)
+        for ext in ('png', 'svg'):
+            plt.savefig(
+                plot_file(conf, MODULE_TEMPORAL, mag_slug, f'{mag_slug}_overview.{ext}', 'fpca'),
+                dpi=300, bbox_inches='tight',
+            )
         plt.close()
         plt.cla()
         plt.clf()

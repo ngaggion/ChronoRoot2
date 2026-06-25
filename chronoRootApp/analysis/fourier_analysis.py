@@ -1,4 +1,4 @@
-from .report import load_path
+from .utils import report_utils as utils
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
@@ -11,9 +11,8 @@ from .utils.fileUtilities import convertFromPathSafe, load_result_metadata, norm
 from .stats_utils import (
     perform_fourier_pairwise_stats,
     ensure_factor_columns,
-    get_enabled_comparison_modes,
+    comparison_modes_for_run,
     _mode_spec,
-    get_extra_variable_label,
     _describe_averaging,
 )
 from .report_plots import plot_comparison_mode
@@ -24,7 +23,6 @@ from .utils.report_paths import (
     comparison_plot_path,
     plot_file,
     stats_file,
-    append_report_index,
 )
 from .utils.report_style import genotype_palette_for_data, get_genotype_axis_label
 
@@ -135,14 +133,14 @@ class DataProcessor:
         for exp in experiments:
             try:
                 # Get list of plant data files
-                plants = load_path(exp, '*/*/*')
+                plants = utils.load_paths(exp, '*/*/*')
                 raw_folder_name = os.path.basename(exp)
                 exp_label = convertFromPathSafe(raw_folder_name)
                 speeds = []
                 
                 # Collect PostProcess_Hour.csv files
                 for plant in plants:
-                    results = load_path(plant, '*')
+                    results = utils.load_paths(plant, '*')
                     if results:
                         results = results[-1]
                         speeds.append(os.path.join(results, "PostProcess_Hour.csv"))
@@ -252,9 +250,8 @@ class DataProcessor:
             n_steps = int(round((time_data['Time'].max() + 1) / dt, 0))
             fft_detrended = data_detrended[data_detrended['Freqs'].notna()]
             target_rhythms = {'24h Period': 1 / 24, '12h Period': 1 / 12}
-            extra_label = get_extra_variable_label(self.conf)
 
-            for mode in get_enabled_comparison_modes(self.conf):
+            for mode in comparison_modes_for_run(self.conf):
                 spec = _mode_spec(mode, conf=self.conf)
                 stats_path = stats_file(self.conf, MODULE_TEMPORAL, slug, mode, 'growth_speed')
                 with open(stats_path, 'w') as f:
@@ -287,12 +284,6 @@ class DataProcessor:
                             self.conf, freq_subdata, 'FFT', f,
                             plant_id_col='i', type_col='Type', modes=[mode],
                         )
-
-                append_report_index(
-                    self.conf, MODULE_TEMPORAL, slug, 'growth_speed', mode,
-                    stats_file_path=stats_path,
-                    description=spec['header'],
-                )
 
                 plot_data = ensure_factor_columns(time_data.copy())
                 plot_data['ElapsedTime (h)'] = plot_data['Time']
@@ -588,13 +579,12 @@ def makeFourierPlots(conf: dict):
 
         for metric_type in MetricConfig.METRICS.keys():
             try:
-                print(f"Processing {metric_type}")
                 metric_config = MetricConfig.get_config(metric_type)
                 visualizer = Visualizer(conf, metric_type)
                 
                 # Get data paths
                 analysis_path = os.path.join(conf['MainFolder'], 'Analysis')
-                experiments = load_path(analysis_path, '*')
+                experiments = utils.load_paths(analysis_path, '*')
                 
                 # Process data
                 all_frames_original = processor.read_and_process_data(

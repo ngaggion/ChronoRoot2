@@ -18,8 +18,6 @@ from analysis.utils.report_paths import (
     MODULE_CONVEX,
     metric_slug,
     overview_dir,
-    overview_plot,
-    overview_table,
     plot_file,
 )
 
@@ -42,8 +40,6 @@ def calculate_atlas_geometry(experiment_paths: List[str]) -> Tuple[Tuple[int, in
     max_right = 0
     max_depth = 0
     BUFFER = 50 
-
-    print("Scanning experiments to determine minimal Atlas size...")
 
     for exp_path in experiment_paths:
         # Load all results folders
@@ -126,7 +122,6 @@ def calculate_atlas_geometry(experiment_paths: List[str]) -> Tuple[Tuple[int, in
     canvas_width = int(center_x + max_right + BUFFER)
     canvas_height = int(center_y + max_depth + BUFFER)
     
-    print(f"Optimal Geometry: Size[{canvas_height}, {canvas_width}], Center[{center_y}, {center_x}]")
     return (canvas_height, canvas_width), (center_y, center_x)
 
 
@@ -412,7 +407,7 @@ def visualize_combined_atlases(conf):
             axs[i].axis('off')
 
         plt.subplots_adjust(wspace=0, hspace=0)
-        plt.savefig(overview_plot(conf, MODULE_CONVEX, f'combined_atlas_day_{day}.png'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(overview_dir(conf, MODULE_CONVEX), f'combined_atlas_day_{day}.png'), dpi=300, bbox_inches='tight')
         plt.close('all')
 
 
@@ -451,7 +446,7 @@ def plot_hull_metrics_summary(conf, frame):
 
     numeric_cols = [c for c, *_ in metrics_config]
     summary = frame.groupby(['Day', 'Experiment'])[numeric_cols].agg(['mean', 'std']).round(3)
-    summary.to_csv(overview_table(conf, MODULE_CONVEX, 'Summary_table.csv'))
+    summary.to_csv(os.path.join(overview_dir(conf, MODULE_CONVEX), 'Summary_table.csv'))
 
 
 def analyze_hull_statistics(conf, data, metric):
@@ -461,7 +456,7 @@ def analyze_hull_statistics(conf, data, metric):
 
     data = data.copy()
     data['Day'] = data['Day'].astype(str)
-    days = conf['daysConvexHull'].split(',')
+    days = [d.strip() for d in conf['daysConvexHull'].split(',') if d.strip()]
     slug = metric_slug(metric)
     table_path = table_file(conf, MODULE_CONVEX, slug, 'summary_table.csv')
     perform_interval_pairwise_stats(

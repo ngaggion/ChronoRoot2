@@ -1,6 +1,5 @@
 """Shared Report/ folder path helpers — metric-first with paired plot/stats naming."""
 
-import csv
 import os
 import re
 
@@ -12,7 +11,6 @@ MODULE_ANGLES = 'angles'
 
 OVERVIEW_SLUG = 'overview'
 INDIVIDUAL_PLOTS_DIR = 'individual_plots'
-REPORT_INDEX_NAME = 'report_index.csv'
 
 TEMPORAL_METRICS = [
     'MainRootLength (mm)',
@@ -43,9 +41,6 @@ ANGLE_METRICS = {
     'first_lr_tip_angle': 'First LR tip',
 }
 
-_REPORT_INDEX_ROWS = []
-
-
 def metric_slug(display_name: str) -> str:
     """Convert a display metric name to a filesystem-safe folder slug."""
     text = str(display_name).strip().lower()
@@ -59,14 +54,10 @@ def report_root(conf) -> str:
     return os.path.join(conf['MainFolder'], 'Report')
 
 
-def data_dir(conf) -> str:
+def data_file(conf, filename: str) -> str:
     path = os.path.join(report_root(conf), 'data')
     ensure_directory(path)
-    return path
-
-
-def data_file(conf, filename: str) -> str:
-    return os.path.join(data_dir(conf), filename)
+    return os.path.join(path, filename)
 
 
 def module_dir(conf, module: str) -> str:
@@ -121,14 +112,6 @@ def overview_dir(conf, module: str) -> str:
     return metric_dir(conf, module, OVERVIEW_SLUG)
 
 
-def overview_plot(conf, module: str, filename: str) -> str:
-    return os.path.join(overview_dir(conf, module), filename)
-
-
-def overview_table(conf, module: str, filename: str) -> str:
-    return os.path.join(overview_dir(conf, module), filename)
-
-
 def angle_overlays_dir(conf, experiment_slug: str) -> str:
     path = os.path.join(module_dir(conf, MODULE_ANGLES), f'overlays_{experiment_slug}')
     ensure_directory(path)
@@ -154,46 +137,33 @@ def temporal_metric_slug(metric_column: str) -> str:
     return mapping.get(metric_column, metric_slug(metric_column))
 
 
-def rel_report_path(conf, absolute_path: str) -> str:
-    return os.path.relpath(absolute_path, report_root(conf))
+def purge_disabled_comparison_outputs(conf, effective_modes):
+    """Remove comparison PNG/stats for modes not in the effective list."""
+    from ..stats_utils import ALL_COMPARISON_MODES
 
+    effective = set(effective_modes or [])
+    disabled = set(ALL_COMPARISON_MODES) - effective
+    if not disabled:
+        return
 
-def reset_report_index():
-    global _REPORT_INDEX_ROWS
-    _REPORT_INDEX_ROWS = []
-
-
-def append_report_index(conf, module, metric_slug_name, analysis_type, comparison_mode,
-                        plot_file_path=None, stats_file_path=None, table_file_path=None, description=''):
-    row = {
-        'module': module,
-        'metric_slug': metric_slug_name,
-        'analysis_type': analysis_type,
-        'comparison_mode': comparison_mode or '',
-        'plot_file': rel_report_path(conf, plot_file_path) if plot_file_path else '',
-        'stats_file': rel_report_path(conf, stats_file_path) if stats_file_path else '',
-        'table_file': rel_report_path(conf, table_file_path) if table_file_path else '',
-        'description': description,
-    }
-    key = (module, metric_slug_name, analysis_type, comparison_mode or '')
-    for i, existing in enumerate(_REPORT_INDEX_ROWS):
-        if (existing['module'], existing['metric_slug'], existing['analysis_type'],
-                existing['comparison_mode']) == key:
-            for field in ('plot_file', 'stats_file', 'table_file', 'description'):
-                if row[field]:
-                    existing[field] = row[field]
-            return
-    _REPORT_INDEX_ROWS.append(row)
-
-
-def write_report_index(conf):
-    path = os.path.join(report_root(conf), REPORT_INDEX_NAME)
-    fieldnames = [
-        'module', 'metric_slug', 'analysis_type', 'comparison_mode',
-        'plot_file', 'stats_file', 'table_file', 'description',
+    metric_targets = [
+        (MODULE_TEMPORAL, [temporal_metric_slug(m) for m in TEMPORAL_METRICS]),
+        (MODULE_CONVEX, [metric_slug(m) for m in CONVEX_METRICS]),
+        (MODULE_ANGLES, list(ANGLE_METRICS.keys())),
     ]
-    with open(path, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(_REPORT_INDEX_ROWS)
-    return path
+    for module, slugs in metric_targets:
+        for slug in slugs:
+            base = metric_dir(conf, module, slug)
+            for mode in disabled:
+                for path_fn in (comparison_plot_path, comparison_stats_path):
+                    path = path_fn(base, mode, metric_slug=slug)
+                    if os.path.isfile(path):
+                        os.remove(path)
+
+    for parent_slug in FOURIER_PARENT_METRICS.values():
+        growth_dir = analysis_dir(conf, MODULE_TEMPORAL, parent_slug, 'growth_speed')
+        for mode in disabled:
+            for path_fn in (comparison_plot_path, comparison_stats_path):
+                path = path_fn(growth_dir, mode, metric_slug=parent_slug)
+                if os.path.isfile(path):
+                    os.remove(path)

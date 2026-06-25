@@ -24,7 +24,7 @@ import json
 import os
 import csv
 import pandas as pd
-from .report import load_path as loadPath
+from .utils import report_utils as utils
 import scipy.stats as stats
 from .utils.fileUtilities import (
     convertFromPathSafe,
@@ -45,9 +45,8 @@ from .utils.report_paths import (
 from .stats_utils import (
     perform_interval_pairwise_stats,
     ensure_factor_columns,
-    get_enabled_comparison_modes,
+    comparison_modes_for_run,
     _mode_spec,
-    get_extra_variable_label,
     _describe_averaging,
     run_pairwise_comparisons,
     _resolve_stats_path,
@@ -593,7 +592,7 @@ def makeLateralAnglesPlots(conf):
     """
     parent_folder = conf['MainFolder']
     analysis = os.path.join(conf['MainFolder'], "Analysis")
-    experiments = loadPath(analysis, '*')
+    experiments = utils.load_paths(analysis, '*')
 
     emergence_slug = 'mean_emergence_angle'
     first_lr_slug = 'first_lr_tip_angle'
@@ -601,15 +600,13 @@ def makeLateralAnglesPlots(conf):
     all_data = pd.DataFrame()
         
     for exp in experiments:
-        plants = loadPath(exp, '*/*/*')
+        plants = utils.load_paths(exp, '*/*/*')
         # Use basename to get the literal folder name for logic
         raw_exp_folder = os.path.basename(exp)
         
         # Determine the name for the 'Experiment' column (the display name)
         # We check the first plant's metadata for the preferred name
         display_name = convertFromPathSafe(raw_exp_folder)
-        
-        print('Experiment:', display_name, '- Total plants', len(plants))
 
         for plant in plants:
             results = get_latest_result_dir(plant)
@@ -817,9 +814,8 @@ def performStatisticalAnalysisFirstLR(conf, data, metric):
     data['Experiment'] = data['Experiment'].astype(str)
     slug = 'first_lr_tip_angle'
     dt = int(conf['everyXhourFieldAngles'])
-    extra_label = get_extra_variable_label(conf)
 
-    for mode in get_enabled_comparison_modes(conf):
+    for mode in comparison_modes_for_run(conf, data):
         spec = _mode_spec(mode, conf=conf)
         output_path = _resolve_stats_path(
             conf, MODULE_ANGLES, slug, mode,
@@ -875,7 +871,7 @@ def estimateAngles(path, ax, img, i=-1, tip=False):
         ax: Modified matplotlib axes with angle visualizations
     """
     plt.ioff()
-    paths = loadPath(os.path.join(path, 'RSML'))
+    paths = utils.load_paths(os.path.join(path, 'RSML'))
 
     # Initialize tracking variables
     lateral_roots = []

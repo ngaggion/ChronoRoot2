@@ -7,15 +7,28 @@ import pandas as pd
 import scipy.stats as stats
 
 from .utils.fileUtilities import UNSPECIFIED_FACTOR, normalize_factor_value
-from .utils.report_paths import append_report_index, stats_file as report_stats_file
+from .utils.report_paths import stats_file as report_stats_file
 from .utils.report_style import get_extra_axis_label, get_genotype_axis_label, get_plate_axis_label
 
+ALL_COMPARISON_MODES = (
+    'by_genotype',
+    'genotype_by_plate',
+    'genotype_by_extra',
+    'by_plate_condition',
+    'by_extra_variable',
+    'plate_within_genotype',
+    'extra_within_genotype',
+)
 
-def get_extra_variable_label(conf):
-    return get_extra_axis_label(conf)
+_PLATE_MODES = frozenset({
+    'genotype_by_plate', 'by_plate_condition', 'plate_within_genotype',
+})
+_EXTRA_MODES = frozenset({
+    'genotype_by_extra', 'by_extra_variable', 'extra_within_genotype',
+})
 
 
-def get_enabled_comparison_modes(conf):
+def _modes_from_config(conf):
     modes = []
     if conf.get('statsByGenotype', True):
         modes.append('by_genotype')
@@ -34,6 +47,59 @@ def get_enabled_comparison_modes(conf):
     return modes or ['by_genotype']
 
 
+def _mode_applicable_for_data(mode, data, conf):
+    data = ensure_factor_columns(data)
+    spec = _mode_spec(mode, conf=conf)
+    if spec['group_col'] == 'PlateCondition' and len(_usable_groups(data['PlateCondition'].unique())) < 2:
+        return False
+    if spec['group_col'] == 'ExtraVariable' and len(_usable_groups(data['ExtraVariable'].unique())) < 2:
+        return False
+    if spec['stratify_col'] == 'PlateCondition' and len(_usable_groups(data['PlateCondition'].unique())) < 1:
+        return False
+    if spec['stratify_col'] == 'ExtraVariable' and len(_usable_groups(data['ExtraVariable'].unique())) < 1:
+        return False
+    if spec['stratify_col'] == 'Experiment' and len(_usable_groups(data['Experiment'].unique())) < 1:
+        return False
+    return True
+
+
+def get_enabled_comparison_modes(conf, data=None):
+    modes = _modes_from_config(conf)
+    if data is None:
+        return modes
+    return [mode for mode in modes if _mode_applicable_for_data(mode, data, conf)]
+
+
+def comparison_modes_for_run(conf, data=None):
+    """Effective comparison modes for the current report run."""
+    if conf.get('effectiveComparisonModes') is not None:
+        return conf['effectiveComparisonModes']
+    if data is not None:
+        return get_enabled_comparison_modes(conf, data)
+    return get_enabled_comparison_modes(conf)
+
+
+def log_auto_disabled_modes(conf, config_modes, effective_modes):
+    skipped = set(config_modes) - set(effective_modes)
+    if not skipped:
+        return
+
+    plate_label = get_plate_axis_label(conf)
+    extra_label = get_extra_axis_label(conf)
+    plate_skipped = skipped & _PLATE_MODES
+    extra_skipped = skipped & _EXTRA_MODES
+    other_skipped = skipped - plate_skipped - extra_skipped
+
+    if plate_skipped:
+        names = ', '.join(sorted(plate_skipped))
+        print(f'Report: {plate_label} does not vary across plants — skipping: {names}')
+    if extra_skipped:
+        names = ', '.join(sorted(extra_skipped))
+        print(f'Report: {extra_label} does not vary across plants — skipping: {names}')
+    for mode in sorted(other_skipped):
+        print(f'Report: comparison mode not applicable to data — skipping: {mode}')
+
+
 def _mode_spec(mode, conf=None, extra_label=None):
     if conf is not None:
         genotype_label = get_genotype_axis_label(conf)
@@ -48,25 +114,25 @@ def _mode_spec(mode, conf=None, extra_label=None):
         'by_genotype': {
             'group_col': 'Experiment',
             'stratify_col': None,
-            'suffix': 'by genotype',
+            'suffix': f'by {genotype_label}',
             'header': f'Comparing {genotype_label} across all data',
         },
         'genotype_by_plate': {
             'group_col': 'Experiment',
             'stratify_col': 'PlateCondition',
-            'suffix': 'genotype by plate',
-            'header': f'Comparing {genotype_label} within each {plate_label.lower()}',
+            'suffix': f'{genotype_label} by {plate_label}',
+            'header': f'Comparing {genotype_label} within each {plate_label}',
         },
         'genotype_by_extra': {
             'group_col': 'Experiment',
             'stratify_col': 'ExtraVariable',
-            'suffix': f'genotype by {extra_label}',
+            'suffix': f'{genotype_label} by {extra_label}',
             'header': f'Comparing {genotype_label} within each {extra_label}',
         },
         'by_plate_condition': {
             'group_col': 'PlateCondition',
             'stratify_col': None,
-            'suffix': 'by plate condition',
+            'suffix': f'by {plate_label}',
             'header': f'Comparing {plate_label} values directly',
         },
         'by_extra_variable': {
@@ -78,14 +144,14 @@ def _mode_spec(mode, conf=None, extra_label=None):
         'plate_within_genotype': {
             'group_col': 'PlateCondition',
             'stratify_col': 'Experiment',
-            'suffix': 'plate within genotype',
-            'header': f'Comparing {plate_label} within each {genotype_label.lower()}',
+            'suffix': f'{plate_label} within {genotype_label}',
+            'header': f'Comparing {plate_label} within each {genotype_label}',
         },
         'extra_within_genotype': {
             'group_col': 'ExtraVariable',
             'stratify_col': 'Experiment',
-            'suffix': f'{extra_label} within genotype',
-            'header': f'Comparing {extra_label} within each {genotype_label.lower()}',
+            'suffix': f'{extra_label} within {genotype_label}',
+            'header': f'Comparing {extra_label} within each {genotype_label}',
         },
     }
     return specs[mode]
@@ -101,12 +167,6 @@ def _stratify_label(spec, conf):
     return spec['stratify_col']
 
 
-def metric_stats_filename(metric, suffix):
-    """Legacy flat filename; prefer comparison_mode_filename via report_paths."""
-    safe_metric = metric.replace('/', ' over ')
-    return f'{safe_metric} Stats - {suffix}.txt'
-
-
 def _describe_averaging(conf):
     if conf.get('averagePerPlantStats', False):
         return 'Test values: mean per plant within each time interval, then compared across plants.'
@@ -120,19 +180,9 @@ def _resolve_stats_path(conf, module, metric_slug_name, mode, output_dir=None, m
     if file_prefix and suffix:
         return os.path.join(output_dir, f'{file_prefix} Stats - {suffix}.txt')
     if metric and suffix:
-        return os.path.join(output_dir, metric_stats_filename(metric, suffix))
+        safe_metric = metric.replace('/', ' over ')
+        return os.path.join(output_dir, f'{safe_metric} Stats - {suffix}.txt')
     return os.path.join(output_dir, f'{mode}_stats.txt')
-
-
-def _register_stats_index(conf, module, metric_slug_name, analysis_type, mode, output_path,
-                          table_file_path=None, description=''):
-    if module and metric_slug_name:
-        append_report_index(
-            conf, module, metric_slug_name, analysis_type, mode,
-            stats_file_path=output_path,
-            table_file_path=table_file_path,
-            description=description,
-        )
 
 
 def ensure_factor_columns(data):
@@ -218,23 +268,14 @@ def perform_temporal_pairwise_stats(conf, data, metric, output_dir=None, plant_i
                                     module=None, metric_slug_name=None, subpath=(),
                                     analysis_type='temporal', table_file_path=None):
     data = ensure_factor_columns(data)
-    extra_label = get_extra_variable_label(conf)
     dt = int(conf['everyXhourField'])
     max_hour = data['ElapsedTime (h)'].max()
     if pd.isna(max_hour):
         return
     n_steps = int(round((max_hour + 1) / dt, 0))
 
-    for mode in get_enabled_comparison_modes(conf):
+    for mode in comparison_modes_for_run(conf, data):
         spec = _mode_spec(mode, conf=conf)
-        if spec['group_col'] == 'PlateCondition' and len(_usable_groups(data['PlateCondition'].unique())) < 2:
-            continue
-        if spec['group_col'] == 'ExtraVariable' and len(_usable_groups(data['ExtraVariable'].unique())) < 2:
-            continue
-        if spec['stratify_col'] == 'PlateCondition' and len(_usable_groups(data['PlateCondition'].unique())) < 1:
-            continue
-        if spec['stratify_col'] == 'ExtraVariable' and len(_usable_groups(data['ExtraVariable'].unique())) < 1:
-            continue
 
         output_path = _resolve_stats_path(
             conf, module, metric_slug_name, mode,
@@ -260,11 +301,6 @@ def perform_temporal_pairwise_stats(conf, data, metric, output_dir=None, plant_i
                 )
                 f.write('\n')
 
-        _register_stats_index(
-            conf, module, metric_slug_name, analysis_type, mode, output_path,
-            table_file_path=table_file_path, description=spec['header'],
-        )
-
 
 def perform_interval_pairwise_stats(conf, data, metric, output_dir, interval_col, intervals,
                                     plant_id_col='Plant_id', interval_label='Interval',
@@ -272,21 +308,10 @@ def perform_interval_pairwise_stats(conf, data, metric, output_dir, interval_col
                                     module=None, metric_slug_name=None, subpath=(),
                                     analysis_type='interval', table_file_path=None):
     data = ensure_factor_columns(data)
-    extra_label = get_extra_variable_label(conf)
     average_group_cols = average_group_cols or ['Experiment', plant_id_col]
 
-    for mode in get_enabled_comparison_modes(conf):
+    for mode in comparison_modes_for_run(conf, data):
         spec = _mode_spec(mode, conf=conf)
-        if spec['group_col'] == 'PlateCondition' and len(_usable_groups(data['PlateCondition'].unique())) < 2:
-            continue
-        if spec['group_col'] == 'ExtraVariable' and len(_usable_groups(data['ExtraVariable'].unique())) < 2:
-            continue
-        if spec['stratify_col'] == 'PlateCondition' and len(_usable_groups(data['PlateCondition'].unique())) < 1:
-            continue
-        if spec['stratify_col'] == 'ExtraVariable' and len(_usable_groups(data['ExtraVariable'].unique())) < 1:
-            continue
-        if spec['stratify_col'] == 'Experiment' and len(_usable_groups(data['Experiment'].unique())) < 1:
-            continue
 
         output_path = _resolve_stats_path(
             conf, module, metric_slug_name, mode,
@@ -312,31 +337,15 @@ def perform_interval_pairwise_stats(conf, data, metric, output_dir, interval_col
                 )
                 f.write('\n')
 
-        _register_stats_index(
-            conf, module, metric_slug_name, analysis_type, mode, output_path,
-            table_file_path=table_file_path, description=spec['header'],
-        )
-
 
 def perform_scalar_pairwise_stats(conf, data, metric, output_dir, plant_id_col='Plant_id',
                                   file_prefix=None, module=None, metric_slug_name=None,
                                   subpath=(), analysis_type='scalar', table_file_path=None):
     """Pairwise comparisons on one row per plant (e.g. FPCA components)."""
     data = ensure_factor_columns(data)
-    extra_label = get_extra_variable_label(conf)
 
-    for mode in get_enabled_comparison_modes(conf):
+    for mode in comparison_modes_for_run(conf, data):
         spec = _mode_spec(mode, conf=conf)
-        if spec['group_col'] == 'PlateCondition' and len(_usable_groups(data['PlateCondition'].unique())) < 2:
-            continue
-        if spec['group_col'] == 'ExtraVariable' and len(_usable_groups(data['ExtraVariable'].unique())) < 2:
-            continue
-        if spec['stratify_col'] == 'PlateCondition' and len(_usable_groups(data['PlateCondition'].unique())) < 1:
-            continue
-        if spec['stratify_col'] == 'ExtraVariable' and len(_usable_groups(data['ExtraVariable'].unique())) < 1:
-            continue
-        if spec['stratify_col'] == 'Experiment' and len(_usable_groups(data['Experiment'].unique())) < 1:
-            continue
 
         output_path = _resolve_stats_path(
             conf, module, metric_slug_name, mode,
@@ -356,11 +365,6 @@ def perform_scalar_pairwise_stats(conf, data, metric, output_dir, plant_id_col='
                 conf=conf,
                 plant_id_col=plant_id_col,
             )
-
-        _register_stats_index(
-            conf, module, metric_slug_name, analysis_type, mode, output_path,
-            table_file_path=table_file_path, description=spec['header'],
-        )
 
 
 def write_fourier_comparison_stats(f, subdata, group_col, metric, group_names, label_prefix=''):
@@ -392,9 +396,8 @@ def perform_fourier_pairwise_stats(conf, subdata, metric, f, plant_id_col='i', t
         subdata['Type'] = subdata['Experiment']
     if 'Experiment' not in subdata.columns and type_col in subdata.columns:
         subdata['Experiment'] = subdata[type_col]
-    extra_label = get_extra_variable_label(conf)
 
-    enabled = modes if modes is not None else get_enabled_comparison_modes(conf)
+    enabled = modes if modes is not None else comparison_modes_for_run(conf, subdata)
     for mode in enabled:
         spec = _mode_spec(mode, conf=conf)
         group_col = spec['group_col']

@@ -1,40 +1,27 @@
 """Comparison-mode plots paired with statistical report outputs."""
 
-import os
-
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 from .stats_utils import (
     _mode_spec,
-    _usable_groups,
+    comparison_modes_for_run,
     ensure_factor_columns,
-    get_enabled_comparison_modes,
 )
 from .utils.fileUtilities import normalize_factor_value, UNSPECIFIED_FACTOR
-from .utils.report_paths import append_report_index, comparison_plot_path, comparison_stats_path
-from .utils.report_style import legend_title_for_hue, palette_for_hue
+from .utils.report_paths import comparison_plot_path
+from .utils.report_style import (
+    apply_factor_axis_labels,
+    axis_label_for_column,
+    legend_title_for_hue,
+    palette_for_hue,
+)
 
 plt.switch_backend('agg')
 
 
 def _plot_title(metric_label, spec):
     return f'{metric_label} — {spec["header"]}'
-
-
-def _should_skip_mode(data, mode, conf):
-    spec = _mode_spec(mode, conf=conf)
-    if spec['group_col'] == 'PlateCondition' and len(_usable_groups(data['PlateCondition'].unique())) < 2:
-        return True
-    if spec['group_col'] == 'ExtraVariable' and len(_usable_groups(data['ExtraVariable'].unique())) < 2:
-        return True
-    if spec['stratify_col'] == 'PlateCondition' and len(_usable_groups(data['PlateCondition'].unique())) < 1:
-        return True
-    if spec['stratify_col'] == 'ExtraVariable' and len(_usable_groups(data['ExtraVariable'].unique())) < 1:
-        return True
-    if spec['stratify_col'] == 'Experiment' and len(_usable_groups(data['Experiment'].unique())) < 1:
-        return True
-    return False
 
 
 def _palette_kwargs(data, hue_col, conf):
@@ -49,6 +36,39 @@ def _set_hue_legend(ax, hue_col, conf):
     leg = ax.get_legend()
     if leg is not None:
         leg.set_title(legend_title_for_hue(hue_col, conf))
+
+
+_FACTOR_COLUMNS = frozenset({'Experiment', 'PlateCondition', 'ExtraVariable', 'Type'})
+
+
+def finalize_comparison_axes(plot_obj, conf, *, x_col=None, hue_col=None, facet_col=None):
+    """Apply configured factor labels to a matplotlib Axes or seaborn FacetGrid."""
+    if hasattr(plot_obj, 'axes'):
+        g = plot_obj
+        if facet_col in _FACTOR_COLUMNS:
+            g.set_titles(col_template='{col_name}')
+        x_label = axis_label_for_column(x_col, conf) if x_col in _FACTOR_COLUMNS else None
+        for ax in g.axes.flat:
+            if x_label:
+                ax.set_xlabel(x_label)
+            if hue_col:
+                _set_hue_legend(ax, hue_col, conf)
+    else:
+        apply_factor_axis_labels(plot_obj, conf, x_col=x_col, hue_col=hue_col)
+
+
+def _mode_axes(mode, x_col='ElapsedTime (h)'):
+    """Return (x_col, hue_col, facet_col) for a comparison mode."""
+    specs = {
+        'by_genotype': (x_col, 'Experiment', None),
+        'genotype_by_plate': (x_col, 'Experiment', 'PlateCondition'),
+        'genotype_by_extra': (x_col, 'Experiment', 'ExtraVariable'),
+        'by_plate_condition': (x_col, 'PlateCondition', None),
+        'by_extra_variable': (x_col, 'ExtraVariable', None),
+        'plate_within_genotype': (x_col, 'PlateCondition', 'Experiment'),
+        'extra_within_genotype': (x_col, 'ExtraVariable', 'Experiment'),
+    }
+    return specs.get(mode, (x_col, None, None))
 
 
 def _lineplot_kwargs(x_col, y_col, hue_col, facet_col=None, data=None, conf=None):
@@ -79,12 +99,9 @@ def _catplot_kwargs(data, x, y, hue, col, conf, kind='box'):
 
 def plot_comparison_mode(conf, data, metric, mode, output_path, *,
                          x_col='ElapsedTime (h)', metric_label=None, title=None,
-                         module=None, metric_slug_name=None, analysis_type='temporal',
-                         register_index=True):
+                         module=None, metric_slug_name=None, analysis_type='temporal'):
     """Save a line plot matching the grouping used for a comparison mode."""
     data = ensure_factor_columns(data)
-    if _should_skip_mode(data, mode, conf):
-        return False
 
     spec = _mode_spec(mode, conf=conf)
     metric_label = metric_label or metric
@@ -127,20 +144,11 @@ def plot_comparison_mode(conf, data, metric, mode, output_path, *,
         else:
             return False
 
+        axes_x, hue_col, facet_col = _mode_axes(mode, x_col)
+        finalize_comparison_axes(g, conf, x_col=axes_x, hue_col=hue_col, facet_col=facet_col)
         g.fig.suptitle(title, y=1.02)
         g.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close('all')
-
-        if register_index and module and metric_slug_name:
-            stats_path = comparison_stats_path(
-                os.path.dirname(output_path), mode, metric_slug=metric_slug_name,
-            )
-            append_report_index(
-                conf, module, metric_slug_name, analysis_type, mode,
-                plot_file_path=output_path,
-                stats_file_path=stats_path if os.path.exists(stats_path) else None,
-                description=title,
-            )
         return True
     except Exception:
         plt.close('all')
@@ -152,8 +160,6 @@ def plot_scalar_comparison_mode(conf, data, metric, mode, base_dir, *,
                                 metric_label=None, x_col='Experiment', plot_kind='box'):
     """Box/swarm plot for scalar metrics (FPCA PCs, etc.)."""
     data = ensure_factor_columns(data)
-    if _should_skip_mode(data, mode, conf):
-        return False
 
     spec = _mode_spec(mode, conf=conf)
     metric_label = metric_label or metric
@@ -167,15 +173,17 @@ def plot_scalar_comparison_mode(conf, data, metric, mode, base_dir, *,
             sns.boxplot(data=data, x=x_col, y=metric, hue='Experiment', ax=ax,
                         **_palette_kwargs(data, 'Experiment', conf))
             ax.set_title(title)
-            _set_hue_legend(ax, 'Experiment', conf)
+            finalize_comparison_axes(ax, conf, x_col=x_col, hue_col='Experiment')
         elif mode == 'genotype_by_plate':
             g = sns.catplot(**_catplot_kwargs(data, 'Experiment', metric, 'Experiment', 'PlateCondition', conf, plot_kind))
+            finalize_comparison_axes(g, conf, x_col='Experiment', hue_col='Experiment', facet_col='PlateCondition')
             g.fig.suptitle(title, y=1.02)
             g.savefig(output_path, dpi=300, bbox_inches='tight')
             plt.close('all')
             return True
         elif mode == 'genotype_by_extra':
             g = sns.catplot(**_catplot_kwargs(data, 'Experiment', metric, 'Experiment', 'ExtraVariable', conf, plot_kind))
+            finalize_comparison_axes(g, conf, x_col='Experiment', hue_col='Experiment', facet_col='ExtraVariable')
             g.fig.suptitle(title, y=1.02)
             g.savefig(output_path, dpi=300, bbox_inches='tight')
             plt.close('all')
@@ -185,21 +193,23 @@ def plot_scalar_comparison_mode(conf, data, metric, mode, base_dir, *,
             sns.boxplot(data=data, x='PlateCondition', y=metric, hue='PlateCondition', ax=ax,
                         **_palette_kwargs(data, 'PlateCondition', conf))
             ax.set_title(title)
-            _set_hue_legend(ax, 'PlateCondition', conf)
+            finalize_comparison_axes(ax, conf, x_col='PlateCondition', hue_col='PlateCondition')
         elif mode == 'by_extra_variable':
             fig, ax = plt.subplots(figsize=(8, 6))
             sns.boxplot(data=data, x='ExtraVariable', y=metric, hue='ExtraVariable', ax=ax,
                         **_palette_kwargs(data, 'ExtraVariable', conf))
             ax.set_title(title)
-            _set_hue_legend(ax, 'ExtraVariable', conf)
+            finalize_comparison_axes(ax, conf, x_col='ExtraVariable', hue_col='ExtraVariable')
         elif mode == 'plate_within_genotype':
             g = sns.catplot(**_catplot_kwargs(data, 'PlateCondition', metric, 'PlateCondition', 'Experiment', conf, plot_kind))
+            finalize_comparison_axes(g, conf, x_col='PlateCondition', hue_col='PlateCondition', facet_col='Experiment')
             g.fig.suptitle(title, y=1.02)
             g.savefig(output_path, dpi=300, bbox_inches='tight')
             plt.close('all')
             return True
         elif mode == 'extra_within_genotype':
             g = sns.catplot(**_catplot_kwargs(data, 'ExtraVariable', metric, 'ExtraVariable', 'Experiment', conf, plot_kind))
+            finalize_comparison_axes(g, conf, x_col='ExtraVariable', hue_col='ExtraVariable', facet_col='Experiment')
             g.fig.suptitle(title, y=1.02)
             g.savefig(output_path, dpi=300, bbox_inches='tight')
             plt.close('all')
@@ -221,8 +231,6 @@ def plot_interval_comparison_mode(conf, data, metric, mode, base_dir, *,
                                    analysis_type='interval', metric_label=None):
     """Violin/swarm plot for interval-based metrics (convex hull, angles)."""
     data = ensure_factor_columns(data)
-    if _should_skip_mode(data, mode, conf):
-        return False
 
     spec = _mode_spec(mode, conf=conf)
     metric_label = metric_label or metric
@@ -237,15 +245,17 @@ def plot_interval_comparison_mode(conf, data, metric, mode, base_dir, *,
             sns.violinplot(data=data, x=x_col, y=metric, hue='Experiment', ax=ax, inner=None, **exp_palette)
             sns.swarmplot(data=data, x=x_col, y=metric, hue='Experiment', ax=ax, dodge=True, size=3, **exp_palette)
             ax.set_title(title)
-            _set_hue_legend(ax, 'Experiment', conf)
+            finalize_comparison_axes(ax, conf, x_col=x_col, hue_col='Experiment')
         elif mode == 'genotype_by_plate':
             g = sns.catplot(**_catplot_kwargs(data, x_col, metric, 'Experiment', 'PlateCondition', conf, 'violin'))
+            finalize_comparison_axes(g, conf, x_col=x_col, hue_col='Experiment', facet_col='PlateCondition')
             g.fig.suptitle(title, y=1.02)
             g.savefig(output_path, dpi=300, bbox_inches='tight')
             plt.close('all')
             return True
         elif mode == 'genotype_by_extra':
             g = sns.catplot(**_catplot_kwargs(data, x_col, metric, 'Experiment', 'ExtraVariable', conf, 'violin'))
+            finalize_comparison_axes(g, conf, x_col=x_col, hue_col='Experiment', facet_col='ExtraVariable')
             g.fig.suptitle(title, y=1.02)
             g.savefig(output_path, dpi=300, bbox_inches='tight')
             plt.close('all')
@@ -255,21 +265,23 @@ def plot_interval_comparison_mode(conf, data, metric, mode, base_dir, *,
             sns.violinplot(data=data, x=x_col, y=metric, hue='PlateCondition', ax=ax,
                            **_palette_kwargs(data, 'PlateCondition', conf))
             ax.set_title(title)
-            _set_hue_legend(ax, 'PlateCondition', conf)
+            finalize_comparison_axes(ax, conf, x_col=x_col, hue_col='PlateCondition')
         elif mode == 'by_extra_variable':
             fig, ax = plt.subplots(figsize=(8, 6))
             sns.violinplot(data=data, x=x_col, y=metric, hue='ExtraVariable', ax=ax,
                            **_palette_kwargs(data, 'ExtraVariable', conf))
             ax.set_title(title)
-            _set_hue_legend(ax, 'ExtraVariable', conf)
+            finalize_comparison_axes(ax, conf, x_col=x_col, hue_col='ExtraVariable')
         elif mode == 'plate_within_genotype':
             g = sns.catplot(**_catplot_kwargs(data, x_col, metric, 'PlateCondition', 'Experiment', conf, 'violin'))
+            finalize_comparison_axes(g, conf, x_col=x_col, hue_col='PlateCondition', facet_col='Experiment')
             g.fig.suptitle(title, y=1.02)
             g.savefig(output_path, dpi=300, bbox_inches='tight')
             plt.close('all')
             return True
         elif mode == 'extra_within_genotype':
             g = sns.catplot(**_catplot_kwargs(data, x_col, metric, 'ExtraVariable', 'Experiment', conf, 'violin'))
+            finalize_comparison_axes(g, conf, x_col=x_col, hue_col='ExtraVariable', facet_col='Experiment')
             g.fig.suptitle(title, y=1.02)
             g.savefig(output_path, dpi=300, bbox_inches='tight')
             plt.close('all')
@@ -289,53 +301,31 @@ def plot_interval_comparison_mode(conf, data, metric, mode, base_dir, *,
 def emit_temporal_comparison_plots(conf, data, metric, base_dir, *, module, metric_slug_name,
                                    analysis_type='temporal', metric_label=None):
     """Generate paired {metric}_{mode}.png for every enabled comparison mode."""
-    for mode in get_enabled_comparison_modes(conf):
+    for mode in comparison_modes_for_run(conf, data):
         output_path = comparison_plot_path(base_dir, mode, metric_slug=metric_slug_name)
         plot_comparison_mode(
             conf, data, metric, mode, output_path,
             metric_label=metric_label or metric,
             module=module, metric_slug_name=metric_slug_name,
-            analysis_type=analysis_type, register_index=True,
+            analysis_type=analysis_type,
         )
 
 
 def emit_interval_comparison_plots(conf, data, metric, base_dir, *, module, metric_slug_name,
                                    analysis_type='interval', x_col='Day', metric_label=None):
-    for mode in get_enabled_comparison_modes(conf):
+    for mode in comparison_modes_for_run(conf, data):
         plot_interval_comparison_mode(
             conf, data, metric, mode, base_dir,
             x_col=x_col, module=module, metric_slug_name=metric_slug_name,
             analysis_type=analysis_type, metric_label=metric_label or metric,
         )
-        spec = _mode_spec(mode, conf=conf)
-        title = _plot_title(metric_label or metric, spec)
-        stats_path = comparison_stats_path(base_dir, mode, metric_slug=metric_slug_name)
-        plot_path = comparison_plot_path(base_dir, mode, metric_slug=metric_slug_name)
-        if os.path.exists(plot_path):
-            append_report_index(
-                conf, module, metric_slug_name, analysis_type, mode,
-                plot_file_path=plot_path,
-                stats_file_path=stats_path if os.path.exists(stats_path) else None,
-                description=title,
-            )
 
 
 def emit_scalar_comparison_plots(conf, data, metric, base_dir, *, module, metric_slug_name,
                                  analysis_type='scalar', metric_label=None):
-    for mode in get_enabled_comparison_modes(conf):
+    for mode in comparison_modes_for_run(conf, data):
         plot_scalar_comparison_mode(
             conf, data, metric, mode, base_dir,
             module=module, metric_slug_name=metric_slug_name,
             analysis_type=analysis_type, metric_label=metric_label or metric,
         )
-        spec = _mode_spec(mode, conf=conf)
-        title = _plot_title(metric_label or metric, spec)
-        stats_path = comparison_stats_path(base_dir, mode, metric_slug=metric_slug_name)
-        plot_path = comparison_plot_path(base_dir, mode, metric_slug=metric_slug_name)
-        if os.path.exists(plot_path):
-            append_report_index(
-                conf, module, metric_slug_name, analysis_type, mode,
-                plot_file_path=plot_path,
-                stats_file_path=stats_path if os.path.exists(stats_path) else None,
-                description=title,
-            )

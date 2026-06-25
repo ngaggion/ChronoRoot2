@@ -7,7 +7,10 @@ os.environ['QT_LOGGING_RULES'] = '*=false'
 os.environ['LIBGL_ALWAYS_INDIRECT'] = '1'
 
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QPushButton
+from PyQt5.QtWidgets import (
+    QTableWidget, QTableWidgetItem, QPushButton, QTreeWidget, QTreeWidgetItem, QLineEdit,
+    QSplitter,
+)
 from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox
 
 import subprocess
@@ -26,18 +29,18 @@ from analysis.utils.fileUtilities import (
     normalize_factor_value,
     plant_slot_has_finished_analysis,
 )
+from analysis.utils.report_utils import natural_key as natural_keys
 from gui.config_store import ConfigStore, PROJECT_CONFIG_NAME
 from gui import pipeline_runner
 from gui.stats_config_dialog import StatsConfigDialog
+from gui.report_browser import ReportBranch, load_report_catalog
 
 TAB_HEIGHT = 630
+REPORT_PLOT_ROLE = QtCore.Qt.UserRole
+REPORT_STATS_ROLE = QtCore.Qt.UserRole + 1
 
 WINDOW_WIDTH = 811
 WINDOW_HEIGHT = TAB_HEIGHT + 20
-
-        
-def natural_keys(text):
-    return [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', text)]
 
 class AspectRatioLabel(QLabel):
     def __init__(self, *args, **kwargs):
@@ -1452,58 +1455,183 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
         return
 
-    def update_report_labels(self):
-        if not hasattr(self, 'projectField') or not hasattr(self, 'report_dropdown'):
-            return
-                
-        report_path = os.path.join(self.projectField.text(), "Report/")
-        current_report = self.report_dropdown.currentText()
-        
-        if (self.projectField.text() == "" or not os.path.exists(self.projectField.text()) 
-            or not os.path.exists(report_path) or current_report == ""):
-                
-            self.report_label_1.clear()
-            report_path_1 = os.path.join("placeholder_figures/report_placeholder.png")
-            size = QtCore.QSize(750, 550)
-            pixmap_1 = QtGui.QPixmap(report_path_1)
-            self.report_label_1.set_pixmap(pixmap_1, size)
-            self.report_label_1.setAlignment(QtCore.Qt.AlignCenter)
-            self.report_label_1.show()
-            return 
+    def _load_report_conf(self):
+        if not hasattr(self, 'projectField') or not self.projectField.text():
+            return None
+        config_path = os.path.join(self.projectField.text(), PROJECT_CONFIG_NAME)
+        if not os.path.isfile(config_path):
+            return None
+        try:
+            with open(config_path, 'r') as handle:
+                return json.load(handle)
+        except Exception:
+            return None
+
+    def _append_report_tree_item(self, parent, node):
+        if isinstance(node, ReportBranch):
+            item = QTreeWidgetItem([node.label])
+            item.setFlags(item.flags() & ~QtCore.Qt.ItemIsSelectable)
+            if parent is None:
+                self.report_tree.addTopLevelItem(item)
+            else:
+                parent.addChild(item)
+            for child in node.children:
+                self._append_report_tree_item(item, child)
+            item.setExpanded(True)
+            return item
+
+        item = QTreeWidgetItem([node.label])
+        item.setData(0, REPORT_PLOT_ROLE, node.plot_file)
+        item.setData(0, REPORT_STATS_ROLE, node.stats_file or '')
+        if parent is None:
+            self.report_tree.addTopLevelItem(item)
         else:
-            report_path_1 = os.path.join(report_path, current_report)
-            size = QtCore.QSize(750, 550)
-            pixmap_1 = QtGui.QPixmap(report_path_1)
-            self.report_label_1.set_pixmap(pixmap_1, size)
-            self.report_label_1.setAlignment(QtCore.Qt.AlignCenter)
-            self.report_label_1.show()
-        return
-    
-    def refresh_tab5(self):
-        report_path = os.path.join(self.projectField.text(), "Report")
-        if not os.path.isdir(report_path):
-            self.report_figures = []
-            self.report_dropdown.clear()
+            parent.addChild(item)
+        return item
+
+    def _show_report_placeholder(self):
+        self.report_label_1.clear()
+        report_path_1 = os.path.join("placeholder_figures/report_placeholder.png")
+        pixmap_1 = QtGui.QPixmap(report_path_1)
+        self.report_label_1.set_pixmap(pixmap_1, self.report_label_1.size())
+        self.report_label_1.setAlignment(QtCore.Qt.AlignCenter)
+        self.report_label_1.show()
+        if hasattr(self, 'open_stats_button_tab5'):
+            self.open_stats_button_tab5.setEnabled(False)
+
+    def update_report_labels(self):
+        if not hasattr(self, 'projectField') or not hasattr(self, 'report_tree'):
             return
 
-        figures = pathlib.Path(report_path).glob("**/*.png")
-        self.report_figures = sorted(
-            [str(figure.relative_to(report_path)) for figure in figures],
-            key=natural_keys,
-            reverse=True,
-        )
-        self.report_dropdown.clear()
-        self.report_dropdown.addItems(self.report_figures)
-    
+        report_path = os.path.join(self.projectField.text(), "Report")
+        current = self.report_tree.currentItem()
+        current_report = current.data(0, REPORT_PLOT_ROLE) if current is not None else None
+
+        if (self.projectField.text() == "" or not os.path.exists(self.projectField.text())
+                or not os.path.isdir(report_path) or not current_report):
+            self._show_report_placeholder()
+            return
+
+        report_path_1 = os.path.join(report_path, current_report)
+        if not os.path.isfile(report_path_1):
+            self._show_report_placeholder()
+            return
+
+        size = self.report_label_1.size()
+        if size.width() < 10 or size.height() < 10:
+            size = QtCore.QSize(750, 550)
+        pixmap_1 = QtGui.QPixmap(report_path_1)
+        self.report_label_1.set_pixmap(pixmap_1, size)
+        self.report_label_1.setAlignment(QtCore.Qt.AlignCenter)
+        self.report_label_1.show()
+
+        stats_file = current.data(0, REPORT_STATS_ROLE) if current is not None else ''
+        has_stats = bool(stats_file) and os.path.isfile(os.path.join(report_path, stats_file))
+        self.open_stats_button_tab5.setEnabled(has_stats)
+
+    def _filter_report_tree(self, text):
+        text = text.strip().lower()
+
+        def visit(item):
+            child_match = any(visit(item.child(i)) for i in range(item.childCount()))
+            own_match = False
+            if item.childCount() == 0:
+                own_match = text in item.text(0).lower() or text in (item.data(0, REPORT_PLOT_ROLE) or '').lower()
+            visible = child_match or own_match or not text
+            item.setHidden(not visible)
+            return visible
+
+        for i in range(self.report_tree.topLevelItemCount()):
+            visit(self.report_tree.topLevelItem(i))
+
+    def refresh_tab5(self):
+        if not hasattr(self, 'report_tree'):
+            return
+
+        self.report_tree.clear()
+        report_path = os.path.join(self.projectField.text(), "Report")
+        if not os.path.isdir(report_path):
+            self._show_report_placeholder()
+            return
+
+        try:
+            catalog = load_report_catalog(report_path)
+        except Exception as exc:
+            print(f'Warning: report catalog failed ({exc}); showing placeholder.')
+            catalog = []
+
+        for branch in catalog:
+            self._append_report_tree_item(None, branch)
+
+        self.report_tree.resizeColumnToContents(0)
+
+        if self.report_tree.topLevelItemCount() == 0:
+            self._show_report_placeholder()
+            return
+
+        if hasattr(self, 'report_filter_field'):
+            self._filter_report_tree(self.report_filter_field.text())
+
+        first_leaf = None
+        iterator = QtWidgets.QTreeWidgetItemIterator(self.report_tree)
+        while iterator.value():
+            item = iterator.value()
+            if item.childCount() == 0 and item.data(0, REPORT_PLOT_ROLE):
+                first_leaf = item
+                break
+            iterator += 1
+        if first_leaf is not None:
+            self.report_tree.setCurrentItem(first_leaf)
+        self.update_report_labels()
+
+    def open_report_stats(self):
+        current = self.report_tree.currentItem() if hasattr(self, 'report_tree') else None
+        if current is None:
+            return
+        stats_file = current.data(0, REPORT_STATS_ROLE)
+        if not stats_file:
+            return
+        stats_path = os.path.join(self.projectField.text(), "Report", stats_file)
+        if os.path.isfile(stats_path):
+            self.universal_open(stats_path)
+
     def setup_tab5_elements(self):
         self.tab5 = QtWidgets.QWidget()
         self.tab5.setObjectName("tab5")
         self.tab_widget.addTab(self.tab5, "Report")
 
-        # Create the image labels
         self.report_label_1 = AspectRatioLabel()
-        self.report_label_1.setMaximumSize(750, 550)
-        self.report_label_1.setObjectName("report_label_1") 
+        self.report_label_1.setObjectName("report_label_1")
+        self.report_label_1.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding,
+        )
+        self.report_label_1.setMinimumSize(200, 200)
+
+        self.report_tree = QTreeWidget(self.tab5)
+        self.report_tree.setHeaderHidden(True)
+        self.report_tree.setMinimumWidth(200)
+        self.report_tree.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.report_tree.setTextElideMode(QtCore.Qt.ElideNone)
+        self.report_tree.header().setStretchLastSection(False)
+        self.report_tree.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding,
+        )
+        self.report_tree.currentItemChanged.connect(
+            lambda _current, _previous: self.update_report_labels()
+        )
+
+        self.report_splitter = QSplitter(QtCore.Qt.Horizontal, self.tab5)
+        self.report_splitter.addWidget(self.report_tree)
+        self.report_splitter.addWidget(self.report_label_1)
+        self.report_splitter.setStretchFactor(0, 1)
+        self.report_splitter.setStretchFactor(1, 2)
+        self.report_splitter.splitterMoved.connect(
+            lambda _pos, _index: self.update_report_labels()
+        )
+
+        self.report_filter_field = QLineEdit(self.tab5)
+        self.report_filter_field.setPlaceholderText("Filter figures...")
+        self.report_filter_field.textChanged.connect(self._filter_report_tree)
 
         self.refresh_button_tab5 = QPushButton(self.tab5)
         self.refresh_button_tab5.setObjectName("Refresh_5")
@@ -1511,13 +1639,14 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.refresh_button_tab5.setToolTip(
             "Update the list of available report figures based on the current project data.")
         self.refresh_button_tab5.clicked.connect(self.refresh_tab5)
-        
-        # create a menu to select the report
-        self.report_dropdown = QComboBox(self.tab5)
-        self.report_dropdown.setGeometry(QtCore.QRect(10, 10, 161, 31))
-        self.report_dropdown.setObjectName("report_dropdown")
-        self.report_dropdown.currentIndexChanged.connect(self.update_report_labels)
-        
+
+        self.open_stats_button_tab5 = QPushButton(self.tab5)
+        self.open_stats_button_tab5.setObjectName("Open Stats")
+        self.open_stats_button_tab5.setText("Open stats")
+        self.open_stats_button_tab5.setToolTip("Open the stats file paired with the selected figure.")
+        self.open_stats_button_tab5.clicked.connect(self.open_report_stats)
+        self.open_stats_button_tab5.setEnabled(False)
+
         self.open_path_button_tab5 = QPushButton(self.tab5)
         self.open_path_button_tab5.setObjectName("Open Path")
         self.open_path_button_tab5.setText("Open Report Path")
@@ -1525,22 +1654,18 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             "Open the directory where generated reports are stored.")
         self.open_path_button_tab5.clicked.connect(self.open_report_folder)
 
-        # Set up the main layout
-        layout = QVBoxLayout()
-        
-        horizontal_layout_top = QHBoxLayout()
-        horizontal_layout_top.addWidget(self.report_label_1, 1)
-        horizontal_layout_top.setAlignment(QtCore.Qt.AlignCenter)
+        content_layout = QHBoxLayout()
+        content_layout.addWidget(self.report_splitter, 1)
 
-        horizontal_layout = QHBoxLayout()
-        horizontal_layout.addWidget(self.report_dropdown, 3)
-        horizontal_layout.addWidget(self.open_path_button_tab5, 1)
-        horizontal_layout.addWidget(self.refresh_button_tab5, 1)
-        horizontal_layout.setAlignment(QtCore.Qt.AlignCenter)
-                
-        layout.addLayout(horizontal_layout_top)
-        layout.addLayout(horizontal_layout)
-        
+        controls_layout = QHBoxLayout()
+        controls_layout.addWidget(self.report_filter_field, 3)
+        controls_layout.addWidget(self.open_stats_button_tab5, 1)
+        controls_layout.addWidget(self.open_path_button_tab5, 1)
+        controls_layout.addWidget(self.refresh_button_tab5, 1)
+
+        layout = QVBoxLayout()
+        layout.addLayout(content_layout)
+        layout.addLayout(controls_layout)
         self.tab5.setLayout(layout)
     
     def setup_tab6_elements(self):        

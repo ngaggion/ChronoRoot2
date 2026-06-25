@@ -17,6 +17,10 @@ from analysis.report import (
     performStatisticalAnalysis,
     generateTableTemporal,
 )
+from analysis.stats_utils import (
+    get_enabled_comparison_modes,
+    log_auto_disabled_modes,
+)
 
 from analysis.fourier_analysis import makeFourierPlots
 from analysis.lateral_angles import makeLateralAnglesPlots, plotLateralAnglesOnTop
@@ -32,11 +36,34 @@ from analysis.utils.fileUtilities import (
 from analysis.utils.report_paths import (
     data_file,
     individual_plots_dir,
-    module_dir,
+    overview_dir,
     MODULE_CONVEX,
-    reset_report_index,
-    write_report_index,
+    purge_disabled_comparison_outputs,
 )
+
+
+def _experiment_display_name(exp_dir):
+    exp_dir_name = os.path.basename(exp_dir)
+    real_exp_name = convertFromPathSafe(exp_dir_name)
+    first_meta = utils.load_paths(exp_dir, '*/*/*/metadata.json')
+    if first_meta:
+        try:
+            with open(first_meta[0], 'r') as f:
+                meta_data = json.load(f)
+                real_exp_name = meta_data.get('Experiment', real_exp_name)
+        except Exception:
+            pass
+    return exp_dir_name, real_exp_name
+
+
+def _normalize_temporal_dataframe(all_data):
+    all_data['Experiment'] = all_data['Experiment'].astype(str)
+    if 'PlateCondition' in all_data.columns:
+        all_data['PlateCondition'] = all_data['PlateCondition'].apply(normalize_factor_value)
+    if 'ExtraVariable' in all_data.columns:
+        all_data['ExtraVariable'] = all_data['ExtraVariable'].apply(normalize_factor_value)
+    return all_data
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='ChronoRoot: Report Generation')
@@ -49,14 +76,8 @@ if __name__ == "__main__":
     experiments = utils.load_paths(analysis_folder, '*')
 
     utils.ensure_directory(os.path.join(conf['MainFolder'], 'Report'))
-    reset_report_index()
-
-    all_data = pd.DataFrame()
-    convex_hull_df = pd.DataFrame()
 
     print("Report generation began. This may take a while.")
-
-    FORCE_REPORT = True
 
     temporal_parameters = [
         'MainRootLength (mm)', 'LateralRootsLength (mm)', 'TotalLength (mm)',
@@ -64,141 +85,161 @@ if __name__ == "__main__":
         'HypocotylLength (mm)',
     ]
 
-    if conf['doConvex']:
-        global_shape, global_center = convex_hull.calculate_atlas_geometry(experiments)
-
     temporal_data_path = data_file(conf, 'Temporal_Data.csv')
+    convex_data_path = data_file(conf, 'Convex_Hull_Data.csv')
 
-    if not os.path.exists(temporal_data_path) or FORCE_REPORT:
-        for exp_dir in experiments:
-            exp_dir_name = os.path.basename(exp_dir)
-            real_exp_name = convertFromPathSafe(exp_dir_name)
+    # --- Phase 1: temporal aggregate + individual plots ---
+    print('Phase 1/3: aggregating temporal data...')
+    plant_frames = []
+    n_experiments = len(experiments)
 
-            first_meta = utils.load_paths(exp_dir, '*/*/*/metadata.json')
-            if first_meta:
-                try:
-                    with open(first_meta[0], 'r') as f:
-                        meta_data = json.load(f)
-                        real_exp_name = meta_data.get('Experiment', real_exp_name)
-                except Exception:
-                    pass
+    for exp_index, exp_dir in enumerate(experiments, start=1):
+        exp_dir_name, real_exp_name = _experiment_display_name(exp_dir)
+        print(f'Phase 1/3: experiment {exp_index}/{n_experiments}: {real_exp_name}')
 
-            print(f'Loading experiment: {real_exp_name}')
+        iplots_exp_folder = individual_plots_dir(conf, exp_dir_name)
 
-            iplots_exp_folder = individual_plots_dir(conf, exp_dir_name)
+        rpi_paths = utils.load_paths(exp_dir, '*')
+        for rpi in rpi_paths:
+            rpi_name = os.path.basename(rpi)
+            cam_paths = utils.load_paths(rpi, '*')
+            for cam in cam_paths:
+                cam_name = os.path.basename(cam)
+                plant_paths = utils.load_paths(cam, '*')
+                for plant in plant_paths:
+                    plant_name = os.path.basename(plant)
+                    res_folder = get_latest_result_dir(plant)
+                    if res_folder is None:
+                        continue
 
-            rpi_paths = utils.load_paths(exp_dir, '*')
-            for rpi in rpi_paths:
-                rpi_name = os.path.basename(rpi)
-                cam_paths = utils.load_paths(rpi, '*')
-                for cam in cam_paths:
-                    cam_name = os.path.basename(cam)
-                    plant_paths = utils.load_paths(cam, '*')
-                    for plant in plant_paths:
-                        plant_name = os.path.basename(plant)
-                        res_folder = get_latest_result_dir(plant)
-                        if res_folder is None:
-                            continue
+                    meta = load_result_metadata(res_folder)
+                    plant_id = build_plant_id(rpi_name, cam_name, plant_name)
+                    file_csv = os.path.join(res_folder, 'PostProcess_Hour.csv')
 
-                        meta = load_result_metadata(res_folder)
-                        plant_id = build_plant_id(rpi_name, cam_name, plant_name)
-                        file_csv = os.path.join(res_folder, 'PostProcess_Hour.csv')
+                    if not os.path.exists(file_csv):
+                        continue
 
-                        if not os.path.exists(file_csv):
-                            continue
+                    data = pd.read_csv(file_csv)
+                    data['Plant_id'] = plant_id
+                    data = attach_plant_metadata_columns(
+                        data, meta,
+                        rpi_name=rpi_name,
+                        cam_name=cam_name,
+                        plant_name=plant_name,
+                        experiment_fallback=real_exp_name,
+                    )
+                    plant_frames.append(data)
 
-                        data = pd.read_csv(file_csv)
-                        data['Plant_id'] = plant_id
-                        data = attach_plant_metadata_columns(
-                            data, meta,
-                            rpi_name=rpi_name,
-                            cam_name=cam_name,
-                            plant_name=plant_name,
-                            experiment_fallback=real_exp_name,
-                        )
+                    plot_filename = f"{exp_dir_name}_{plant_id}.png"
+                    iplot_cache = os.path.join(res_folder, plot_filename)
+                    report_dest = os.path.join(iplots_exp_folder, plot_filename)
 
-                        all_data = pd.concat([all_data, data], ignore_index=True)
+                    if not os.path.exists(iplot_cache):
+                        plot_individual_plant(iplots_exp_folder, data, plot_filename)
+                        if os.path.exists(report_dest):
+                            shutil.copy(report_dest, iplot_cache)
+                    else:
+                        shutil.copy(iplot_cache, report_dest)
 
-                        plot_filename = f"{exp_dir_name}_{plant_id}.png"
-                        iplot_cache = os.path.join(res_folder, plot_filename)
-                        report_dest = os.path.join(iplots_exp_folder, plot_filename)
+    all_data = pd.concat(plant_frames, ignore_index=True) if plant_frames else pd.DataFrame()
+    all_data.to_csv(temporal_data_path, index=False)
+    print(f'Phase 1/3: wrote {temporal_data_path}')
 
-                        if not os.path.exists(iplot_cache):
-                            plot_individual_plant(iplots_exp_folder, data, plot_filename)
-                            if os.path.exists(report_dest):
-                                shutil.copy(report_dest, iplot_cache)
-                        else:
-                            shutil.copy(iplot_cache, report_dest)
+    all_data = _normalize_temporal_dataframe(all_data)
 
-            if conf['doConvex']:
-                print(f"Performing convex hull analysis for experiment: {real_exp_name}")
-                days = conf['daysConvexHull'].split(',')
-                convex_overview = module_dir(conf, MODULE_CONVEX)
+    config_modes = get_enabled_comparison_modes(conf)
+    effective_modes = get_enabled_comparison_modes(conf, all_data)
+    conf['effectiveComparisonModes'] = effective_modes
+    log_auto_disabled_modes(conf, config_modes, effective_modes)
 
-                atlases, current_convex_df = convex_hull.generate_root_atlases(
-                    exp_dir,
-                    days=days,
-                    timestep=conf['timeStep'],
-                    canvas_shape=global_shape,
-                    center_coords=global_center,
-                    rotate_root=True,
-                )
+    # --- Phase 2: convex hull ---
+    convex_hull_df = pd.DataFrame()
+    if conf.get('doConvex'):
+        print('Phase 2/3: convex hull analysis...')
+        global_shape, global_center = convex_hull.calculate_atlas_geometry(experiments)
+        convex_days = [int(d) for d in conf['daysConvexHull'].split(',') if str(d).strip()]
+        timestep = int(conf['timeStep'])
+        convex_overview = overview_dir(conf, MODULE_CONVEX)
+        convex_frames = []
+        n_experiments = len(experiments)
 
-                if not current_convex_df.empty:
-                    current_convex_df['Experiment'] = real_exp_name
-                    convex_hull_df = pd.concat([convex_hull_df, current_convex_df], ignore_index=True)
+        for exp_index, exp_dir in enumerate(experiments, start=1):
+            exp_dir_name, real_exp_name = _experiment_display_name(exp_dir)
+            print(f'Phase 2/3: convex hull ({exp_index}/{n_experiments}): {real_exp_name}')
 
-                if conf['saveImagesConvex'] and atlases:
-                    for i in range(len(days)):
-                        at_hull, at_cont, at_root = atlases[i]
-                        convex_hull.visualize_single_atlas(
-                            at_hull, at_cont, at_root,
-                            convex_overview, exp_dir_name, days[i],
-                        )
-                elif atlases:
-                    at_hull, at_cont, at_root = atlases[-1]
+            atlases, current_convex_df = convex_hull.generate_root_atlases(
+                exp_dir,
+                days=convex_days,
+                timestep=timestep,
+                canvas_shape=global_shape,
+                center_coords=global_center,
+                rotate_root=True,
+            )
+
+            if not current_convex_df.empty:
+                current_convex_df['Experiment'] = real_exp_name
+                convex_frames.append(current_convex_df)
+
+            if conf.get('saveImagesConvex') and atlases:
+                for i, day in enumerate(convex_days):
+                    at_hull, at_cont, at_root = atlases[i]
                     convex_hull.visualize_single_atlas(
                         at_hull, at_cont, at_root,
-                        convex_overview, exp_dir_name,
+                        convex_overview, exp_dir_name, day,
                     )
+            elif atlases:
+                at_hull, at_cont, at_root = atlases[-1]
+                convex_hull.visualize_single_atlas(
+                    at_hull, at_cont, at_root,
+                    convex_overview, exp_dir_name,
+                )
 
-        all_data.to_csv(temporal_data_path, index=False)
-    else:
-        all_data = pd.read_csv(temporal_data_path)
-        all_data['Experiment'] = all_data['Experiment'].astype(str)
-        if 'PlateCondition' in all_data.columns:
-            all_data['PlateCondition'] = all_data['PlateCondition'].apply(normalize_factor_value)
-        if 'ExtraVariable' in all_data.columns:
-            all_data['ExtraVariable'] = all_data['ExtraVariable'].apply(normalize_factor_value)
+        convex_hull_df = pd.concat(convex_frames, ignore_index=True) if convex_frames else pd.DataFrame()
+        if not convex_hull_df.empty:
+            convex_hull_df.to_csv(convex_data_path, index=False)
+            print(f'Phase 2/3: wrote {convex_data_path}')
+
+    purge_disabled_comparison_outputs(conf, effective_modes)
+
+    # --- Phase 3: figures and statistics ---
+    print('Phase 3/3: generating report figures and statistics...')
 
     for parameter in temporal_parameters:
+        print(f'Phase 3/3: temporal analysis — {parameter}')
         performStatisticalAnalysis(conf, all_data, parameter)
 
     plot_info_all(conf, all_data)
     generateTableTemporal(conf, all_data)
 
-    if conf['doFPCA']:
+    if conf.get('doFPCA'):
+        print('Phase 3/3: FPCA analysis')
         performFPCA(args.config)
 
-    if conf['doConvex'] and not convex_hull_df.empty:
-        convex_hull_df.to_csv(data_file(conf, 'Convex_Hull_Data.csv'), index=False)
+    if conf.get('doConvex') and not convex_hull_df.empty:
+        print('Phase 3/3: convex hull summary and statistics')
         convex_hull.plot_hull_metrics_summary(conf, convex_hull_df)
         convex_hull.visualize_combined_atlases(conf)
+
+        saved_modes = conf.get('effectiveComparisonModes')
+        conf['effectiveComparisonModes'] = get_enabled_comparison_modes(conf, convex_hull_df)
 
         convex_params = [
             'Convex Hull Area', 'Lateral Root Area Density', 'Total Root Area Density',
             'Convex Hull Aspect Ratio', 'Convex Hull Height', 'Convex Hull Width',
         ]
         for param in convex_params:
+            print(f'Phase 3/3: convex hull — {param}')
             convex_hull.analyze_hull_statistics(conf, convex_hull_df, param)
 
-    if conf['doFourier']:
+        conf['effectiveComparisonModes'] = saved_modes
+
+    if conf.get('doFourier'):
+        print('Phase 3/3: Fourier analysis')
         makeFourierPlots(conf)
 
-    if conf['doLateralAngles']:
+    if conf.get('doLateralAngles'):
+        print('Phase 3/3: lateral angles analysis')
         makeLateralAnglesPlots(conf)
         plotLateralAnglesOnTop(conf)
 
-    index_path = write_report_index(conf)
-    print(f"Report index written to {index_path}")
     print("Report generation finished.")
