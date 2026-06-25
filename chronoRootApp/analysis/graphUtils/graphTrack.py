@@ -6,7 +6,7 @@ Assigns node types and tracks nodes across frames.
 import numpy as np
 import networkx as nx
 
-def graphInit(graph):
+def graphInit(graph, main_root_class=1):
     """
     Initialize a newly created graph by assigning node types.
     Node types:
@@ -24,31 +24,90 @@ def graphInit(graph):
     node_list = list(graph.nodes())
     if len(node_list) == 0:
         raise Exception("Cannot initialize empty graph")
+
+    # 1. Identify Main Root Sub-components & Set Traversal Costs EARLY
+    c1_edges = [(u, v) for u, v, data in graph.edges(data=True) 
+                if data.get('orig_root_type', data.get('root_type')) == main_root_class]
     
-    # Get all node positions
-    positions = np.array([graph.nodes[node]['pos'] for node in node_list])
-    
-    # Find seed (topmost = minimum y coordinate)
-    seed_idx = np.argmin(positions[:, 1])
-    seed_node = node_list[seed_idx]
-    seed_position = positions[seed_idx]
-    
-    # Find main root tip (bottommost = maximum y coordinate)
-    tip_idx = np.argmax(positions[:, 1])
-    tip_node = node_list[tip_idx]
-    tip_position = positions[tip_idx]
-    
-    # Check if seed and tip are the same (degenerate case)
-    if seed_node == tip_node:
-        raise Exception("Seed and tip nodes are the same - cannot initialize graph")
-    
-    # Assign node types
-    for i, node in enumerate(node_list):
-        node_position = positions[i]
-        if np.array_equal(node_position, seed_position):
+    c1_nodes_set = set()
+    for u, v in c1_edges:
+        c1_nodes_set.add(u)
+        c1_nodes_set.add(v)
+        
+    for u, v, data in graph.edges(data=True):
+        phys_len = data.get('weight', 1.0)
+        edge_type = data.get('orig_root_type', data.get('root_type'))
+        
+        if edge_type == main_root_class:
+            data['traversal_cost'] = phys_len
+        else:
+            if phys_len < 5.0 and (u in c1_nodes_set or v in c1_nodes_set):
+                data['traversal_cost'] = phys_len * 2.0 
+            else:
+                data['traversal_cost'] = phys_len * 100.0
+
+    c1_nodes = list(c1_nodes_set)
+    ini_node, ftip_node = None, None
+
+    # 2. Candidate Evaluation & Length Maximization
+    if c1_nodes:
+        # Get the absolute highest and lowest nodes (captures T-junction seeds/tips)
+        abs_top_node = min(c1_nodes, key=lambda n: n[1])
+        abs_bottom_node = max(c1_nodes, key=lambda n: n[1])
+        
+        # Find isolated nodes (degree 1)
+        c1_endpoints = [n for n in c1_nodes if graph.degree(n) == 1]
+        
+        # Expand candidates: Endpoints UNION Absolute Extremities
+        candidates = list(set(c1_endpoints + [abs_top_node, abs_bottom_node]))
+        
+        if len(candidates) >= 2:
+            max_phys_length = -1
+            best_pair = (None, None)
+            
+            # Compare all candidates to find the longest continuous main root path
+            for i in range(len(candidates)):
+                for j in range(i + 1, len(candidates)):
+                    n1, n2 = candidates[i], candidates[j]
+                    try:
+                        path = nx.shortest_path(graph, source=n1, target=n2, weight='traversal_cost')
+                        phys_len = sum(graph.edges[path[k], path[k+1]].get('weight', 1.0) for k in range(len(path) - 1))
+                        
+                        if phys_len > max_phys_length:
+                            max_phys_length = phys_len
+                            best_pair = (n1, n2)
+                            
+                    except nx.NetworkXNoPath:
+                        continue
+                        
+            if best_pair[0] is not None:
+                # Sort the winning pair by Y-coordinate
+                if best_pair[0][1] < best_pair[1][1]:
+                    ini_node, ftip_node = best_pair[0], best_pair[1]
+                else:
+                    ini_node, ftip_node = best_pair[1], best_pair[0]
+            else:
+                ini_node, ftip_node = abs_top_node, abs_bottom_node
+        else:
+            ini_node, ftip_node = abs_top_node, abs_bottom_node
+            
+        if ini_node == ftip_node and len(c1_nodes) > 1:
+            ini_node, ftip_node = abs_top_node, abs_bottom_node
+            
+    else:
+        # Fallback if no main root edges exist
+        all_nodes = list(graph.nodes())
+        ini_node = min(all_nodes, key=lambda n: n[1])
+        ftip_node = max(all_nodes, key=lambda n: n[1])
+
+    # 3. Assign topological types
+    for node in graph.nodes():
+        if node == ini_node:
             graph.nodes[node]['type'] = "Ini"
-        elif np.array_equal(node_position, tip_position):
+            graph.nodes[node]['age'] = 1
+        elif node == ftip_node:
             graph.nodes[node]['type'] = "FTip"
+            graph.nodes[node]['age'] = 1
         else:
             degree = graph.degree(node)
             if degree > 2:
@@ -57,34 +116,23 @@ def graphInit(graph):
                 graph.nodes[node]['type'] = "LTip"
             else:
                 graph.nodes[node]['type'] = "null"
-    
-    # Special case: if graph has only 2 nodes
-    if len(node_list) == 2:
-        # Check if edge exists
-        if graph.has_edge(seed_node, tip_node):
-            graph.edges[seed_node, tip_node]['root_type'] = 10
-            graph.nodes[seed_node]['age'] = 1
-            graph.nodes[tip_node]['age'] = 1
-        else:
-            raise Exception(f"Graph has 2 nodes but no edge between them: {seed_node} and {tip_node}")
-    else:
-        # Find shortest weighted path from seed to tip
+
+    # 4. Main Path Extraction
+    if ini_node != ftip_node:
         try:
-            main_root_path = nx.shortest_path(
-                graph,
-                source=seed_node, 
-                target=tip_node, 
-                weight='weight'
+            main_path = nx.shortest_path(
+                graph, 
+                source=ini_node, 
+                target=ftip_node, 
+                weight='traversal_cost'
             )
-            
-            # Mark all edges on main root path
-            for i in range(len(main_root_path) - 1):
-                u = main_root_path[i]
-                v = main_root_path[i + 1]
+            for i in range(len(main_path) - 1):
+                u, v = main_path[i], main_path[i + 1]
                 graph.edges[u, v]['root_type'] = 10
+                
         except nx.NetworkXNoPath:
-            raise Exception(f"No path found between seed {seed_node} and tip {tip_node}")
-    
+            print(f"Warning: Disconnected graph structure between {ini_node} and {ftip_node}.")
+
     return graph
 
 
