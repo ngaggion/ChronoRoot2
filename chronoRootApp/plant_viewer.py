@@ -320,11 +320,22 @@ class ChronoViewWindow(QMainWindow):
 class PlantROISelectorWindow(QDialog):
     """Single-plant ROI selector; prior ROIs drawn on the frame via plot.draw_labeled_roi."""
 
-    def __init__(self, images, seg_files, previous_rois=None, time_delta=15, parent=None):
+    def __init__(
+        self,
+        images,
+        seg_files,
+        previous_rois=None,
+        time_delta=15,
+        plant_label=None,
+        own_previous_roi=None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.images = images
         self.seg_files = seg_files
         self.previous_rois = previous_rois or []
+        self.plant_label = plant_label
+        self.own_previous_roi = own_previous_roi
         self.time_delta = time_delta
         self.pending_roi = None
         self._selected_roi = None
@@ -338,6 +349,11 @@ class PlantROISelectorWindow(QDialog):
         self.setFocusPolicy(Qt.StrongFocus)
 
         layout = QVBoxLayout(self)
+        if self.plant_label:
+            self.lbl_group = QLabel(f"Select ROI for: {self.plant_label}")
+            self.lbl_group.setAlignment(Qt.AlignCenter)
+            self.lbl_group.setStyleSheet("font-weight: bold; color: #003366;")
+            layout.addWidget(self.lbl_group)
         self.lbl_info = QLabel()
         self.lbl_info.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.lbl_info)
@@ -371,7 +387,7 @@ class PlantROISelectorWindow(QDialog):
         action_layout.addWidget(self.btn_cancel)
         layout.addLayout(action_layout)
 
-        self._update_display()
+        self._update_display(refit=True)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
@@ -393,11 +409,11 @@ class PlantROISelectorWindow(QDialog):
             self._clear_pending_overlay()
             self.btn_confirm.setEnabled(False)
         self.idx = val
-        self._update_display()
+        self._update_display(refit=True)
 
     def _toggle_seg(self):
         self.use_seg = not self.use_seg
-        self._update_display()
+        self._update_display(refit=False)
 
     def _load_frame(self):
         if not self.images:
@@ -408,7 +424,12 @@ class PlantROISelectorWindow(QDialog):
         self.image_height, self.image_width = img.shape[:2]
 
         for label, x1, y1, x2, y2 in self.previous_rois:
-            draw_labeled_roi(img, x1, y1, x2, y2, label)
+            draw_labeled_roi(img, x1, y1, x2, y2, label, color=(255, 0, 0))
+
+        if self.own_previous_roi:
+            x1, y1, x2, y2 = self.own_previous_roi
+            label = self.plant_label or "current plant"
+            draw_labeled_roi(img, x1, y1, x2, y2, label, color=(0, 0, 255))
 
         if self.use_seg and self.seg_files and self.idx < len(self.seg_files):
             seg = cv2.imread(self.seg_files[self.idx], cv2.IMREAD_UNCHANGED)
@@ -424,7 +445,7 @@ class PlantROISelectorWindow(QDialog):
         days = int(self.idx * self.time_delta // 1440)
         return f"Frame {self.idx + 1}/{len(self.images)}  |  Day {days}  Time {hours:02d}:{int(minutes):02d}"
 
-    def _update_display(self):
+    def _update_display(self, refit=False):
         img = self._load_frame()
         if img is None:
             self.lbl_info.setText("Failed to load frame")
@@ -443,7 +464,8 @@ class PlantROISelectorWindow(QDialog):
             else "Drag a rectangle on the image. Press Enter to confirm."
         )
         self.lbl_info.setText(f"{self._frame_time_text()}  |  {suffix}")
-        QTimer.singleShot(0, self._fit_image)
+        if refit:
+            QTimer.singleShot(0, self._fit_image)
 
     def _fit_image(self):
         if self.pixmap_item.pixmap():
@@ -538,7 +560,7 @@ class SeedSelectorWindow(QDialog):
         action_layout.addWidget(self.btn_cancel)
         layout.addLayout(action_layout)
 
-        self._update_display()
+        self._update_display(refit=True)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
@@ -558,11 +580,11 @@ class SeedSelectorWindow(QDialog):
 
     def _toggle_seg(self):
         self.use_seg = not self.use_seg
-        self._update_display()
+        self._update_display(refit=False)
 
     def _set_frame(self, val):
         self.idx = val
-        self._update_display()
+        self._update_display(refit=True)
 
     def _load_frame(self):
         if not self.images or len(self.bbox) != 4:
@@ -593,9 +615,9 @@ class SeedSelectorWindow(QDialog):
         y = max(0, min(scene_pos.y(), h - 1))
         self.seed_pos = (x, y)
         self.btn_confirm.setEnabled(True)
-        self._update_display()
+        self._update_display(refit=False)
 
-    def _update_display(self):
+    def _update_display(self, refit=False):
         img = self._load_frame()
         if img is None:
             self.lbl_info.setText("Failed to load frame")
@@ -617,7 +639,8 @@ class SeedSelectorWindow(QDialog):
         self.lbl_info.setText(
             f"Frame {self.idx + 1}/{len(self.images)}  |  Day {days}  Time {hours:02d}:{int(minutes):02d}  |  {suffix}"
         )
-        QTimer.singleShot(0, self._fit_image)
+        if refit:
+            QTimer.singleShot(0, self._fit_image)
 
     def _fit_image(self):
         if self.pixmap_item.pixmap():

@@ -33,7 +33,7 @@ def overlay_seg_mask(img, seg, colors, alpha=0.5):
 def draw_labeled_roi(img, x1, y1, x2, y2, label, color=(160, 160, 160)):
     """Draw a labeled rectangle on a BGR image (in-place)."""
     x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-    cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 4)
+    cv2.rectangle(img, (x1, y1), (x2, y2), color, 4)
 
     lines = label.split('\n')
     font = cv2.FONT_HERSHEY_SIMPLEX

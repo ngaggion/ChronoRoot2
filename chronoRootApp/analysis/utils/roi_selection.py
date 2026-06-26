@@ -29,15 +29,24 @@ def _ensure_qapplication():
         return None
 
 
-def _run_roi_seed_dialogs(conf, images, seg_files):
+def _run_roi_seed_dialogs(conf, images, seg_files, own_previous_roi=None):
     import plant_viewer
 
     previous_rois, warnings_text = collect_previous_rois_and_warnings(conf)
     if warnings_text:
         QMessageBox.warning(None, "Video path warning", warnings_text)
 
+    experiment = conf.get('Experiment', '')
+    plant_num = conf.get('plant', '?')
+    plant_label = f"plant_{plant_num} - {experiment}"
+
     roi_dialog = plant_viewer.PlantROISelectorWindow(
-        images, seg_files, previous_rois, time_delta=conf.get('timeStep', 15),
+        images,
+        seg_files,
+        previous_rois,
+        time_delta=conf.get('timeStep', 15),
+        plant_label=plant_label,
+        own_previous_roi=own_previous_roi,
     )
     if roi_dialog.exec_() != QDialog.Accepted:
         return None, None
@@ -153,17 +162,17 @@ def collect_previous_rois_and_warnings(conf):
     return previous_rois, warnings_text
 
 
-def select_roi_and_seed(conf, images, seg_files):
+def select_roi_and_seed(conf, images, seg_files, own_previous_roi=None):
     """
     Interactive ROI and seed selection. Requires an existing QApplication (run.py).
     Returns (bbox, seed) or (None, None) on cancel.
     """
     if QApplication.instance() is None:
-        return try_select_roi_and_seed(conf, images, seg_files)
-    return _run_roi_seed_dialogs(conf, images, seg_files)
+        return try_select_roi_and_seed(conf, images, seg_files, own_previous_roi=own_previous_roi)
+    return _run_roi_seed_dialogs(conf, images, seg_files, own_previous_roi=own_previous_roi)
 
 
-def try_select_roi_and_seed(conf, images, seg_files):
+def try_select_roi_and_seed(conf, images, seg_files, own_previous_roi=None):
     """
     Try interactive ROI/seed selection; creates QApplication if needed.
     Returns (bbox, seed) or (None, None) on failure or cancel.
@@ -171,6 +180,6 @@ def try_select_roi_and_seed(conf, images, seg_files):
     try:
         if _ensure_qapplication() is None:
             return None, None
-        return _run_roi_seed_dialogs(conf, images, seg_files)
+        return _run_roi_seed_dialogs(conf, images, seg_files, own_previous_roi=own_previous_roi)
     except Exception:
         return None, None

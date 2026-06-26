@@ -641,6 +641,12 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(None, 'Error', f'Could not load metadata:\n{e}')
             return
 
+        own_previous_roi = None
+        old_bbox = conf.get('bounding box')
+        if old_bbox and len(old_bbox) == 4:
+            y1, y2, x1, x2 = old_bbox
+            own_previous_roi = (x1, y1, x2, y2)
+
         conf.pop('bounding box', None)
         conf.pop('seed', None)
 
@@ -650,7 +656,9 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             image_paths = image_paths[: processing_limit * 24 * 4]
             seg_paths = seg_paths[: processing_limit * 24 * 4]
 
-        bbox, seed = select_roi_and_seed(conf, image_paths, seg_paths)
+        bbox, seed = select_roi_and_seed(
+            conf, image_paths, seg_paths, own_previous_roi=own_previous_roi,
+        )
         if seed is None:
             return
 
