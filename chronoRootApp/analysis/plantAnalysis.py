@@ -17,7 +17,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 from .utils.fileUtilities import createSaveFolder, getImages, saveMetadata, cleanup_superseded_results, plant_slot_path
-from .utils.getROIandSeed import getROIandSeed
 from .imageUtils.seg import extract_root_segmentation, extract_skeleton
 from .imageUtils.plot import saveImages
 from .graphUtils.save import saveGraph, saveProps
@@ -39,8 +38,8 @@ def setupPlantAnalysis(conf, replicate):
     
     Args:
         conf: Configuration dictionary
-        replicate: If True, use previously saved ROI and seed from conf
-                   If False, load ROI GUI
+        replicate: If True, use previously saved ROI and seed from conf.
+                   If False, use conf ROI when present, otherwise try interactive selection.
     
     Returns:
         image_paths: List of paths to original images
@@ -58,19 +57,29 @@ def setupPlantAnalysis(conf, replicate):
         image_paths = image_paths[: processingLimit * 24 * 4]
         segmentation_paths = segmentation_paths[: processingLimit * 24 * 4]
 
-    if not replicate:
-        roi_bounds, seed_position = getROIandSeed(conf, image_paths, segmentation_paths)
-        
-        if seed_position is None:
+    if replicate:
+        if 'bounding box' not in conf or 'seed' not in conf:
+            print('Missing saved ROI/seed in config.')
             return None, None, None, None, None
-        
-        fixed_seed_position = seed_position.copy()
-        current_root_base = seed_position.copy()
-    else:
         roi_bounds = conf['bounding box']
         seed_position = conf['seed']
-        fixed_seed_position = seed_position.copy()
-        current_root_base = seed_position.copy()
+    elif 'bounding box' in conf and 'seed' in conf:
+        roi_bounds = conf['bounding box']
+        seed_position = conf['seed']
+    else:
+        from .utils.roi_selection import try_select_roi_and_seed
+        roi_bounds, seed_position = try_select_roi_and_seed(conf, image_paths, segmentation_paths)
+        if seed_position is None:
+            print(
+                'Interactive ROI selection failed or was cancelled. '
+                'Use Analyze Plant or Redo Analysis in the GUI, or check your display/Qt setup.'
+            )
+            return None, None, None, None, None
+        conf['bounding box'] = roi_bounds
+        conf['seed'] = seed_position
+
+    fixed_seed_position = seed_position.copy()
+    current_root_base = seed_position.copy()
     
     return image_paths, segmentation_paths, roi_bounds, current_root_base, fixed_seed_position
     

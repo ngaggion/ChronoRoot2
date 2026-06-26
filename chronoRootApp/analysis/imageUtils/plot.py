@@ -21,6 +21,43 @@ import os
 import numpy as np
 
 
+def overlay_seg_mask(img, seg, colors, alpha=0.5):
+    """Blend integer class mask colors onto a BGR image."""
+    color_mask = np.zeros_like(img)
+    for val, color in colors.items():
+        color_mask[seg == val] = color
+    color_mask[seg >= 5] = (255, 0, 255)
+    return cv2.addWeighted(img, 1.0, color_mask, alpha, 0)
+
+
+def draw_labeled_roi(img, x1, y1, x2, y2, label, color=(160, 160, 160)):
+    """Draw a labeled rectangle on a BGR image (in-place)."""
+    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+    cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 4)
+
+    lines = label.split('\n')
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    sizes = [cv2.getTextSize(line, font, 3, 6)[0] for line in lines]
+    text_w = max(s[0] for s in sizes)
+    text_h = sum(s[1] + 6 for s in sizes)
+    cx = x1 + (x2 - x1 - text_w) // 2
+    cy = y1 + (y2 - y1 - text_h) // 2
+    for i, line in enumerate(lines):
+        tw, th = sizes[i]
+        tx = cx + (text_w - tw) // 2
+        ty = cy + (i + 1) * (th + 16)
+        cv2.putText(img, line, (tx, ty), font, 3, (0, 0, 0), 6)
+        cv2.putText(img, line, (tx, ty), font, 3, (255, 255, 255), 6)
+
+
+def draw_seed_marker(img, x, y):
+    """Draw root-origin cross and horizontal guide on a cropped BGR image."""
+    h, w = img.shape[:2]
+    cross = 25
+    cv2.drawMarker(img, (x, y), (0, 255, 0), cv2.MARKER_CROSS, cross, 4)
+    cv2.line(img, (0, y), (w, y), (0, 255, 255), 4)
+
+
 def getImgName(image, conf):
     """Extract just the image filename from full path."""
     return image.replace(conf['ImagePath'], '').replace('/', '')

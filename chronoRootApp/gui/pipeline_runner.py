@@ -17,11 +17,10 @@ def run_analysis(project_dir):
   ])
 
 
-def run_analysis_restart(metadata_path):
+def run_analysis_config(config_path):
   subprocess.Popen([
       "python", "1_analysis.py",
-      "--config", metadata_path,
-      "--restart",
+      "--config", config_path,
   ])
 
 

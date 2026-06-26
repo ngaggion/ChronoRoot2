@@ -73,6 +73,16 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
     def _config_value(self, data, key, default=None):
         return self.config_store.config_value(data, key, default)
 
+    def _import_roi_selection(self):
+        try:
+            from analysis.utils.roi_selection import select_roi_and_seed
+            return select_roi_and_seed
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self, "Error", f"Failed to import ROI selection:\n{e}",
+            )
+            return None
+
     def saveFieldsIntoJson(self):
         self.config_store.save(self)
 
@@ -497,7 +507,11 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
     
     def analysis(self):
         """Run analysis with validation"""
-        
+
+        select_roi_and_seed = self._import_roi_selection()
+        if select_roi_and_seed is None:
+            return
+
         # Get and validate video folder
         video_folder = self.videoField.text()
         
@@ -592,11 +606,60 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             if reply != QtWidgets.QMessageBox.Yes:
                 return
 
+        image_paths, seg_paths = getImages(conf)
+        processing_limit = conf.get('processingLimit', None)
+        if processing_limit != 0:
+            image_paths = image_paths[: processing_limit * 24 * 4]
+            seg_paths = seg_paths[: processing_limit * 24 * 4]
+
+        bbox, seed = select_roi_and_seed(conf, image_paths, seg_paths)
+        if seed is None:
+            return
+
+        with open(config_path, 'r') as f:
+            conf = json.load(f)
+        conf['bounding box'] = bbox
+        conf['seed'] = seed
+        with open(config_path, 'w') as f:
+            json.dump(conf, f)
+
         pipeline_runner.run_analysis(self.projectField.text())
         
     def redoAnalysis(self):
+        select_roi_and_seed = self._import_roi_selection()
+        if select_roi_and_seed is None:
+            return
+
         metadata_path = os.path.join(self.selected_plant, "metadata.json")
-        pipeline_runner.run_analysis_restart(metadata_path)
+        if not os.path.exists(metadata_path):
+            return
+
+        try:
+            with open(metadata_path, 'r') as f:
+                conf = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            QtWidgets.QMessageBox.critical(None, 'Error', f'Could not load metadata:\n{e}')
+            return
+
+        conf.pop('bounding box', None)
+        conf.pop('seed', None)
+
+        image_paths, seg_paths = getImages(conf)
+        processing_limit = conf.get('processingLimit', None)
+        if processing_limit != 0:
+            image_paths = image_paths[: processing_limit * 24 * 4]
+            seg_paths = seg_paths[: processing_limit * 24 * 4]
+
+        bbox, seed = select_roi_and_seed(conf, image_paths, seg_paths)
+        if seed is None:
+            return
+
+        conf['bounding box'] = bbox
+        conf['seed'] = seed
+        with open(metadata_path, 'w') as f:
+            json.dump(conf, f)
+
+        pipeline_runner.run_analysis_config(metadata_path)
 
     def repeatAnalysis(self):
         selected_rows = self.table.selectionModel().selectedRows()
