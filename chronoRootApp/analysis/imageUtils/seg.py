@@ -45,16 +45,19 @@ EP_KERNELS = [
     np.array([[-1, -1, -1], [-1, 1, -1], [-1, -1, 1]])
 ]
 
-# Kernels for prune() - Relaxed background 
+# Perfectly symmetrical relaxed kernels for pruning
 PRUNE_KERNELS = [
-    np.array([[-1, -1, -1], [-1,  1, -1], [ 0,  1,  0]]), # endpoint1
-    np.array([[ 0,  1,  0], [-1,  1, -1], [-1, -1, -1]]), # endpoint2
-    np.array([[-1, -1,  1], [-1,  1, -1], [-1, -1, -1]]), # endpoint3
-    np.array([[ 0, -1, -1], [ 1,  1, -1], [ 0, -1, -1]]), # endpoint4
-    np.array([[-1, -1,  0], [-1,  1,  1], [-1, -1,  0]]), # endpoint5
-    np.array([[-1, -1, -1], [-1,  1, -1], [ 1, -1, -1]]), # endpoint6
-    np.array([[-1, -1, -1], [-1,  1, -1], [-1,  1, -1]]), # endpoint7
-    np.array([[ 1, -1, -1], [-1,  1, -1], [-1, -1, -1]])  # endpoint8
+    # Straight directions (Relaxed corners using 0)
+    np.array([[-1, -1, -1], [-1,  1, -1], [ 0,  1,  0]]), # UP
+    np.array([[ 0,  1,  0], [-1,  1, -1], [-1, -1, -1]]), # DOWN
+    np.array([[-1, -1,  0], [-1,  1,  1], [-1, -1,  0]]), # LEFT
+    np.array([[ 0, -1, -1], [ 1,  1, -1], [ 0, -1, -1]]), # RIGHT
+    
+    # Diagonal directions (Strict corners)
+    np.array([[-1, -1, -1], [-1,  1, -1], [ 1, -1, -1]]), # NE tip (Branch SW)
+    np.array([[-1, -1, -1], [-1,  1, -1], [-1, -1,  1]]), # NW tip (Branch SE) -> THE MISSING KERNEL!
+    np.array([[ 1, -1, -1], [-1,  1, -1], [-1, -1, -1]]), # SE tip (Branch NW)
+    np.array([[-1, -1,  1], [-1,  1, -1], [-1, -1, -1]])  # SW tip (Branch NE)
 ]
 
 # Kernels for branchedPoints()
