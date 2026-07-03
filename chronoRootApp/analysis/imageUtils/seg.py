@@ -33,7 +33,7 @@ T_KERNELS = [
     np.array([[-1, -1, -1], [1, 1, -1], [-1, 1, -1]])
 ]
 
-# Kernels for prune() and endPoints()
+# Kernels for endPoints() - Strict background
 EP_KERNELS = [
     np.array([[1, -1, -1], [-1, 1, -1], [-1, -1, -1]]),
     np.array([[-1, 1, -1], [-1, 1, -1], [-1, -1, -1]]),
@@ -43,6 +43,18 @@ EP_KERNELS = [
     np.array([[-1, -1, -1], [-1, 1, -1], [1, -1, -1]]),
     np.array([[-1, -1, -1], [-1, 1, -1], [-1, 1, -1]]),
     np.array([[-1, -1, -1], [-1, 1, -1], [-1, -1, 1]])
+]
+
+# Kernels for prune() - Relaxed background 
+PRUNE_KERNELS = [
+    np.array([[-1, -1, -1], [-1,  1, -1], [ 0,  1,  0]]), # endpoint1
+    np.array([[ 0,  1,  0], [-1,  1, -1], [-1, -1, -1]]), # endpoint2
+    np.array([[-1, -1,  1], [-1,  1, -1], [-1, -1, -1]]), # endpoint3
+    np.array([[ 0, -1, -1], [ 1,  1, -1], [ 0, -1, -1]]), # endpoint4
+    np.array([[-1, -1,  0], [-1,  1,  1], [-1, -1,  0]]), # endpoint5
+    np.array([[-1, -1, -1], [-1,  1, -1], [ 1, -1, -1]]), # endpoint6
+    np.array([[-1, -1, -1], [-1,  1, -1], [-1,  1, -1]]), # endpoint7
+    np.array([[ 1, -1, -1], [-1,  1, -1], [-1, -1, -1]])  # endpoint8
 ]
 
 # Kernels for branchedPoints()
@@ -370,22 +382,20 @@ def trim(ske): ## Removes unwanted pixels from the skeleton
     return ske
 
 
-def prune(skel, num_it): ## Removes branches with length lower than num_it
+def prune(skel, num_it): 
+    ## Removes branches with length lower than num_it
     orig = skel
     
-    # 1. Pruning loop using global kernels
+    # 1. Pruning loop using the relaxed PRUNE_KERNELS
     for i in range(0, num_it):
-        # We sequentially subtract hit-miss results
-        # To avoid multiple allocations, we can chain the operations or keep it simple
-        # Keeping logic identical but using pre-allocated kernels:
         current_skel = skel
-        for kernel in EP_KERNELS:
+        for kernel in PRUNE_KERNELS:
             hit = cv2.morphologyEx(current_skel, cv2.MORPH_HITMISS, kernel)
             current_skel = cv2.subtract(current_skel, hit)
         skel = current_skel
         
     # 2. Re-grow endpoints
-    end = endPoints(skel)
+    end = endPoints(skel) # Still correctly uses EP_KERNELS under the hood
     kernel_size = 3
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
     
