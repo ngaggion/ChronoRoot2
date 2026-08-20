@@ -361,6 +361,11 @@ def getAngles(conf, path):
     num_roots = 0
     
     filepath = os.path.join(path, 'LateralRootsData.csv')
+
+    meta_path = os.path.join(path, 'metadata.json')
+    with open(meta_path) as f:
+        metadata = json.load(f)
+    pixel_size = metadata['pixel_size']
     
     with open(filepath, 'w+') as f:
         writer = csv.writer(f)
@@ -369,9 +374,6 @@ def getAngles(conf, path):
 
         for step in paths:
             tree = ET.parse(step).getroot()
-
-            with open(os.path.join(path, 'metadata.json')) as f:
-                metadata = json.load(f)
 
             plant = tree[1][0][0]
             
@@ -403,7 +405,7 @@ def getAngles(conf, path):
                     emergence_angle = emergenceAngle(
                         root, 
                         float(conf['emergenceDistance']), 
-                        metadata['pixel_size']
+                        pixel_size
                     )
                     tip_angles.append(tip_angle)
                     emergence_angles.append(emergence_angle)

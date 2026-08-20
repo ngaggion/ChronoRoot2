@@ -57,7 +57,7 @@ def plot_individual_plant(savepath, dataframe, name):
     # Create subplots: 2 rows, 1 column.
     # Increase figure height (e.g., (9, 10)) to accommodate two plots.
     # sharex=True ensures they align and only the bottom plot shows hour labels.
-    fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(9, 10), dpi=300, sharex=True)
+    fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(9, 10), dpi=150, sharex=True)
 
     # ===========================
     # TOP SUBPLOT (Lengths)
@@ -122,7 +122,7 @@ def plot_individual_plant(savepath, dataframe, name):
     # Adjust layout to prevent overlapping labels
     plt.tight_layout()
 
-    fig.savefig(os.path.join(savepath, name), dpi=300, bbox_inches='tight')
+    fig.savefig(os.path.join(savepath, name), dpi=150, bbox_inches='tight')
         
     plt.cla()
     plt.clf()
