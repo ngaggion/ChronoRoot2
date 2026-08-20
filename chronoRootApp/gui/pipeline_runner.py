@@ -44,11 +44,3 @@ def run_report(project_dir):
       "python", "3_generateReport.py",
       "--config", project_config_path(project_dir),
   ])
-
-
-def run_calibration_helper(video_dir):
-  return subprocess.Popen(
-      ["python", "calibration_helper.py", "--video-dir", video_dir],
-      stdout=subprocess.PIPE,
-      stderr=subprocess.PIPE,
-  )

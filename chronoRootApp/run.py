@@ -1133,16 +1133,11 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             return
 
         try:
-            pipeline_runner.run_calibration_helper(self.videoField.text())
-            QtWidgets.QMessageBox.information(
-                None,
-                "Calibration Helper",
-                "Calibration helper window has been opened.\n"
-                "Measure the pixel distance between two points\n"
-                "of known physical distance in your image."
-            )
+            import calibration_helper
+            self.calibration_window = calibration_helper.CalibrationHelper(self.videoField.text())
+            self.calibration_window.show()
         except Exception as e:
-            QtWidgets.QMessageBox.critical(None, "Error", f"Error starting calibration helper: {str(e)}")
+            QtWidgets.QMessageBox.critical(None, "Error", f"Failed to launch calibration helper:\n{e}")
 
     def setup_tab2_elements(self):
         # Create the table
