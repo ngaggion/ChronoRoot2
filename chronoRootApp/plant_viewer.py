@@ -265,7 +265,7 @@ class ChronoViewWindow(QMainWindow):
                 if len(seg.shape) == 3:
                     if seg.shape[2] == 4:
                         seg = cv2.cvtColor(seg, cv2.COLOR_BGRA2BGR)
-                    img = cv2.addWeighted(img, 1.0, seg, 0.7, 0)
+                    img = cv2.addWeighted(img, 1.0, seg, 0.85, 0)
                 elif len(seg.shape) == 2:
                     img = overlay_seg_mask(img, seg, self.colors)
 

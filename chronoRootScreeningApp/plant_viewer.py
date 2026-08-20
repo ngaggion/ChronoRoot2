@@ -443,10 +443,8 @@ ROI_GROUP_COLORS = [
 
 ROI_BOX_PEN_WIDTH = 6
 ROI_PENDING_PEN_WIDTH = 6
-SEG_OVERLAY_ALPHA = 0.78
 
-
-def _overlay_label_segmentation(img, seg, colors, alpha=SEG_OVERLAY_ALPHA):
+def _overlay_label_segmentation(img, seg, colors):
     """Blend saturated class colors onto segmented pixels only."""
     color_mask = np.zeros_like(img)
     for val, color in colors.items():
@@ -456,7 +454,7 @@ def _overlay_label_segmentation(img, seg, colors, alpha=SEG_OVERLAY_ALPHA):
     if not np.any(labeled):
         return img
     out = img.copy()
-    blended = cv2.addWeighted(img, 1.0 - alpha, color_mask, alpha, 0)
+    blended = cv2.addWeighted(img, 1.0, color_mask, 0.85, 0)
     out[labeled] = blended[labeled]
     return out
 
