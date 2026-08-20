@@ -21,6 +21,7 @@ import shutil
 import glob
 from collections import defaultdict
 from PIL import Image
+import numpy as np
 
 from analysis.utils.fileUtilities import (
     convertFromPathSafe,
@@ -41,6 +42,7 @@ from analysis.utils.remap_identifiers import (
     apply_experiment_remap,
     collect_experiment_counts,
 )
+from analysis.utils.plant_inventory import scan_analysis_plants
 
 TAB_HEIGHT = 630
 REPORT_PLOT_ROLE = QtCore.Qt.UserRole
@@ -49,21 +51,65 @@ REPORT_STATS_ROLE = QtCore.Qt.UserRole + 1
 WINDOW_WIDTH = 811
 WINDOW_HEIGHT = TAB_HEIGHT + 20
 
+
+class PlantInventoryWorker(QtCore.QObject):
+    """Background scan of Analysis/; results applied on the UI thread."""
+
+    finished = QtCore.pyqtSignal(int, str, object)  # generation, project_path, rows
+    failed = QtCore.pyqtSignal(int, str, str)
+
+    def __init__(self, generation, project_path, analysis_path):
+        super().__init__()
+        self.generation = generation
+        self.project_path = project_path
+        self.analysis_path = analysis_path
+
+    @QtCore.pyqtSlot()
+    def run(self):
+        try:
+            rows = scan_analysis_plants(self.analysis_path)
+            self.finished.emit(self.generation, self.project_path, rows)
+        except Exception as exc:
+            self.failed.emit(self.generation, self.project_path, str(exc))
+
+
 class AspectRatioLabel(QLabel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._source_pixmap = None
+        self.setAlignment(QtCore.Qt.AlignCenter)
+
+    def sizeHint(self):
+        # Do not let pixmap dimensions drive the parent layout height
+        return QtCore.QSize(200, 200)
+
+    def minimumSizeHint(self):
+        return QtCore.QSize(120, 120)
 
     def resizeEvent(self, event):
-        if self.pixmap():
-            pixmap = self.pixmap().scaled(self.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
-            self.setPixmap(pixmap)
+        self._apply_scaled_pixmap()
         super().resizeEvent(event)
 
-    def set_pixmap(self, pixmap, size = None):
+    def set_pixmap(self, pixmap, size=None):
+        """Keep full-res source; scale to current label size (or optional size)."""
+        self._source_pixmap = pixmap
+        self._apply_scaled_pixmap(size)
+
+    def clear(self):
+        self._source_pixmap = None
+        super().clear()
+
+    def _apply_scaled_pixmap(self, size=None):
+        if self._source_pixmap is None or self._source_pixmap.isNull():
+            return
         if size is None:
-            size = self.size() 
-        scaled_pixmap = pixmap.scaled(size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
-        self.setPixmap(scaled_pixmap)
+            size = self.size()
+        if size.width() < 2 or size.height() < 2:
+            return
+        scaled = self._source_pixmap.scaled(
+            size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+        )
+        self.setPixmap(scaled)
 
 class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
     def __init__(self):
@@ -71,8 +117,265 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.project_dir = None
         self.selected_plant = None
         self.config_store = ConfigStore()
+        # Cache: (project_path, plant_path, overlay_on) -> (pix1, pix2)
+        self._overlay_pixmap_cache = {}
+        self._plants_loaded_for = None
+        self._plants_dirty = True
+        self._inventory_generation = 0
+        self._last_seen_project = None
+        self._inventory_thread = None
+        self._inventory_worker = None
+        self._prefer_index_after_load = None
         self.setupUi(self)
-        
+
+    def current_project_key(self):
+        text = self.projectField.text().strip() if hasattr(self, "projectField") else ""
+        if not text:
+            return ""
+        return os.path.abspath(os.path.expanduser(text))
+
+    def current_plant_path(self):
+        """Absolute Results_*/plant path for the plant currently selected in Overlay."""
+        if not hasattr(self, 'plant_dropdown') or self.plant_dropdown is None:
+            return self.selected_plant
+        data = self.plant_dropdown.currentData()
+        if data:
+            return data
+        text = self.plant_dropdown.currentText()
+        return text or self.selected_plant
+
+    def _clear_overlay_cache_for_path(self, path):
+        if not path:
+            return
+        for key in list(self._overlay_pixmap_cache.keys()):
+            # key is (project, plant_path, overlay_on)
+            if len(key) >= 2 and key[1] == path:
+                del self._overlay_pixmap_cache[key]
+
+    def inventory_is_stale(self):
+        return (
+            self._plants_dirty
+            or self._plants_loaded_for != self.current_project_key()
+        )
+
+    def invalidate_plant_inventory(self):
+        """Drop Overview/Overlay plant lists after a project change."""
+        self._inventory_generation += 1
+        self._plants_dirty = True
+        self._plants_loaded_for = None
+        self._overlay_pixmap_cache.clear()
+        self.selected_plant = None
+        self._prefer_index_after_load = None
+
+        if hasattr(self, "table") and self.table is not None:
+            self.table.setSortingEnabled(False)
+            self.table.clearContents()
+            self.table.setRowCount(0)
+            self.table.setSortingEnabled(True)
+
+        if hasattr(self, "plant_dropdown") and self.plant_dropdown is not None:
+            self.plant_dropdown.blockSignals(True)
+            self.plant_dropdown.clear()
+            self.plant_dropdown.blockSignals(False)
+
+        if hasattr(self, "image_label1"):
+            self.image_label1.clear()
+            self.image_label1.set_pixmap(
+                QtGui.QPixmap("placeholder_figures/plant_placeholder.png")
+            )
+        if hasattr(self, "image_label2"):
+            self.image_label2.clear()
+            self.image_label2.set_pixmap(
+                QtGui.QPixmap("placeholder_figures/plant_report_placeholder.png")
+            )
+
+        self._set_inventory_loading(False)
+
+        # If Overview/Overlay is visible, reload for the new project immediately
+        if hasattr(self, "tab_widget"):
+            idx = self.tab_widget.currentIndex()
+            if idx in (1, 2):
+                QtCore.QTimer.singleShot(0, lambda: self.ensure_plant_inventory(force=True))
+
+    def _set_inventory_loading(self, loading):
+        for name in ("refresh_button", "refresh_button_tab3"):
+            btn = getattr(self, name, None)
+            if btn is not None:
+                btn.setEnabled(not loading)
+                if loading:
+                    btn.setToolTip("Loading plant list…")
+                elif name == "refresh_button":
+                    btn.setToolTip(
+                        "Update the table to show the latest analysis progress and error rates."
+                    )
+                else:
+                    btn.setToolTip(
+                        "Refresh the list of plants available for visual inspection."
+                    )
+        if loading and hasattr(self, "plant_dropdown") and self.plant_dropdown is not None:
+            if self.plant_dropdown.count() == 0:
+                self.plant_dropdown.blockSignals(True)
+                self.plant_dropdown.addItem("Loading…")
+                self.plant_dropdown.blockSignals(False)
+
+    def _on_project_path_maybe_changed(self):
+        key = self.current_project_key()
+        if key == self._last_seen_project:
+            return
+        self._last_seen_project = key
+        self.invalidate_plant_inventory()
+
+    def force_refresh_plant_inventory(self, prefer_index=None):
+        """Manual Refresh: always rescan the current project."""
+        project = self.current_project_key()
+        for key in list(self._overlay_pixmap_cache.keys()):
+            if key and key[0] == project:
+                del self._overlay_pixmap_cache[key]
+        self._plants_dirty = True
+        self._prefer_index_after_load = prefer_index
+        self.ensure_plant_inventory(force=True)
+
+    def ensure_plant_inventory(self, force=False):
+        """Start an async scan if the inventory is stale (or force=True)."""
+        if not force and not self.inventory_is_stale():
+            return
+        project = self.current_project_key()
+        generation = self._inventory_generation + 1
+        self._inventory_generation = generation
+        self._plants_dirty = True
+
+        # Clear UI immediately so old-project rows cannot linger
+        if hasattr(self, "table") and self.table is not None:
+            self.table.setSortingEnabled(False)
+            self.table.clearContents()
+            self.table.setRowCount(0)
+        if hasattr(self, "plant_dropdown") and self.plant_dropdown is not None:
+            self.plant_dropdown.blockSignals(True)
+            self.plant_dropdown.clear()
+            self.plant_dropdown.blockSignals(False)
+
+        self._set_inventory_loading(True)
+
+        analysis_root = os.path.join(project, "Analysis") if project else ""
+
+        # Drop previous worker thread (stale results ignored via generation)
+        if self._inventory_thread is not None:
+            try:
+                self._inventory_thread.quit()
+            except Exception:
+                pass
+            self._inventory_thread = None
+            self._inventory_worker = None
+
+        worker = PlantInventoryWorker(generation, project, analysis_root)
+        thread = QtCore.QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_inventory_finished)
+        worker.failed.connect(self._on_inventory_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._inventory_worker = worker
+        self._inventory_thread = thread
+        thread.start()
+
+    def _on_inventory_failed(self, generation, project_path, message):
+        if generation != self._inventory_generation:
+            return
+        if project_path != self.current_project_key():
+            return
+        self._set_inventory_loading(False)
+        self._plants_dirty = True
+        QtWidgets.QMessageBox.warning(
+            self, "Plant list", f"Failed to load plants:\n{message}"
+        )
+
+    def _on_inventory_finished(self, generation, project_path, rows):
+        if generation != self._inventory_generation:
+            return
+        if project_path != self.current_project_key():
+            return
+        self.apply_plant_inventory(project_path, rows)
+
+    def apply_plant_inventory(self, project_path, rows):
+        """Fill Overview table + Overlay combo on the UI thread."""
+        prefer_index = self._prefer_index_after_load
+        self._prefer_index_after_load = None
+
+        previous_path = None
+        if hasattr(self, "plant_dropdown") and self.plant_dropdown is not None:
+            previous_path = self.plant_dropdown.currentData() or self.selected_plant
+            self.plant_dropdown.blockSignals(True)
+            self.plant_dropdown.clear()
+
+        current_sort_order = self.table.horizontalHeader().sortIndicatorOrder()
+        current_sort_column = self.table.horizontalHeader().sortIndicatorSection()
+        self.table.setSortingEnabled(False)
+        self.table.clearContents()
+        self.table.setRowCount(len(rows))
+
+        for row, row_data in enumerate(rows):
+            for col, cell_data in enumerate(row_data[:-2]):
+                item = QTableWidgetItem(str(cell_data))
+                item.path = row_data[-2]
+                item.plant_slot = row_data[-1]
+                self.table.setItem(row, col, item)
+
+            experiment, rpi, camera, plant = row_data[0], row_data[1], row_data[2], row_data[3]
+            active_path = row_data[-2]
+            if hasattr(self, "plant_dropdown") and self.plant_dropdown is not None:
+                label = f"{experiment} — {rpi} / {camera} / {plant}"
+                self.plant_dropdown.addItem(label, active_path)
+
+        self.table.resizeColumnsToContents()
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSortingEnabled(True)
+        self.table.sortItems(current_sort_column, current_sort_order)
+
+        if hasattr(self, "plant_dropdown") and self.plant_dropdown is not None:
+            count = self.plant_dropdown.count()
+            if count > 0:
+                restore = -1
+                if previous_path:
+                    restore = self.plant_dropdown.findData(previous_path)
+                if restore < 0 and prefer_index is not None:
+                    restore = min(max(prefer_index, 0), count - 1)
+                if restore < 0:
+                    restore = 0
+                self.plant_dropdown.setCurrentIndex(restore)
+                self.selected_plant = self.current_plant_path()
+            self.plant_dropdown.blockSignals(False)
+
+        self._plants_loaded_for = project_path
+        self._plants_dirty = False
+        self._set_inventory_loading(False)
+
+        if hasattr(self, "tab_widget") and self.tab_widget.currentIndex() == 2:
+            self.update_image_labels()
+
+    def refresh_table(self, prefer_index=None):
+        """Backward-compatible entry: force a rescan (Refresh buttons / remap / remove)."""
+        self.force_refresh_plant_inventory(prefer_index=prefer_index)
+
+    def handle_tab_change(self, index):
+        # index 0: Plant Analysis
+        # index 1: Analysis Overview
+        if index == 1:
+            self.ensure_plant_inventory()
+
+        # index 2: Plant Overlay
+        elif index == 2:
+            self.ensure_plant_inventory()
+            if not self.inventory_is_stale():
+                self.update_image_labels()
+
+        # index 4: Report Viewer
+        elif index == 4:
+            self.refresh_tab5()
+            self.update_report_labels()
+
     def openFileNameDialog(self):
         options = QtWidgets.QFileDialog.Options() | QtWidgets.QFileDialog.DontUseNativeDialog
         return QtWidgets.QFileDialog.getExistingDirectory(None, "Select Directory", options=options)
@@ -172,109 +475,6 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             "so aggregates and figures use the new names.",
         )
 
-    def refresh_table(self):
-        # Store current sort order and column
-        current_sort_order = self.table.horizontalHeader().sortIndicatorOrder()
-        current_sort_column = self.table.horizontalHeader().sortIndicatorSection()
-
-        self.table.setSortingEnabled(False)
-
-        self.table.clearContents()
-        self.table.setRowCount(0)
-
-        AnalysisFolder = os.path.join(self.projectField.text(), "Analysis")
-        if not os.path.isdir(AnalysisFolder):
-            self.table.setSortingEnabled(True)
-            return
-
-        pathlib_dir = pathlib.Path(AnalysisFolder)
-        plant_slots = sorted(pathlib_dir.glob('*/*/*/*'), key=lambda p: natural_keys(str(p)))
-        plant_slots = [str(p) for p in plant_slots if p.is_dir()]
-
-        data = []
-        self.plant_dropdown.clear()
-
-        for plant_slot in plant_slots:
-            rel_path = os.path.relpath(plant_slot, AnalysisFolder)
-            split = rel_path.split(os.path.sep)
-            if len(split) < 4:
-                continue
-
-            experiment = convertFromPathSafe(split[0])
-            rpi = split[1]
-            camera = split[2]
-            plant = split[3]
-
-            result_dir = get_latest_result_dir(plant_slot)
-            if result_dir is None:
-                status = "Not finished"
-                date = ""
-                error_rate = ""
-                plate_condition = ""
-                extra_variable = ""
-                active_path = plant_slot
-            else:
-                meta = load_result_metadata(result_dir)
-                plate_condition = normalize_factor_value(meta.get('PlateCondition', ''))
-                extra_variable = normalize_factor_value(meta.get('ExtraVariable', ''))
-                active_path = result_dir
-
-                if os.path.exists(os.path.join(result_dir, "log.txt")):
-                    with open(os.path.join(result_dir, "log.txt"), 'r') as f:
-                        date = f.readline().replace("Analysis completed: ", "").strip()
-                        lines = f.readlines()
-                        last_line = lines[-1] if lines else ""
-                        if "Error rate:" in last_line:
-                            error_rate = round(float(last_line.split(":")[-1].strip()), 4)
-                        else:
-                            error_rate = ""
-                    status = "Finished"
-                else:
-                    date = ""
-                    error_rate = ""
-                    status = "Not finished"
-
-            data.append([
-                experiment, rpi, camera, plant, plate_condition, extra_variable,
-                error_rate, status, date, active_path, plant_slot,
-            ])
-            self.plant_dropdown.addItem(active_path)
-
-        self.table.setRowCount(len(data))
-
-        for row, row_data in enumerate(data):
-            for col, cell_data in enumerate(row_data[:-2]):
-                item = QTableWidgetItem(str(cell_data))
-                item.path = row_data[-2]
-                item.plant_slot = row_data[-1]
-                self.table.setItem(row, col, item)
-
-        self.table.resizeColumnsToContents()
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setSortingEnabled(True)
-        self.table.sortItems(current_sort_column, current_sort_order)
-
-        return
-
-    def handle_tab_change(self, index):
-        # index 0: Plant Analysis (usually no auto-refresh needed)
-        # index 1: Analysis Overview
-        if index == 1:
-            self.refresh_table()
-            
-        # index 2: Plant Overlay
-        elif index == 2:
-            # Re-populate the dropdown if new analysis finished
-            self.refresh_table() 
-            self.update_image_labels()
-            
-        # index 3: Generate Report (usually no auto-refresh needed)
-        
-        # index 4: Report Viewer
-        elif index == 4:
-            self.refresh_tab5()
-            self.update_report_labels()
-        
     def universal_open(self, path):
         try:
             path = os.path.abspath(os.path.expanduser(path))
@@ -356,6 +556,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.universal_open(report_path)
         
     def open_selected_path_tab3(self):
+        self.selected_plant = self.current_plant_path()
         self.universal_open(self.selected_plant)
         
     def open_selected_path(self):
@@ -487,81 +688,116 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         return image1_path, image2_path, overlay, bbox
 
     def update_image_labels(self):
+        # Lazy import to avoid collisions with pyqt
+        import cv2
+        
         # Add safety check
         if not hasattr(self, 'plant_dropdown') or self.plant_dropdown is None:
             return
-        
-        self.selected_plant = self.plant_dropdown.currentText()
+
+        self.selected_plant = self.current_plant_path()
+        if not self.selected_plant:
+            return
+
+        overlay_on = self.overlay_checkbox.isChecked()
+        project = self.current_project_key()
+        cache_key = (project, self.selected_plant, overlay_on)
+        cached = self._overlay_pixmap_cache.get(cache_key)
+        if cached is not None:
+            pix1, pix2 = cached
+            self.image_label1.set_pixmap(pix1)
+            self.image_label1.show()
+            self.image_label2.set_pixmap(pix2)
+            self.image_label2.show()
+            return
+
         image1_path, image2_path, overlay, bbox = self.get_image_paths()
-        
+
+        pixmap1 = None
+        pixmap2 = None
+
         # Check if image paths exist
         if image1_path is None:
             self.image_label1.clear()
-            size = QtCore.QSize(250, 560)
-            pixmap2 = QtGui.QPixmap("placeholder_figures/plant_placeholder.png")
-            self.image_label1.set_pixmap(pixmap2, size)
+            pixmap1 = QtGui.QPixmap("placeholder_figures/plant_placeholder.png")
+            self.image_label1.set_pixmap(pixmap1)
             self.image_label1.show()
         elif not os.path.exists(image1_path) or not os.path.exists(overlay):
             self.image_label1.clear()
-            size = QtCore.QSize(250, 560)
-            pixmap2 = QtGui.QPixmap("placeholder_figures/plant_placeholder_2.png")
-            self.image_label1.set_pixmap(pixmap2, size)
+            pixmap1 = QtGui.QPixmap("placeholder_figures/plant_placeholder_2.png")
+            self.image_label1.set_pixmap(pixmap1)
             self.image_label1.show()
         else:
             self.image_label1.clear()
-            
+
             try:
-                # Open image with PIL
-                image = Image.open(image1_path)
-                
-                # Crop using PIL's crop method: (left, top, right, bottom)
-                image = image.crop((bbox[2], bbox[0], bbox[3], bbox[1]))
-                
-                # Convert to RGB if needed
-                if image.mode != "RGB":
-                    image = image.convert("RGB")
-                
-                # Check if overlay should be applied
-                if self.overlay_checkbox.isChecked() and os.path.exists(overlay):
-                    image_overlay = Image.open(overlay).convert("RGB")
-                    
-                    if image.size == image_overlay.size:
-                        image = Image.blend(image, image_overlay, alpha=0.5)
-                
-                # Convert PIL Image to QPixmap
-                image_bytes = image.tobytes()
-                qImg = QtGui.QImage(image_bytes, image.width, image.height, 
-                                image.width * 3, QtGui.QImage.Format_RGB888)
+                # Same pipeline as plant_viewer: BGR image + addWeighted overlay
+                # (keeps plant at full weight so the image does not go darker)
+                img = cv2.imread(image1_path)
+                if img is None:
+                    raise ValueError(f"Could not read image: {image1_path}")
+
+                y1, y2, x1, x2 = bbox
+                h, w = img.shape[:2]
+                if 0 <= y1 < y2 <= h and 0 <= x1 < x2 <= w:
+                    img = img[y1:y2, x1:x2]
+
+                if overlay_on and os.path.exists(overlay):
+                    seg = cv2.imread(overlay, cv2.IMREAD_UNCHANGED)
+                    if seg is not None:
+                        if len(seg.shape) == 3:
+                            if seg.shape[2] == 4:
+                                seg = cv2.cvtColor(seg, cv2.COLOR_BGRA2BGR)
+                            if seg.shape[:2] == img.shape[:2]:
+                                img = cv2.addWeighted(img, 1.0, seg, 0.85, 0)
+                        elif len(seg.shape) == 2 and seg.shape[:2] == img.shape[:2]:
+                            from analysis.imageUtils.plot import overlay_seg_mask
+                            colors = {
+                                1: (0, 0, 255),
+                                2: (0, 255, 0),
+                                3: (255, 0, 0),
+                                4: (0, 255, 255),
+                            }
+                            img = overlay_seg_mask(img, seg, colors)
+
+                rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                if not rgb.flags['C_CONTIGUOUS']:
+                    rgb = np.ascontiguousarray(rgb)
+                rh, rw, _ = rgb.shape
+                qImg = QtGui.QImage(
+                    rgb.data.tobytes(), rw, rh, 3 * rw, QtGui.QImage.Format_RGB888
+                )
                 pixmap1 = QtGui.QPixmap.fromImage(qImg)
-                
-                size = QtCore.QSize(250, 560)
-                self.image_label1.set_pixmap(pixmap1, size)
+
+                self.image_label1.set_pixmap(pixmap1)
                 self.image_label1.show()
-                
+
             except Exception as e:
                 self.image_label1.setText(f"Analysis is not yet finished. \nRefresh to update\nError: {str(e)}")
                 self.image_label1.setAlignment(QtCore.Qt.AlignCenter)
                 self.image_label1.show()
-        
+
         # Check if image2_path exists
         if image2_path is not None and os.path.exists(image2_path):
-            size = QtCore.QSize(400, 400)
             pixmap2 = QtGui.QPixmap(image2_path)
-            self.image_label2.set_pixmap(pixmap2, size)
+            self.image_label2.set_pixmap(pixmap2)
             self.image_label2.show()
         else:
             self.image_label2.clear()
-            size = QtCore.QSize(400, 400)
             pixmap2 = QtGui.QPixmap("placeholder_figures/plant_report_placeholder.png")
-            self.image_label2.set_pixmap(pixmap2, size)
+            self.image_label2.set_pixmap(pixmap2)
             self.image_label2.show()
-        
+
+        if pixmap1 is not None and pixmap2 is not None:
+            self._overlay_pixmap_cache[cache_key] = (pixmap1, pixmap2)
+
         return
 
     def remove_selected_plant(self):
-        path = self.selected_plant
+        path = self.current_plant_path()
         if not path:
             return
+        idx = self.plant_dropdown.currentIndex()
         plant_slot = os.path.dirname(path) if os.path.basename(path).startswith('Results_') else path
 
         removed_path = os.path.join(
@@ -580,9 +816,11 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             os.system(f'mv "{plant_slot}" "{removed_path}"')
         else:
             os.system(f'mv "{plant_slot}" "{removed_path}"')
-        
-        self.refresh_table()
-        
+
+        self._clear_overlay_cache_for_path(path)
+        # Prefer the same list position (next plant) after the removed entry disappears
+        self.refresh_table(prefer_index=idx)
+
         return
     
     def analysis(self):
@@ -710,6 +948,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         if select_roi_and_seed is None:
             return
 
+        self.selected_plant = self.current_plant_path()
         metadata_path = os.path.join(self.selected_plant, "metadata.json")
         if not os.path.exists(metadata_path):
             return
@@ -763,6 +1002,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         pipeline_runner.run_analysis_rerun(metadata_path)
 
     def reviewPlant(self):
+        self.selected_plant = self.current_plant_path()
         path = self.selected_plant
         if not path or not os.path.exists(path):
             return
@@ -834,6 +1074,8 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             self.reportProjectField.setText(projectFolder)
         elif self.central_widget.sender() == self.reportProjectField:
             self.projectField.setText(projectFolder2)
+
+        self._on_project_path_maybe_changed()
     
     def syncCaptureIntervalField(self):
         captureInterval = self.captureIntervalField.text()
@@ -1230,6 +1472,8 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         ])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_overview_context_menu)
 
         # Enable sorting
         self.table.setSortingEnabled(True)
@@ -1286,15 +1530,53 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         self.tab2.setLayout(layout)
         self.tab_widget.addTab(self.tab2, "Analysis Overview")
 
+    def show_overview_context_menu(self, pos):
+        index = self.table.indexAt(pos)
+        if not index.isValid():
+            return
+        row = index.row()
+        item = self.table.item(row, 0)
+        if item is None:
+            return
+
+        menu = QtWidgets.QMenu(self)
+        action = menu.addAction("See in Plant Overlay")
+        chosen = menu.exec_(self.table.viewport().mapToGlobal(pos))
+        if chosen != action:
+            return
+
+        path = getattr(item, 'path', None)
+        if not path:
+            return
+        self.see_plant_in_overlay(path)
+
+    def see_plant_in_overlay(self, path):
+        """Select a plant in the Overlay combo and switch to that tab."""
+        if not hasattr(self, 'plant_dropdown'):
+            return
+        idx = self.plant_dropdown.findData(path)
+        if idx < 0:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Plant Overlay",
+                "Could not find this plant in the Overlay list. Try Refresh first.",
+            )
+            return
+        self.plant_dropdown.setCurrentIndex(idx)
+        self.selected_plant = self.current_plant_path()
+        # Plant Overlay is tab index 2
+        self.tab_widget.setCurrentIndex(2)
 
     def setup_tab3_elements(self):
-        # Create the image labels
+        # Image panels: expand and center content so layout height stays stable
         self.image_label1 = AspectRatioLabel()
         self.image_label2 = AspectRatioLabel()
-
-        # Set image labels to scale contents with aspect ratio
-        self.image_label1.setMaximumSize(250, 560)
-        self.image_label2.setMaximumSize(400, 400)
+        for label in (self.image_label1, self.image_label2):
+            label.setAlignment(QtCore.Qt.AlignCenter)
+            label.setSizePolicy(
+                QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+            )
+            label.setMinimumSize(120, 120)
 
         # Create the checkbox
         self.overlay_checkbox = QCheckBox("Overlay Image")
@@ -1302,6 +1584,14 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             "Show or hide the color-coded tracking mask over the plant image.")
 
         self.plant_dropdown = QComboBox()
+
+        self.prev_plant_button = QPushButton("Previous")
+        self.prev_plant_button.setToolTip("Show the previous plant in the list.")
+        self.prev_plant_button.clicked.connect(self.show_previous_plant)
+
+        self.next_plant_button = QPushButton("Next")
+        self.next_plant_button.setToolTip("Show the next plant in the list.")
+        self.next_plant_button.clicked.connect(self.show_next_plant)
 
         self.refresh_button_tab3 = QPushButton("Refresh")
         self.refresh_button_tab3.setToolTip(
@@ -1332,11 +1622,14 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             "Open the results folder for the plant currently being viewed.")
         self.open_path_button_tab3.clicked.connect(self.open_selected_path_tab3)
 
-        # Set up the layout for the checkbox, dropdown menu, and refresh button
+        # Navigation row (fixed at bottom, above action buttons — never moves with image height)
         controls_layout = QHBoxLayout()
         controls_layout.addWidget(self.overlay_checkbox)
-        controls_layout.addWidget(self.plant_dropdown)
+        controls_layout.addWidget(self.prev_plant_button)
+        controls_layout.addWidget(self.plant_dropdown, 1)
+        controls_layout.addWidget(self.next_plant_button)
 
+        # Action row — same role as Analysis Overview bottom buttons
         controls_layout2 = QHBoxLayout()
         controls_layout2.addWidget(self.refresh_button_tab3)
         controls_layout2.addWidget(self.open_path_button_tab3)
@@ -1344,22 +1637,44 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         controls_layout2.addWidget(self.rerun_analysis_button_tab3)
         controls_layout2.addWidget(self.remove_path_button_tab3)
 
-        # Set up the main layout
-        layout = QHBoxLayout()
-        layout.addWidget(self.image_label1)
-        layout.addWidget(self.image_label2)
+        # Two equal columns; each image is centered in its cell
+        images_row = QHBoxLayout()
+        images_row.setContentsMargins(0, 0, 0, 0)
+        images_row.setSpacing(8)
+        for label in (self.image_label1, self.image_label2):
+            cell = QtWidgets.QWidget()
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            cell_layout.addWidget(label)
+            images_row.addWidget(cell, 1)
 
+        # Stretch images; pin both control rows to the bottom of the tab
         bigLayout = QVBoxLayout()
-        bigLayout.addLayout(layout)
-        bigLayout.addLayout(controls_layout)
-        bigLayout.addLayout(controls_layout2)
-        
-        # Create and set up the new tab
+        bigLayout.setContentsMargins(6, 6, 6, 6)
+        bigLayout.setSpacing(6)
+        bigLayout.addLayout(images_row, 1)
+        bigLayout.addLayout(controls_layout, 0)
+        bigLayout.addLayout(controls_layout2, 0)
+
         self.tab3 = QtWidgets.QWidget()
         self.tab3.setLayout(bigLayout)
         self.tab_widget.addTab(self.tab3, "Plant Overlay")
-        
+
         self.update_image_labels()
+
+    def show_previous_plant(self):
+        if not hasattr(self, 'plant_dropdown') or self.plant_dropdown.count() == 0:
+            return
+        idx = self.plant_dropdown.currentIndex()
+        if idx > 0:
+            self.plant_dropdown.setCurrentIndex(idx - 1)
+
+    def show_next_plant(self):
+        if not hasattr(self, 'plant_dropdown') or self.plant_dropdown.count() == 0:
+            return
+        idx = self.plant_dropdown.currentIndex()
+        if idx < self.plant_dropdown.count() - 1:
+            self.plant_dropdown.setCurrentIndex(idx + 1)
 
     def setup_tab4_elements(self):
         # Spacing: ROW=31px per control row; SEP=41px separator frame; GAP=10px after separator.
@@ -1928,8 +2243,7 @@ def main():
     window.show()
     
     # Defer table and UI updates until after window is shown
-    QtCore.QTimer.singleShot(100, window.refresh_table)
-    QtCore.QTimer.singleShot(100, window.update_image_labels)
+    QtCore.QTimer.singleShot(100, window.ensure_plant_inventory)
     QtCore.QTimer.singleShot(100, window.update_report_labels)
     
     sys.exit(app.exec_())
