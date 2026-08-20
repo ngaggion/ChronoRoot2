@@ -19,6 +19,7 @@ import pathlib
 import re
 import shutil
 import glob
+from collections import defaultdict
 from PIL import Image
 
 from analysis.utils.fileUtilities import (
@@ -33,7 +34,13 @@ from analysis.utils.report_utils import natural_key as natural_keys
 from gui.config_store import ConfigStore, PROJECT_CONFIG_NAME
 from gui import pipeline_runner
 from gui.stats_config_dialog import StatsConfigDialog
+from gui.remap_identifiers_dialog import RemapIdentifiersDialog
 from gui.report_browser import ReportBranch, load_report_catalog
+from analysis.utils.remap_identifiers import (
+    RemapError,
+    apply_experiment_remap,
+    collect_experiment_counts,
+)
 
 TAB_HEIGHT = 630
 REPORT_PLOT_ROLE = QtCore.Qt.UserRole
@@ -91,6 +98,79 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
 
     def open_stats_config_dialog(self):
         self.stats_config_dialog.exec_()
+
+    def open_remap_identifiers_dialog(self):
+        project = self.projectField.text().strip()
+        analysis_folder = os.path.join(project, "Analysis") if project else ""
+        if not project or not os.path.isdir(analysis_folder):
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Error",
+                "Select a project that contains an Analysis folder first.",
+            )
+            return
+
+        unique_counts = collect_experiment_counts(analysis_folder)
+        if not unique_counts:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Remap Identifiers",
+                "No plant identifiers found under Analysis.",
+            )
+            return
+
+        dialog = RemapIdentifiersDialog(self)
+        dialog.populate(unique_counts)
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
+
+        mapping = dialog.get_mapping()
+        if not mapping:
+            return
+
+        # Summarize renames / merges for confirmation
+        by_target = defaultdict(list)
+        for old, new in mapping.items():
+            by_target[new].append(old)
+        lines = []
+        for new, olds in sorted(by_target.items(), key=lambda x: str(x[0]).lower()):
+            if len(olds) == 1 and olds[0] != new:
+                lines.append(f"  {olds[0]}  →  {new}")
+            else:
+                lines.append(f"  merge {', '.join(olds)}  →  {new}")
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Confirm remap",
+            "Apply the following identifier changes?\n\n"
+            + "\n".join(lines)
+            + "\n\nThis renames folders under Analysis and updates metadata.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if confirm != QtWidgets.QMessageBox.Yes:
+            return
+
+        try:
+            apply_experiment_remap(analysis_folder, mapping)
+        except RemapError as e:
+            QtWidgets.QMessageBox.critical(self, "Remap failed", str(e))
+            self.refresh_table()
+            return
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self, "Remap failed", f"Unexpected error:\n{e}"
+            )
+            self.refresh_table()
+            return
+
+        self.refresh_table()
+        QtWidgets.QMessageBox.information(
+            self,
+            "Remap complete",
+            "Plant identifiers were updated.\n\n"
+            "Re-run \"Process all plants\" and \"Generate report\" "
+            "so aggregates and figures use the new names.",
+        )
 
     def refresh_table(self):
         # Store current sort order and column
@@ -1176,6 +1256,12 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
             "without deleting the data.")
         self.remove_path_button.clicked.connect(self.remove_selected_path)
 
+        self.remap_identifiers_button = QPushButton("Remap Identifiers")
+        self.remap_identifiers_button.setToolTip(
+            "Rename or merge plant identifiers (Experiment) across the project. "
+            "Useful for fixing typos or assigning genotype names after short codes.")
+        self.remap_identifiers_button.clicked.connect(self.open_remap_identifiers_dialog)
+
         self.postprocess_plants_button = QPushButton("Process all plants")
         self.postprocess_plants_button.setToolTip(
             "Refresh global statistics for all plants currently in the project.")
@@ -1186,6 +1272,7 @@ class Ui_ChronoRootAnalysis(QtWidgets.QMainWindow):
         buttons_layout.addWidget(self.refresh_button)
         buttons_layout.addWidget(self.open_path_button_tab2)
         buttons_layout.addWidget(self.remove_path_button)
+        buttons_layout.addWidget(self.remap_identifiers_button)
         buttons_layout.addWidget(self.rerun_analysis_button_tab2)
         buttons_layout.addWidget(self.postprocess_plants_button)
 
