@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QSlider, QLabel, QPushButton, QGraphicsView,
-                             QGraphicsScene, QGraphicsPixmapItem, QFrame, QStyle,
+                             QGraphicsScene, QGraphicsPixmapItem, QStyle,
                              QDialog, QGraphicsRectItem, QRubberBand)
 from PyQt5.QtCore import Qt, QTimer, QRect, QRectF, QSize, pyqtSignal, QPointF
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QPen
@@ -73,12 +73,11 @@ class ZoomableGraphicsView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setBackgroundBrush(QColor(220, 220, 220))
+        self.setDragMode(QGraphicsView.NoDrag)
         self._roi_origin = None
         self._rubber_band = None
-        if enable_roi or enable_point_pick:
-            self.setDragMode(QGraphicsView.NoDrag)
-        else:
-            self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self._panning = False
+        self._pan_start = None
 
     def wheelEvent(self, event):
         zoomInFactor = 1.15
@@ -90,6 +89,12 @@ class ZoomableGraphicsView(QGraphicsView):
         self.scale(zoomFactor, zoomFactor)
 
     def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and event.modifiers() & Qt.ControlModifier:
+            self._panning = True
+            self._pan_start = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
         if self.enable_point_pick and event.button() == Qt.LeftButton:
             self.point_selected.emit(self.mapToScene(event.pos()))
             event.accept()
@@ -105,6 +110,13 @@ class ZoomableGraphicsView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if self._panning and self._pan_start is not None:
+            delta = event.pos() - self._pan_start
+            self._pan_start = event.pos()
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            event.accept()
+            return
         if self.enable_roi and self._roi_origin is not None and self._rubber_band is not None:
             self._rubber_band.setGeometry(QRect(self._roi_origin, event.pos()).normalized())
             event.accept()
@@ -112,6 +124,12 @@ class ZoomableGraphicsView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._panning and event.button() == Qt.LeftButton:
+            self._panning = False
+            self._pan_start = None
+            self.unsetCursor()
+            event.accept()
+            return
         if self.enable_roi and event.button() == Qt.LeftButton and self._roi_origin is not None:
             rect = QRect(self._roi_origin, event.pos()).normalized()
             self._rubber_band.hide()
@@ -171,8 +189,10 @@ class ChronoViewWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+
+        self.lbl_info = QLabel("Scroll to zoom. Ctrl+drag to pan.")
+        self.lbl_info.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.lbl_info)
 
         self.scene = QGraphicsScene()
         self.view = ZoomableGraphicsView()
@@ -181,63 +201,26 @@ class ChronoViewWindow(QMainWindow):
         self.scene.addItem(self.pixmap_item)
         layout.addWidget(self.view)
 
-        controls = QFrame()
-        controls.setFixedHeight(120)
-        controls.setStyleSheet(
-            "QFrame { background-color: #f0f0f0; border-top: 2px solid #ccc; } "
-            "QLabel { color: #333; border: none; }"
-        )
-
-        c_layout = QVBoxLayout(controls)
-        c_layout.setContentsMargins(10, 5, 10, 5)
-
-        self.lbl_info = QLabel()
-        self.lbl_info.setAlignment(Qt.AlignCenter)
-        self.lbl_info.setStyleSheet("font-size: 16pt; font-weight: bold; color: #003366;")
-        c_layout.addWidget(self.lbl_info)
+        self.lbl_frame = QLabel()
+        self.lbl_frame.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.lbl_frame)
 
         self.slider = ClickJumpSlider(Qt.Horizontal)
-        self.slider.setRange(0, self.n - 1)
+        self.slider.setRange(0, max(0, self.n - 1))
         self.slider.valueChanged.connect(self.set_frame)
-        self.slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                border: 1px solid #999999;
-                height: 8px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #B1B1B1, stop:1 #c4c4c4);
-                margin: 2px 0;
-            }
-            QSlider::handle:horizontal {
-                background: #0078d7;
-                border: 1px solid #5c5c5c;
-                width: 18px;
-                height: 18px;
-                margin: -2px 0;
-                border-radius: 9px;
-            }
-        """)
-        c_layout.addWidget(self.slider)
+        layout.addWidget(self.slider)
 
         h_layout = QHBoxLayout()
         self.btn_play = QPushButton("Play")
-        self.btn_play.setFixedHeight(35)
         self.btn_play.clicked.connect(self.toggle_play)
 
         self.btn_seg = QPushButton("Toggle Segmentation")
-        self.btn_seg.setFixedHeight(35)
         self.btn_seg.clicked.connect(self.toggle_seg)
 
-        btn_style = (
-            "QPushButton { font-size: 11pt; font-weight: bold; background-color: #e1e1e1; "
-            "border: 1px solid #adadad; border-radius: 4px; } "
-            "QPushButton:hover { background-color: #d4d4d4; } "
-            "QPushButton:pressed { background-color: #c0c0c0; }"
-        )
         for b in [self.btn_play, self.btn_seg]:
-            b.setStyleSheet(btn_style)
             h_layout.addWidget(b)
 
-        c_layout.addLayout(h_layout)
-        layout.addWidget(controls)
+        layout.addLayout(h_layout)
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.next_frame)
@@ -287,8 +270,8 @@ class ChronoViewWindow(QMainWindow):
                     img = overlay_seg_mask(img, seg, self.colors)
 
         self.pixmap_item.setPixmap(self.cv2_to_qpixmap(img))
-        self.lbl_info.setText(
-            f"Day: {self.days[self.idx]}   Time: {self.hours[self.idx]:02d}:{self.minutes[self.idx]:02d}"
+        self.lbl_frame.setText(
+            f"Frame {self.idx + 1}/{self.n}  |  Day {self.days[self.idx]}  Time {self.hours[self.idx]:02d}:{self.minutes[self.idx]:02d}"
         )
 
         self.slider.blockSignals(True)
@@ -354,7 +337,7 @@ class PlantROISelectorWindow(QDialog):
             self.lbl_group.setAlignment(Qt.AlignCenter)
             self.lbl_group.setStyleSheet("font-weight: bold; color: #003366;")
             layout.addWidget(self.lbl_group)
-        self.lbl_info = QLabel()
+        self.lbl_info = QLabel("Drag a rectangle on the image. Press Enter to confirm. Scroll to zoom. Ctrl+drag to pan.")
         self.lbl_info.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.lbl_info)
 
@@ -365,6 +348,10 @@ class PlantROISelectorWindow(QDialog):
         self.pixmap_item = QGraphicsPixmapItem()
         self.scene.addItem(self.pixmap_item)
         layout.addWidget(self.view)
+
+        self.lbl_frame = QLabel()
+        self.lbl_frame.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.lbl_frame)
 
         self.slider = ClickJumpSlider(Qt.Horizontal)
         self.slider.valueChanged.connect(self._set_frame)
@@ -448,7 +435,7 @@ class PlantROISelectorWindow(QDialog):
     def _update_display(self, refit=False):
         img = self._load_frame()
         if img is None:
-            self.lbl_info.setText("Failed to load frame")
+            self.lbl_frame.setText("Failed to load frame")
             return
 
         self.pixmap_item.setPixmap(_cv2_to_qpixmap(img))
@@ -458,12 +445,15 @@ class PlantROISelectorWindow(QDialog):
         self.slider.setValue(self.idx)
         self.slider.blockSignals(False)
 
-        suffix = (
-            "Press Enter or Confirm to apply this selection."
-            if self.pending_roi
-            else "Drag a rectangle on the image. Press Enter to confirm."
-        )
-        self.lbl_info.setText(f"{self._frame_time_text()}  |  {suffix}")
+        self.lbl_frame.setText(self._frame_time_text())
+        if self.pending_roi:
+            self.lbl_info.setText(
+                "Press Enter or Confirm to apply this selection. Scroll to zoom. Ctrl+drag to pan."
+            )
+        else:
+            self.lbl_info.setText(
+                "Drag a rectangle on the image. Press Enter to confirm. Scroll to zoom. Ctrl+drag to pan."
+            )
         if refit:
             QTimer.singleShot(0, self._fit_image)
 
@@ -489,7 +479,7 @@ class PlantROISelectorWindow(QDialog):
         self.pending_roi = (scene_rect, rect_item)
         self.btn_confirm.setEnabled(True)
         self.lbl_info.setText(
-            f"{self._frame_time_text()}  |  Press Enter or Confirm to apply this selection."
+            "Press Enter or Confirm to apply this selection. Scroll to zoom. Ctrl+drag to pan."
         )
 
     def _confirm_current(self):
@@ -527,7 +517,9 @@ class SeedSelectorWindow(QDialog):
         self.setFocusPolicy(Qt.StrongFocus)
 
         layout = QVBoxLayout(self)
-        self.lbl_info = QLabel()
+        self.lbl_info = QLabel(
+            "Click root origin. Enter to confirm. Scroll to zoom. Ctrl+drag to pan."
+        )
         self.lbl_info.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.lbl_info)
 
@@ -538,6 +530,10 @@ class SeedSelectorWindow(QDialog):
         self.pixmap_item = QGraphicsPixmapItem()
         self.scene.addItem(self.pixmap_item)
         layout.addWidget(self.view)
+
+        self.lbl_frame = QLabel()
+        self.lbl_frame.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.lbl_frame)
 
         self.slider = ClickJumpSlider(Qt.Horizontal)
         self.slider.valueChanged.connect(self._set_frame)
@@ -620,7 +616,7 @@ class SeedSelectorWindow(QDialog):
     def _update_display(self, refit=False):
         img = self._load_frame()
         if img is None:
-            self.lbl_info.setText("Failed to load frame")
+            self.lbl_frame.setText("Failed to load frame")
             return
 
         self.pixmap_item.setPixmap(_cv2_to_qpixmap(img))
@@ -633,12 +629,18 @@ class SeedSelectorWindow(QDialog):
         minutes = (self.idx * self.time_delta) % 60
         hours = int((self.idx * self.time_delta / 60) % 24)
         days = int(self.idx * self.time_delta // 1440)
-        suffix = "Click root origin. Enter to confirm."
-        if self.seed_pos is not None:
-            suffix = f"Root at ({int(self.seed_pos[0])}, {int(self.seed_pos[1])}). Enter to confirm."
-        self.lbl_info.setText(
-            f"Frame {self.idx + 1}/{len(self.images)}  |  Day {days}  Time {hours:02d}:{int(minutes):02d}  |  {suffix}"
+        self.lbl_frame.setText(
+            f"Frame {self.idx + 1}/{len(self.images)}  |  Day {days}  Time {hours:02d}:{int(minutes):02d}"
         )
+        if self.seed_pos is not None:
+            self.lbl_info.setText(
+                f"Root at ({int(self.seed_pos[0])}, {int(self.seed_pos[1])}). Enter to confirm. "
+                "Scroll to zoom. Ctrl+drag to pan."
+            )
+        else:
+            self.lbl_info.setText(
+                "Click root origin. Enter to confirm. Scroll to zoom. Ctrl+drag to pan."
+            )
         if refit:
             QTimer.singleShot(0, self._fit_image)
 
