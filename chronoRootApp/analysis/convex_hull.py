@@ -12,7 +12,14 @@ from typing import Tuple, List
 
 # Import shared utilities
 from analysis.utils import report_utils as utils
-from analysis.utils.fileUtilities import convertFromPathSafe
+from analysis.utils.fileUtilities import convertFromPathSafe, normalize_factor_value
+from analysis.utils.report_style import genotype_palette_for_data, get_genotype_axis_label
+from analysis.utils.report_paths import (
+    MODULE_CONVEX,
+    metric_slug,
+    overview_dir,
+    plot_file,
+)
 
 # Suppress minor logging and warnings for cleaner output
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
@@ -33,8 +40,6 @@ def calculate_atlas_geometry(experiment_paths: List[str]) -> Tuple[Tuple[int, in
     max_right = 0
     max_depth = 0
     BUFFER = 50 
-
-    print("Scanning experiments to determine minimal Atlas size...")
 
     for exp_path in experiment_paths:
         # Load all results folders
@@ -117,7 +122,6 @@ def calculate_atlas_geometry(experiment_paths: List[str]) -> Tuple[Tuple[int, in
     canvas_width = int(center_x + max_right + BUFFER)
     canvas_height = int(center_y + max_depth + BUFFER)
     
-    print(f"Optimal Geometry: Size[{canvas_height}, {canvas_width}], Center[{center_y}, {center_x}]")
     return (canvas_height, canvas_width), (center_y, center_x)
 
 
@@ -162,7 +166,8 @@ def generate_root_atlases(save_path, days, timestep, canvas_shape, center_coords
             'area_bbox': [], 'area_chull': [], 'aspect_ratio': [],
             'density_lat': [], 'density_tot': [],
             'density_lat_bbox': [], 'density_tot_bbox': [],
-            'width': [], 'height': []
+            'width': [], 'height': [],
+            'plate_condition': [], 'extra_variable': [], 'plant_id': [],
         }
         
         for r_path in result_paths:
@@ -292,6 +297,15 @@ def generate_root_atlases(save_path, days, timestep, canvas_shape, center_coords
                     metrics['density_tot_bbox'].append(total_len/area_bbox if area_bbox > 0 else 0)
                     metrics['width'].append(w * PIXEL_SIZE_MM)
                     metrics['height'].append(h * PIXEL_SIZE_MM)
+                    metrics['plate_condition'].append(
+                        normalize_factor_value(metadata.get('PlateCondition', ''))
+                    )
+                    metrics['extra_variable'].append(
+                        normalize_factor_value(metadata.get('ExtraVariable', ''))
+                    )
+                    metrics['plant_id'].append(
+                        f"{metadata.get('rpi', '')}_cam_{metadata.get('cam', '')}_plant_{metadata.get('plant', '')}"
+                    )
                 except Exception as e:
                     pass
 
@@ -308,7 +322,10 @@ def generate_root_atlases(save_path, days, timestep, canvas_shape, center_coords
             'Convex Hull Height': metrics['height']
         })
         day_df['Day'] = day
-        day_df['Experiment'] = real_exp_name 
+        day_df['Experiment'] = real_exp_name
+        day_df['PlateCondition'] = metrics['plate_condition']
+        day_df['ExtraVariable'] = metrics['extra_variable']
+        day_df['Plant_id'] = metrics['plant_id']
         
         all_frames_list.append(day_df)
         set_of_atlases.append([atlas_hull_mask.copy(), atlas_contours_rgb.copy(), atlas_root_density.copy()])
@@ -342,64 +359,61 @@ def visualize_single_atlas(atlas_hull, atlas_contours, atlas_roots, save_path, e
     full_title = f"{readable_name}{title_suffix}"
     plt.suptitle(full_title)
     
-    save_dir = os.path.join(save_path, "Per Experiment")
-    utils.ensure_directory(save_dir)
-    
-    # Filename uses Path Safe name
     save_filename = f"{exp_dir_name}_Day_{day}.png" if day is not None else f"{exp_dir_name}_Last_Day.png"
-    plt.savefig(os.path.join(save_dir, save_filename), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(save_path, save_filename), dpi=300, bbox_inches='tight')
     plt.close('all')
 
 
-def visualize_combined_atlases(folder):
+def visualize_combined_atlases(conf):
     """Stacks atlas images vertically for qualitative comparison across days."""
+    folder = overview_dir(conf, MODULE_CONVEX)
     images_per_day = {}
-    source_dir = os.path.join(folder, 'Per Experiment')
 
-    if not os.path.exists(source_dir):
+    if not os.path.exists(folder):
         return
 
-    for filename in os.listdir(source_dir):
-        if not filename.endswith(('png', 'jpg', 'jpeg')): continue
-        
-        # We need to group by Day, extracting from filenames like "Exp_Day_5.png"
+    for filename in os.listdir(folder):
+        if not filename.endswith(('png', 'jpg', 'jpeg')):
+            continue
         if "_Day_" in filename:
-            try: day = filename.split('_Day_')[1].split('.png')[0]
-            except: continue
+            try:
+                day = filename.split('_Day_')[1].split('.png')[0]
+            except Exception:
+                continue
         elif "Last_Day" in filename:
             day = "Last"
-        else: continue
+        else:
+            continue
 
-        if day not in images_per_day:
-            images_per_day[day] = []
-        images_per_day[day].append(filename)
-    
-    sorted_days = sorted([d for d in images_per_day.keys() if d != "Last"], key=lambda x: int(x)) 
-    if "Last" in images_per_day: sorted_days.append("Last")
-    
+        images_per_day.setdefault(day, []).append(filename)
+
+    sorted_days = sorted([d for d in images_per_day.keys() if d != "Last"], key=lambda x: int(x))
+    if "Last" in images_per_day:
+        sorted_days.append("Last")
+
     for day in sorted_days:
         images = images_per_day[day]
         images.sort(key=utils.natural_key)
 
         fig, axs = plt.subplots(len(images), 1, figsize=(9, 4 * len(images)))
-        if len(images) == 1: axs = [axs]
+        if len(images) == 1:
+            axs = [axs]
 
         for i, image_name in enumerate(images):
-            image_path = os.path.join(source_dir, image_name)
+            image_path = os.path.join(folder, image_name)
             img = cv2.imread(image_path)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             axs[i].imshow(img)
             axs[i].axis('off')
 
         plt.subplots_adjust(wspace=0, hspace=0)
-        plt.savefig(os.path.join(folder, f'Qualitative - Day {day}.png'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(overview_dir(conf, MODULE_CONVEX), f'combined_atlas_day_{day}.png'), dpi=300, bbox_inches='tight')
         plt.close('all')
 
 
-def plot_hull_metrics_summary(save_path, frame):
-    """Generates all statistical plots (violins) and the summary CSV table."""
+def plot_hull_metrics_summary(conf, frame):
+    """Generates per-metric violin plots and overview summary CSV."""
     plt.ioff()
-    utils.ensure_directory(save_path)
 
     metrics_config = [
         ('Convex Hull Area', 'Convex Hull Area', 'Area (mm²)', False),
@@ -407,46 +421,56 @@ def plot_hull_metrics_summary(save_path, frame):
         ('Convex Hull Aspect Ratio', 'Aspect Ratio', 'H/W Ratio', False),
         ('Total Root Area Density', 'Total Root Area Density', 'TR / area (mm/mm²)', True),
         ('Convex Hull Width', 'Width', 'Width (mm)', False),
-        ('Convex Hull Height', 'Height', 'Height (mm)', False)
+        ('Convex Hull Height', 'Height', 'Height (mm)', False),
     ]
 
+    geno_palette = genotype_palette_for_data(frame)
+    geno_label = get_genotype_axis_label(conf)
+
     for y_col, title, y_label, filter_zeros in metrics_config:
+        slug = metric_slug(y_col)
         plt.figure()
         plot_data = frame.copy()
         if filter_zeros:
             plot_data = plot_data[plot_data[y_col] > 0].reset_index(drop=True)
-        
-        sns.violinplot(x='Day', y=y_col, data=plot_data, hue='Experiment', inner='quartile')
-        plt.title(title)
+
+        sns.violinplot(x='Day', y=y_col, data=plot_data, hue='Experiment', inner='quartile',
+                       palette=geno_palette)
+        plt.title(f'{y_col} — {title}')
         plt.ylabel(y_label)
-        
-        clean_name = title.replace(' ', '_')
-        plt.savefig(os.path.join(save_path, f"{clean_name}.png"), dpi=300, bbox_inches='tight')
+        leg = plt.gca().get_legend()
+        if leg is not None:
+            leg.set_title(geno_label)
+        plt.savefig(plot_file(conf, MODULE_CONVEX, slug, f'{slug}_violin.png'), dpi=300, bbox_inches='tight')
         plt.close('all')
 
-    # Summary Table
-    summary = frame.groupby(['Day', 'Experiment']).agg(['mean', 'std']).round(3)
-    summary.to_csv(os.path.join(save_path, "Summary Table.csv"))
+    numeric_cols = [c for c, *_ in metrics_config]
+    summary = frame.groupby(['Day', 'Experiment'])[numeric_cols].agg(['mean', 'std']).round(3)
+    summary.to_csv(os.path.join(overview_dir(conf, MODULE_CONVEX), 'Summary_table.csv'))
 
 
 def analyze_hull_statistics(conf, data, metric):
-    unique_experiments = data['Experiment'].unique()
-    days_to_analyze = conf['daysConvexHull'].split(',')
-    report_folder = os.path.join(conf['MainFolder'], 'Report', 'Convex Hull and Area Analysis')
-    
-    report_file = os.path.join(report_folder, f'{metric.replace(" ", "_")}_Stats.txt')
-        
-    with open(report_file, 'w') as f:
-        f.write(f'Comparing experiments for {metric}\n\n')
-        for day in days_to_analyze:                       
-            f.write(f'Day: {day}\n')
-            subdata = data[data['Day'].astype(str) == day]
-            for i in range(len(unique_experiments)):
-                for j in range(i + 1, len(unique_experiments)):
-                    e1, e2 = unique_experiments[i], unique_experiments[j]
-                    v1 = subdata[subdata['Experiment'] == e1][metric]
-                    v2 = subdata[subdata['Experiment'] == e2][metric]
-                    if not v1.empty and not v2.empty:
-                        _, p = stats.mannwhitneyu(v1, v2)
-                        f.write(f'{e1} vs {e2}: p={round(p, 6)} (Means: {round(v1.mean(),2)}, {round(v2.mean(),2)})\n')
-            f.write('\n')
+    from .stats_utils import perform_interval_pairwise_stats
+    from .report_plots import emit_interval_comparison_plots
+    from .utils.report_paths import metric_dir, table_file
+
+    data = data.copy()
+    data['Day'] = data['Day'].astype(str)
+    days = [d.strip() for d in conf['daysConvexHull'].split(',') if d.strip()]
+    slug = metric_slug(metric)
+    table_path = table_file(conf, MODULE_CONVEX, slug, 'summary_table.csv')
+    perform_interval_pairwise_stats(
+        conf, data, metric, output_dir=None,
+        interval_col='Day',
+        intervals=days,
+        plant_id_col='Plant_id',
+        interval_label='Day',
+        module=MODULE_CONVEX,
+        metric_slug_name=slug,
+        table_file_path=table_path,
+    )
+    emit_interval_comparison_plots(
+        conf, data, metric, metric_dir(conf, MODULE_CONVEX, slug),
+        module=MODULE_CONVEX, metric_slug_name=slug,
+        metric_label=metric,
+    )

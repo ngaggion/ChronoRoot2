@@ -18,7 +18,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from analysis.plantAnalysis import plantAnalysis
 import argparse
-import json 
+import json
+import sys
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='ChronoRoot: High-throughput phenotyping by deep learning reveals novel temporal parameters of plant root system architecture')
@@ -31,8 +32,8 @@ if __name__ == "__main__":
     conf = json.load(open(args.config))
     
     if args.restart:
-        del conf['bounding box']
-        del conf['seed']
+        conf.pop('bounding box', None)
+        conf.pop('seed', None)
     
     try:
         conf['fileKey'] = conf["Experiment"]
@@ -46,8 +47,10 @@ if __name__ == "__main__":
     if not conf.get('videoHasQRbutton', True):
         pixel_size = float(conf['knownDistance']) / float(conf['pixelDistance'])
         conf['pixel_size'] = pixel_size
-        
-    if 'bounding box' in conf and args.rerun:
-        plantAnalysis(conf, True)
+
+    has_roi = 'bounding box' in conf and 'seed' in conf
+
+    if has_roi:
+        plantAnalysis(conf, replicate=True)
     else:
-        plantAnalysis(conf, False)
+        plantAnalysis(conf, replicate=False)

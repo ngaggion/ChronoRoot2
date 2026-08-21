@@ -240,31 +240,52 @@ def continue_mainRoot(ske2, current, previous, rsml, mainRoot, lat_queue, main_r
             break
             
         next_main = None
+        lat_candidates = []
         
+        # PASS 1: Priority check for a direct Main Root connection
         for n in nbs:
-            # Skip if visited
             if ske2[n[1], n[0]] == 0: continue
-            
-            val = ske2[n[1], n[0]]
-            
-            # Simple check: Is it Main Root or Lateral?
-            if val in mainRoot:
-                # By construction, there is only one of these.
+            if ske2[n[1], n[0]] in mainRoot:
                 next_main = n
-            else:
-                # Everything else is a lateral root
-                lat_queue.append({
-                    'start': n, 
-                    'parent': stop_node, 
-                    'order': 1, 
-                    'elem': main_root_elem
-                })
+                break # Direct continuation found, stop looking
+                
+        # PASS 2: Only if no direct connection exists, look for a 1-pixel gap bridge
+        if next_main is None:
+            for n in nbs:
+                if ske2[n[1], n[0]] == 0: continue
+                
+                lookahead_nbs = vecinos(ske2, n)
+                is_gap_bridged = False
+                for ln in lookahead_nbs:
+                    if np.array_equal(ln, stop_node): continue
+                    if ske2[ln[1], ln[0]] in mainRoot:
+                        next_main = n
+                        is_gap_bridged = True
+                        break
+                        
+                if is_gap_bridged:
+                    break # Bridge found, stop looking
+                    
+        # PASS 3: Everything that isn't the chosen next_main is a lateral root candidate
+        for n in nbs:
+            if ske2[n[1], n[0]] == 0: continue
+            if not np.array_equal(n, next_main):
+                lat_candidates.append(n)
         
         # Zero the junction node
         ske2[stop_node[1], stop_node[0]] = 0
         
+        # Safely queue the recovered laterals
+        for lat_n in lat_candidates:
+            lat_queue.append({
+                'start': lat_n, 
+                'parent': stop_node, 
+                'order': 1, 
+                'elem': main_root_elem
+            })
+        
         # Continue the main loop if a main root path exists
-        if next_main:
+        if next_main is not None:
             previous = stop_node
             current = next_main
         else:

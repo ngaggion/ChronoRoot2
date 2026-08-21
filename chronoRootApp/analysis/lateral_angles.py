@@ -24,11 +24,39 @@ import json
 import os
 import csv
 import pandas as pd
-from .report import load_path as loadPath
+from .utils import report_utils as utils
 import scipy.stats as stats
+from .utils.fileUtilities import (
+    convertFromPathSafe,
+    convertToPathSafe,
+    get_latest_result_dir,
+    load_result_metadata,
+    attach_plant_metadata_columns,
+    build_plant_id,
+)
+from .utils.report_paths import (
+    MODULE_ANGLES,
+    angle_overlays_dir,
+    data_file,
+    plot_file,
+    table_file,
+    metric_dir,
+)
+from .stats_utils import (
+    perform_interval_pairwise_stats,
+    ensure_factor_columns,
+    comparison_modes_for_run,
+    _mode_spec,
+    _describe_averaging,
+    run_pairwise_comparisons,
+    _resolve_stats_path,
+    _stratify_label,
+)
+from .report_plots import emit_interval_comparison_plots
+from .utils.report_paths import metric_dir
+from .utils.report_style import genotype_palette_for_data, get_genotype_axis_label
 import cv2
 import logging
-from .utils.fileUtilities import convertFromPathSafe, convertToPathSafe
 
 # Suppress matplotlib category warnings and configure backend for non-interactive use
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
@@ -333,6 +361,11 @@ def getAngles(conf, path):
     num_roots = 0
     
     filepath = os.path.join(path, 'LateralRootsData.csv')
+
+    meta_path = os.path.join(path, 'metadata.json')
+    with open(meta_path) as f:
+        metadata = json.load(f)
+    pixel_size = metadata['pixel_size']
     
     with open(filepath, 'w+') as f:
         writer = csv.writer(f)
@@ -341,9 +374,6 @@ def getAngles(conf, path):
 
         for step in paths:
             tree = ET.parse(step).getroot()
-
-            with open(os.path.join(path, 'metadata.json')) as f:
-                metadata = json.load(f)
 
             plant = tree[1][0][0]
             
@@ -375,7 +405,7 @@ def getAngles(conf, path):
                     emergence_angle = emergenceAngle(
                         root, 
                         float(conf['emergenceDistance']), 
-                        metadata['pixel_size']
+                        pixel_size
                     )
                     tip_angles.append(tip_angle)
                     emergence_angles.append(emergence_angle)
@@ -511,59 +541,36 @@ def getFirstLateralRoots(conf, df):
     For each plant, finds when the first lateral root appeared and tracks
     its tip angle over a 72-hour window. Data is synchronized so that
     time=0 corresponds to first LR emergence for each plant.
-    
-    Args:
-        conf: Configuration dictionary with 'MainFolder' path
-        df: DataFrame with angle measurements for all plants
-    
-    Returns:
-        DataFrame: Synchronized first LR data with columns 
-                   ['Time', 'First LR tip', 'Experiment', 'Plant_id', 'Real']
     """
-    report_path = os.path.join(conf['MainFolder'], 'Report')
-    
     plants = df['Plant_id'].unique()
-    
-    # Mark original data points
+    df = df.copy()
     df['Real'] = 1
 
-    # Maximum tracking window: 72 hours
     max_hours = 72
+    track_cols = ['First LR tip', 'Experiment', 'Plant_id', 'Real']
     synchronized_data = pd.DataFrame(columns=['Time', 'First LR tip', 'Experiment', 'Plant_id', 'Real'])
 
     for plant in plants:
-        plant_data = df[df['Plant_id'] == str(plant)]
-        
-        # Filter to only rows where first LR exists (tip angle > 0)
-        has_lr_idx = plant_data['First LR tip'] > 0
-        plant_data = plant_data.loc[has_lr_idx]
+        plant_data = df[df['Plant_id'] == str(plant)].copy()
+        plant_data = plant_data.loc[plant_data['First LR tip'] > 0]
         num_rows = plant_data.shape[0]
-        
+
         if num_rows > 0:
-            # Apply smoothing to remove artifacts
             plant_data = avoidIncreasingValues(plant_data, 'First LR tip')
             plant_data = plant_data.iloc[:(max_hours + 1), :]
 
-            # Extend data if shorter than 72 hours
             while num_rows <= max_hours:
-                last_row = plant_data.iloc[-1, :]
-                last_row = last_row.to_frame().T
-                if last_row.shape[0] != 1 or last_row.shape[1] != 10:
-                    raise ValueError('Extending 1st LR Error')
-                last_row['Real'] = np.nan  # Mark extended rows as not real
+                last_row = plant_data.iloc[-1:].copy()
+                last_row['Real'] = np.nan
                 plant_data = pd.concat([plant_data, last_row], ignore_index=True)
-                num_rows = num_rows + 1
-                
-            # Reset index to create time column
-            plant_data = plant_data.reset_index()
+                num_rows += 1
+
+            plant_data = plant_data.reset_index(drop=True)
             plant_data['Time'] = plant_data.index
-            plant_data = plant_data.drop(['index'], axis=1)
-            plant_data = plant_data.loc[:, ['Time', 'First LR tip', 'Experiment', 'Plant_id', 'Real']]
-            
+            plant_data = plant_data[track_cols]
             synchronized_data = pd.concat([synchronized_data, plant_data], ignore_index=True)
 
-    synchronized_data.to_csv(os.path.join(report_path, 'SyncronizedFirstLR.csv'), index=False)
-    
+    synchronized_data.to_csv(data_file(conf, 'Synchronized_FirstLR.csv'), index=False)
     return synchronized_data
 
 
@@ -587,40 +594,35 @@ def makeLateralAnglesPlots(conf):
     """
     parent_folder = conf['MainFolder']
     analysis = os.path.join(conf['MainFolder'], "Analysis")
-    experiments = loadPath(analysis, '*')
-    
-    report_path = os.path.join(parent_folder, 'Report')
-    report_path_angle = os.path.join(report_path, 'Angles Analysis')
-    os.makedirs(report_path_angle, exist_ok=True)
-    
+    experiments = utils.load_paths(analysis, '*')
+
+    emergence_slug = 'mean_emergence_angle'
+    first_lr_slug = 'first_lr_tip_angle'
+
     all_data = pd.DataFrame()
         
     for exp in experiments:
-        plants = loadPath(exp, '*/*/*')
+        plants = utils.load_paths(exp, '*/*/*')
         # Use basename to get the literal folder name for logic
         raw_exp_folder = os.path.basename(exp)
         
         # Determine the name for the 'Experiment' column (the display name)
         # We check the first plant's metadata for the preferred name
         display_name = convertFromPathSafe(raw_exp_folder)
-        
-        print('Experiment:', display_name, '- Total plants', len(plants))
 
         for plant in plants:
-            results = loadPath(plant, '*')
-            if len(results) == 0:
+            results = get_latest_result_dir(plant)
+            if results is None:
                 continue
-            else:
-                results = results[-1]
 
             plant_name = plant.replace(exp, '').replace('/', '_')
-
             file = os.path.join(results, 'LateralRootsData.csv')
             file2 = os.path.join(results, 'PostProcess_Original.csv')
 
             if not os.path.exists(file) or not os.path.exists(file2):
                 continue
 
+            meta = load_result_metadata(results)
             data2 = pd.read_csv(file2)
             data2.dropna(inplace=True)
             
@@ -633,13 +635,19 @@ def makeLateralAnglesPlots(conf):
             if data.empty:
                 continue
 
-            data['Plant_id'] = display_name + plant_name
-            # Assigning the unified name to ensure DataFrame groups correctly
-            data['Experiment'] = display_name 
+            hardware_id = build_plant_id(
+                str(meta.get('rpi', '')),
+                f"cam_{meta.get('cam', '')}",
+                f"plant_{meta.get('plant', '')}",
+            )
+            data['Plant_id'] = display_name + plant_name if not hardware_id.strip('_') else hardware_id
+            data = attach_plant_metadata_columns(
+                data, meta, experiment_fallback=display_name,
+            )
 
             all_data = pd.concat([all_data, data], ignore_index=True)
 
-    all_data.to_csv(os.path.join(report_path, 'LateralRootsData.csv'), index=False)
+    all_data.to_csv(data_file(conf, 'LateralRoots_Data.csv'), index=False)
     # Filter data for specified analysis days
     frame = []
     if not all_data.empty:
@@ -654,30 +662,31 @@ def makeLateralAnglesPlots(conf):
         frame = pd.concat(frame)
         if not frame.empty:
             n_exp = len(frame['Experiment'].unique())
+            geno_palette = genotype_palette_for_data(frame)
+            geno_label = get_genotype_axis_label(conf)
 
             plt.figure(figsize=(8, 9), dpi=200)
-            sns.color_palette("tab10")
-                            
+
             ax = plt.subplots()
 
-            # Create violin plot with overlaid swarm plot
-            sns.violinplot(x='Day', y='Mean emergence angle', data=frame, 
-                          hue='Experiment', inner=None, zorder=2, legend=False)
-            ax = sns.swarmplot(x='Day', y='Mean emergence angle', data=frame, 
-                              hue='Experiment', dodge=True, size=4, 
-                              palette='muted', edgecolor='black', 
+            sns.violinplot(x='Day', y='Mean emergence angle', data=frame,
+                          hue='Experiment', inner=None, zorder=2, legend=False,
+                          palette=geno_palette)
+            ax = sns.swarmplot(x='Day', y='Mean emergence angle', data=frame,
+                              hue='Experiment', dodge=True, size=4,
+                              palette=geno_palette, edgecolor='black',
                               linewidth=0.5, zorder=1, s=2)
             ax.set_ylim(-20, 120)
             
             # Fix legend to only show experiments once
             handles, labels = ax.get_legend_handles_labels()
-            ax.legend(handles[0:n_exp], labels[0:n_exp], loc=4)
+            ax.legend(handles[0:n_exp], labels[0:n_exp], loc=4, title=geno_label)
 
-            ax.set_title('Mean emergence angle')
+            ax.set_title('Mean emergence angle — by genotype')
 
-            plt.savefig(os.path.join(report_path_angle, 'Mean Emergence Angle.png'), 
+            plt.savefig(plot_file(conf, MODULE_ANGLES, emergence_slug, f'{emergence_slug}_violin.png'),
                        dpi=300, bbox_inches='tight')
-            plt.savefig(os.path.join(report_path_angle, 'Mean Emergence Angle.svg'), 
+            plt.savefig(plot_file(conf, MODULE_ANGLES, emergence_slug, f'{emergence_slug}_violin.svg'),
                        dpi=300, bbox_inches='tight')
             
             # Perform statistical analysis
@@ -694,7 +703,7 @@ def makeLateralAnglesPlots(conf):
             summary_data = summary_data.round(3)
             summary_data['Day'] = summary_data['Day'].astype('int')
             summary_data = summary_data.sort_values(by='Day', ascending=True)
-            summary_data.to_csv(os.path.join(report_path_angle, "Mean Emergence Angle Table.csv"), 
+            summary_data.to_csv(table_file(conf, MODULE_ANGLES, emergence_slug, 'summary_table.csv'),
                                index=False)
     
     # Generate first lateral root analysis
@@ -705,15 +714,18 @@ def makeLateralAnglesPlots(conf):
     else:
         # Plot number of plants with first LR over time
         plt.figure(figsize=(6, 4), dpi=200)
-        sns.lineplot(y="Real", x='Time', hue="Experiment", data=synchronized_data, 
-                    errorbar=None, estimator=np.count_nonzero)
-        plt.title('Number of plant with first LR roots per experiment')
+        geno_palette = genotype_palette_for_data(synchronized_data)
+        geno_label = get_genotype_axis_label(conf)
+        sns.lineplot(y="Real", x='Time', hue="Experiment", data=synchronized_data,
+                    errorbar=None, estimator=np.count_nonzero, palette=geno_palette)
+        plt.title('First lateral root — number of plants per experiment')
         plt.ylabel('Number of first LR')
         plt.xlabel('Time elapsed since emergence (h)')
+        plt.legend(title=geno_label)
         
-        plt.savefig(os.path.join(report_path_angle, 'First LR Number.png'), 
+        plt.savefig(plot_file(conf, MODULE_ANGLES, first_lr_slug, f'{first_lr_slug}_count.png'),
                    dpi=300, bbox_inches='tight')
-        plt.savefig(os.path.join(report_path_angle, 'First LR Number.svg'), 
+        plt.savefig(plot_file(conf, MODULE_ANGLES, first_lr_slug, f'{first_lr_slug}_count.svg'),
                    dpi=300, bbox_inches='tight')
         
         # Remove extended (non-real) data points for angle analysis
@@ -722,15 +734,16 @@ def makeLateralAnglesPlots(conf):
         if not synchronized_data.empty:
             # Plot tip angle decay over time
             plt.figure(figsize=(6, 4), dpi=200)
-            sns.lineplot(y="First LR tip", x='Time', hue="Experiment", 
-                        data=synchronized_data, errorbar='se')
-            plt.title('Decay of the tip angle (1st LR)')
+            sns.lineplot(y="First LR tip", x='Time', hue="Experiment",
+                        data=synchronized_data, errorbar='se', palette=geno_palette)
+            plt.title('First LR tip angle — decay over time since emergence')
             plt.xlabel('Time (h)')
             plt.ylabel('Angle')
+            plt.legend(title=geno_label)
 
-            plt.savefig(os.path.join(report_path_angle, 'First LR Tip Angle Decay.png'), 
+            plt.savefig(plot_file(conf, MODULE_ANGLES, first_lr_slug, f'{first_lr_slug}_decay.png'),
                        dpi=300, bbox_inches='tight')
-            plt.savefig(os.path.join(report_path_angle, 'First LR Tip Angle Decay.svg'), 
+            plt.savefig(plot_file(conf, MODULE_ANGLES, first_lr_slug, f'{first_lr_slug}_decay.svg'),
                        dpi=300, bbox_inches='tight')
 
             performStatisticalAnalysisFirstLR(conf, synchronized_data.copy(), 'First LR tip')
@@ -740,7 +753,6 @@ def makeLateralAnglesPlots(conf):
             
             data = synchronized_data.copy()
             data['Experiment'] = data['Experiment'].astype(str)
-            report_path = os.path.join(conf['MainFolder'], 'Report', 'Angles Analysis')
             dt = int(conf['everyXhourFieldAngles'])
 
             for hour in range(0, 73 - dt, dt):
@@ -770,178 +782,76 @@ def makeLateralAnglesPlots(conf):
                 summary_df = pd.concat(summary_df_list)
                 col = summary_df.pop("Hours interval")
                 summary_df.insert(0, col.name, col)
-                summary_df.to_csv(os.path.join(report_path_angle, "First LR Tip Angle Table.csv"), 
+                summary_df.to_csv(table_file(conf, MODULE_ANGLES, first_lr_slug, 'summary_table.csv'),
                                  index=False)
     return
 
 
 def performStatisticalAnalysisAngles(conf, data, metric):
-    """
-    Perform pairwise Mann-Whitney U tests between experiments for angle data.
-    
-    Compares all pairs of experiments at each specified day using the
-    non-parametric Mann-Whitney U test. Results are written to a text file.
-    
-    Args:
-        conf: Configuration dictionary with 'MainFolder' and 'daysAngles'
-        data: DataFrame with angle measurements
-        metric: Column name to analyze (e.g., 'Mean emergence angle')
-    
-    Returns:
-        None (writes results to Stats.txt file)
-    """
-    data['Experiment'] = data['Experiment'].astype(str)
+    data = ensure_factor_columns(data)
     data['Day'] = data['Day'].astype(int).astype(str)
-        
-    unique_experiments = data['Experiment'].unique()
-    n_exp = int(len(unique_experiments))
-    
     days = conf['daysAngles'].split(',')
-    
-    # Create output file path (handle metrics with '/' in name)
-    report_path = os.path.join(conf['MainFolder'], 'Report', 'Angles Analysis')
-    
-    if "/" in metric:
-        report_path_stats = os.path.join(report_path, '%s Stats.txt' % metric.replace('/', ' over '))
-    else:
-        report_path_stats = os.path.join(report_path, '%s Stats.txt' % metric)
-        
-    with open(report_path_stats, 'w') as f:
-        f.write('Using Mann Whitney U test to compare different experiments\n')
-        
-        for day in days:
-            f.write('Day: ' + str(day) + '\n')
-            subdata = data[data['Day'] == str(day)]
-            
-            # Compare every pair of experiments
-            for i in range(0, n_exp - 1):
-                for j in range(i + 1, n_exp):
-                    exp1 = subdata[subdata['Experiment'] == unique_experiments[i]][metric]
-                    exp2 = subdata[subdata['Experiment'] == unique_experiments[j]][metric]
-                    
-                    try:
-                        if len(exp1) == 0 or len(exp2) == 0:
-                            raise Exception()
-                            
-                        U, p = stats.mannwhitneyu(exp1, exp2)
-                        p = round(p, 6)
-                        
-                        # Report sample sizes
-                        f.write('Number of samples ' + unique_experiments[i] + ': ' + 
-                               str(len(exp1)) + ' - ')
-                        f.write('Number of samples ' + unique_experiments[j] + ': ' + 
-                               str(len(exp2)) + '\n')
-                        
-                        # Report means
-                        f.write('Mean ' + unique_experiments[i] + ': ' + 
-                               str(round(exp1.mean(), 2)) + ' - ')
-                        f.write('Mean ' + unique_experiments[j] + ': ' + 
-                               str(round(exp2.mean(), 2)) + '\n')
-                        
-                        # Report significance
-                        if p < 0.05:
-                            f.write('Experiments ' + unique_experiments[i] + ' and ' + 
-                                   unique_experiments[j] + 
-                                   ' are significantly different. P-value: ' + str(p) + '\n')
-                        else:
-                            f.write('Experiments ' + unique_experiments[i] + ' and ' + 
-                                   unique_experiments[j] + 
-                                   ' are not significantly different. P-value: ' + str(p) + '\n')
-                    except:
-                        f.write('Experiments ' + unique_experiments[i] + ' and ' + 
-                               unique_experiments[j] + ' could not be compared\n')
-                        
-            f.write('\n')
+    slug = 'mean_emergence_angle'
+    table_path = table_file(conf, MODULE_ANGLES, slug, 'summary_table.csv')
+    perform_interval_pairwise_stats(
+        conf, data, metric, output_dir=None,
+        interval_col='Day',
+        intervals=days,
+        plant_id_col='Plant_id',
+        interval_label='Day',
+        module=MODULE_ANGLES,
+        metric_slug_name=slug,
+        table_file_path=table_path,
+    )
+    emit_interval_comparison_plots(
+        conf, data, metric, metric_dir(conf, MODULE_ANGLES, slug),
+        module=MODULE_ANGLES, metric_slug_name=slug,
+        metric_label='Mean emergence angle',
+    )
     return
 
 
 def performStatisticalAnalysisFirstLR(conf, data, metric):
-    """
-    Perform pairwise Mann-Whitney U tests for first lateral root data.
-    
-    Similar to performStatisticalAnalysisAngles but operates on time intervals
-    (every N hours) rather than specific days. Optionally averages per plant
-    before statistical comparison.
-    
-    Args:
-        conf: Configuration dictionary with analysis parameters
-        data: DataFrame with first LR tracking data
-        metric: Column name to analyze (e.g., 'First LR tip')
-    
-    Returns:
-        None (writes results to Stats.txt file)
-    """
+    data = ensure_factor_columns(data)
     data['Experiment'] = data['Experiment'].astype(str)
-    unique_experiments = data['Experiment'].unique()
-    n_exp = int(len(unique_experiments))
-        
-    # Create output file path
-    report_path = os.path.join(conf['MainFolder'], 'Report', 'Angles Analysis')
-    
-    if "/" in metric:
-        report_path_stats = os.path.join(report_path, '%s Stats.txt' % metric.replace('/', ' over '))
-    else:
-        report_path_stats = os.path.join(report_path, '%s Stats.txt' % metric)
-    
+    slug = 'first_lr_tip_angle'
     dt = int(conf['everyXhourFieldAngles'])
 
-    with open(report_path_stats, 'w') as f:
-        f.write('Using Mann Whitney U test to compare different experiments\n')
-        f.write('Statistical analysis is performed every 6 hours\n')
-        
-        for hour in range(0, 73 - dt, dt):
-            end = min(hour + dt, 72)
-            f.write('Hour: ' + str(hour) + '-' + str(end) + '\n')
-            
-            hours = np.arange(hour, end)
-            subdata = data[data['Time'].isin(hours)]
+    for mode in comparison_modes_for_run(conf, data):
+        spec = _mode_spec(mode, conf=conf)
+        output_path = _resolve_stats_path(
+            conf, MODULE_ANGLES, slug, mode,
+        )
+        with open(output_path, 'w') as f:
+            f.write('Using Mann Whitney U test to compare groups\n')
+            f.write(f"{spec['header']}\n")
+            f.write(f'{_describe_averaging(conf)}\n\n')
+            for hour in range(0, 73 - dt, dt):
+                end = min(hour + dt, 72)
+                f.write(f'Hour: {hour}-{end}\n')
+                hours = np.arange(hour, end)
+                subdata = data[data['Time'].isin(hours)].copy()
+                if conf.get('averagePerPlantStats', False):
+                    subdata[metric] = subdata[metric].astype(float)
+                    cols = ['Experiment', 'Plant_id']
+                    if spec['stratify_col'] and spec['stratify_col'] in subdata.columns:
+                        cols = [spec['stratify_col']] + cols
+                    subdata = subdata.groupby(cols).mean(numeric_only=True).reset_index()
+                run_pairwise_comparisons(
+                    f, subdata, metric,
+                    group_col=spec['group_col'],
+                    stratify_col=spec['stratify_col'],
+                    stratify_label=_stratify_label(spec, conf),
+                    conf=conf,
+                    plant_id_col='Plant_id',
+                )
+                f.write('\n')
 
-            # Optionally average per plant before comparison
-            if conf['averagePerPlantStats']:
-                subdata[metric] = subdata[metric].astype(float)
-                subdata = subdata.groupby(['Experiment', 'Plant_id']).mean(
-                    numeric_only=True
-                ).reset_index()
-
-            # Compare every pair of experiments
-            for i in range(0, n_exp - 1):
-                for j in range(i + 1, n_exp):
-                    exp1 = subdata[subdata['Experiment'] == unique_experiments[i]][metric]
-                    exp2 = subdata[subdata['Experiment'] == unique_experiments[j]][metric]
-
-                    try:
-                        if len(exp1) == 0 or len(exp2) == 0:
-                            raise Exception()
-                            
-                        U, p = stats.mannwhitneyu(exp1, exp2)
-                        p = round(p, 6)
-
-                        # Report sample sizes
-                        f.write('Number of samples ' + unique_experiments[i] + ': ' + 
-                               str(len(exp1)) + ' - ')
-                        f.write('Number of samples ' + unique_experiments[j] + ': ' + 
-                               str(len(exp2)) + '\n')
-                        
-                        # Report means
-                        f.write('Mean ' + unique_experiments[i] + ': ' + 
-                               str(round(exp1.mean(), 2)) + ' - ')
-                        f.write('Mean ' + unique_experiments[j] + ': ' + 
-                               str(round(exp2.mean(), 2)) + '\n')
-                        
-                        # Report significance
-                        if p < 0.05:
-                            f.write('Experiments ' + unique_experiments[i] + ' and ' + 
-                                   unique_experiments[j] + 
-                                   ' are significantly different. P-value: ' + str(p) + '\n')
-                        else:
-                            f.write('Experiments ' + unique_experiments[i] + ' and ' + 
-                                   unique_experiments[j] + 
-                                   ' are not significantly different. P-value: ' + str(p) + '\n')
-                    except:
-                        f.write('Experiments ' + unique_experiments[i] + ' and ' + 
-                               unique_experiments[j] + ' could not be compared\n')
-    
-            f.write('\n')
+    emit_interval_comparison_plots(
+        conf, data, metric, metric_dir(conf, MODULE_ANGLES, slug),
+        module=MODULE_ANGLES, metric_slug_name=slug,
+        x_col='Time', metric_label='First LR tip angle',
+    )
     return
 
 
@@ -963,7 +873,7 @@ def estimateAngles(path, ax, img, i=-1, tip=False):
         ax: Modified matplotlib axes with angle visualizations
     """
     plt.ioff()
-    paths = loadPath(os.path.join(path, 'RSML'))
+    paths = utils.load_paths(os.path.join(path, 'RSML'))
 
     # Initialize tracking variables
     lateral_roots = []
@@ -1039,12 +949,10 @@ def plotLateralAnglesOnTop(conf):
         None (saves PNG and SVG images to Report folder)
     """
     exp_path = os.path.join(conf['MainFolder'], "Analysis")
-    save_path = os.path.join(conf['MainFolder'], "Report", "Angles Analysis", "Images")
-    os.makedirs(save_path, exist_ok=True)
 
     for exp in os.listdir(exp_path):
-        # Convert folder name to a safe filename string
         safe_exp = convertToPathSafe(exp)
+        save_path = angle_overlays_dir(conf, safe_exp)
         robot_path = os.path.join(exp_path, exp)
 
         for robot in os.listdir(robot_path):
@@ -1057,11 +965,8 @@ def plotLateralAnglesOnTop(conf):
 
                 for plant in os.listdir(plant_path):
                     safe_plant = convertToPathSafe(plant)
-                    results_path = os.listdir(os.path.join(plant_path, plant))
-
-                    if len(results_path) > 0:
-                        results_path = os.path.join(plant_path, plant, results_path[-1])
-                    else:
+                    results_path = get_latest_result_dir(os.path.join(plant_path, plant))
+                    if results_path is None:
                         continue
                     
                     if os.path.exists(results_path):

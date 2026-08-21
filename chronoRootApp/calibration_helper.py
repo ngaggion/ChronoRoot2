@@ -9,38 +9,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QPoint
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor
 import argparse
 
-from typing import List, Tuple
-
-def loadPath(path: str, ext: str = "*") -> List[str]:
-    """
-    Helper function to load paths with specific extensions.
-    Matches the functionality expected by getImages()
-    """
-    import glob
-    if not os.path.exists(path):
-        return []
-    return sorted(glob.glob(os.path.join(path, ext)))
-
-def getImages(video_dir: str) -> Tuple[List[str], List[str]]:
-    """
-    Returns lists of image paths and segmentation paths
-    """
-    # Check if the directory exists and contains png files
-    images = loadPath(video_dir, ext="*.png")
-    
-    # Look for segmentation files
-    seg_path = os.path.join(video_dir, 'Segmentation', 'Ensemble')
-    if not os.path.exists(seg_path):
-        seg_path = os.path.join(video_dir, 'Seg')
-    
-    seg_files = loadPath(seg_path, ext="*.png")
-    
-    # Ensure we have matching numbers of files
-    n = min(len(images), len(seg_files))
-    images = images[:n]
-    seg_files = seg_files[:n]
-    
-    return images, seg_files
+from analysis.utils.fileUtilities import getImages
 
 class ZoomableImage(QLabel):
     point_selected = pyqtSignal(tuple)
@@ -266,7 +235,8 @@ class CalibrationHelper(QMainWindow):
             QMessageBox.critical(self, "Error", "Video directory does not exist!")
             return
         
-        images, _ = getImages(self.video_dir)
+        images, _ = getImages({'Images': self.video_dir})
+
         
         if not images:
             QMessageBox.warning(self, "Warning", "No images found in directory!")
